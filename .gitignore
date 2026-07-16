@@ -1,0 +1,23 @@
+.DS_Store
+.env
+.venv/
+__pycache__/
+*.egg-info/
+*.py[cod]
+.coverage
+.pytest_cache/
+.ruff_cache/
+build/
+dist/
+data/*.json
+!data/.gitkeep
+
+# Concurrent local draft preserved outside public Investment Research OS repo.
+/src/signal_research/
+/tests/test_config.py
+/tests/test_reddit_client.py
+/tests/test_storage.py
+/tests/test_tickers.py
+/docs/COMPLIANCE.md
+/docs/REDDIT_APPLICATION.md
+/docs/SPEC.md
