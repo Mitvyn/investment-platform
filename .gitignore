@@ -1,5 +1,7 @@
 .DS_Store
 .env
+.env.local
+.env.*.local
 .venv/
 __pycache__/
 *.egg-info/
@@ -7,6 +9,11 @@ __pycache__/
 .coverage
 .pytest_cache/
 .ruff_cache/
+node_modules/
+.next/
+supabase/.temp/
+**/supabase/.temp/
+*.tsbuildinfo
 build/
 dist/
 data/*.json
@@ -18,6 +25,6 @@ data/*.json
 /tests/test_reddit_client.py
 /tests/test_storage.py
 /tests/test_tickers.py
-/docs/COMPLIANCE.md
-/docs/REDDIT_APPLICATION.md
-/docs/SPEC.md
+
+# Canonical project documentation lives in MeowingVault.
+/docs

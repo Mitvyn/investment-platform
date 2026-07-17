@@ -1,0 +1,10 @@
+{
+  "name": "investment-research-os-workspace",
+  "private": true,
+  "packageManager": "pnpm@11.9.0",
+  "scripts": {
+    "dashboard:build": "pnpm --filter @iros/dashboard build",
+    "dashboard:dev": "pnpm --filter @iros/dashboard dev",
+    "dashboard:typecheck": "pnpm --filter @iros/dashboard typecheck"
+  }
+}

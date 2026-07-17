@@ -1,0 +1,19 @@
+{
+  "ticker": "RXRX",
+  "companyName": "Recursion Pharmaceuticals, Inc.",
+  "researchRunId": "27bc9642-9729-5b60-a42a-bde7e28350d0",
+  "runStatus": "completed",
+  "sourceProvider": "sec",
+  "sourceTitle": "Recursion Pharmaceuticals, Inc. SEC filings",
+  "filingForm": "10-Q",
+  "filedAt": "2025-08-05",
+  "periodEnd": "2025-06-30",
+  "accessionNumber": "0001601830-25-000127",
+  "sourceUrl": "https://www.sec.gov/Archives/edgar/data/1601830/000160183025000127/rxrx-20250630.htm",
+  "retrievedAt": "2026-07-16T08:00:00+00:00",
+  "locator": "Part I, Item 2, Liquidity and Capital Resources, Sources of Liquidity",
+  "passage": "Cash and cash equivalents totaled $525.1 million and $594.3 million as of June 30, 2025 and December 31, 2024, respectively.",
+  "passageSha256": "af23060f87e09946bbf911565ec34ac5fea8a61a5ba3744bbda7fb7d22d67759",
+  "claim": "RXRX reported $525.1 million in cash and cash equivalents as of June 30, 2025.",
+  "verificationState": "supported"
+}

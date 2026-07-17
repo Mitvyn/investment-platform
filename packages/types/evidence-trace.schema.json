@@ -1,0 +1,101 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://investment-research-os.local/evidence-trace.schema.json",
+  "title": "EvidenceTrace",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "ticker",
+    "companyName",
+    "researchRunId",
+    "runStatus",
+    "sourceProvider",
+    "sourceTitle",
+    "filingForm",
+    "filedAt",
+    "periodEnd",
+    "accessionNumber",
+    "sourceUrl",
+    "retrievedAt",
+    "locator",
+    "passage",
+    "passageSha256",
+    "claim",
+    "verificationState"
+  ],
+  "properties": {
+    "ticker": {
+      "type": "string",
+      "pattern": "^[A-Z][A-Z0-9.-]{0,9}$"
+    },
+    "companyName": {
+      "type": "string",
+      "minLength": 1
+    },
+    "researchRunId": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "runStatus": {
+      "const": "completed"
+    },
+    "sourceProvider": {
+      "const": "sec"
+    },
+    "sourceTitle": {
+      "type": "string",
+      "minLength": 1
+    },
+    "filingForm": {
+      "type": "string",
+      "minLength": 1
+    },
+    "filedAt": {
+      "type": "string",
+      "format": "date"
+    },
+    "periodEnd": {
+      "type": "string",
+      "format": "date"
+    },
+    "accessionNumber": {
+      "type": "string",
+      "pattern": "^[0-9]{10}-[0-9]{2}-[0-9]{6}$"
+    },
+    "sourceUrl": {
+      "type": "string",
+      "format": "uri",
+      "pattern": "^https://www\\.sec\\.gov/"
+    },
+    "retrievedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "locator": {
+      "type": "string",
+      "minLength": 1
+    },
+    "passage": {
+      "type": "string",
+      "minLength": 1
+    },
+    "passageSha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "claim": {
+      "type": "string",
+      "minLength": 1
+    },
+    "verificationState": {
+      "enum": [
+        "unverified",
+        "supported",
+        "contradicted",
+        "unclear",
+        "invalidated",
+        "stale"
+      ]
+    }
+  }
+}

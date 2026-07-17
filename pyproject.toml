@@ -17,6 +17,7 @@ classifiers = [
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
 ]
+dependencies = ["certifi>=2024.2.2"]
 
 [project.scripts]
 iros = "investment_research_os.cli:main"
