@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any
 from urllib.parse import urlencode
 
@@ -11,6 +12,23 @@ from workers.sec.storage import (
 )
 
 from .models import IssuerContext
+
+
+def _verification_values_match(
+    field: str,
+    hosted: Any,
+    expected: Any,
+) -> bool:
+    if field != "published_at":
+        return hosted == expected
+    if not isinstance(hosted, str) or not isinstance(expected, str):
+        return False
+    try:
+        hosted_at = datetime.fromisoformat(hosted.replace("Z", "+00:00"))
+        expected_at = datetime.fromisoformat(expected.replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    return hosted_at == expected_at
 
 
 class SupabaseIssuerStore:
@@ -75,9 +93,21 @@ class SupabaseIssuerStore:
                 raise EvidenceStorageError(
                     f"expected exactly one hosted row for {table} id {record['id']}"
                 )
-            if response.payload[0] != expected:
+            hosted = response.payload[0]
+            mismatched_fields = sorted(
+                key
+                for key, value in expected.items()
+                if key not in hosted
+                or not _verification_values_match(
+                    key,
+                    hosted[key],
+                    value,
+                )
+            )
+            if mismatched_fields:
                 raise EvidenceStorageError(
-                    f"hosted row does not match issuer context for {table}"
+                    f"hosted row does not match issuer context for {table}; "
+                    f"mismatched fields: {', '.join(mismatched_fields)}"
                 )
             verified.setdefault(table, []).append(record["id"])
         return verified

@@ -172,7 +172,10 @@ and filing content hash.
 ### Phase 2 RXRX context
 
 The issuer collector uses no personal contact identity and reads only the
-canonical Recursion investor-relations release:
+canonical Recursion investor-relations release. It requires system `curl`,
+keeps curl's native User-Agent, restricts redirects to HTTPS, and makes at most
+two 15-second attempts because Recursion's CDN stalls custom application
+User-Agents:
 
 ```bash
 python3 -m workers.issuer ingest-rxrx-q1-2026
@@ -182,6 +185,12 @@ python3 -m workers.issuer verify-rxrx-q1-2026
 These commands require `IROS_OPERATOR_ID`, `IROS_SUPABASE_URL`, and
 `IROS_SUPABASE_SECRET_KEY`. Hosted database operations are operator-owned;
 do not run ingestion or verification without explicit authorization.
+
+Operator ran issuer ingestion twice on 2026-07-17. Both runs reused research
+run `56054491-8524-5491-8d23-b18bee2083e3`; verification found exactly one
+release, four passages, five financial metrics, one catalyst, and one risk.
+Canonical evidence hash is
+`72b553aee645c8d3d4ba9fa42ee8a1cdfc545beef18ed7f8dc9b4b2326f32505`.
 
 Market ingestion additionally requires `TWELVE_DATA_API_KEY` from a plan whose
 license permits authenticated dashboard display:
@@ -197,7 +206,7 @@ Phase 2 migrations:
 
 - `20260717021804_iros_phase2_ticker_context.sql` was applied on 2026-07-17;
 - operator reports `20260717023818_iros_phase2_watchlist_risks.sql` applied on
-  2026-07-17; hosted verification remains pending.
+  2026-07-17; issuer verification confirms risk persistence.
 
 The operator applies migrations. Agents must not push, query, ingest, run
 advisors, or database-smoke the hosted project without explicit permission in
