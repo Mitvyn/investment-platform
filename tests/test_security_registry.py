@@ -98,6 +98,31 @@ class SecurityRegistryTests(unittest.TestCase):
         with self.assertRaisesRegex(SecurityRegistryError, "exactly one"):
             client.resolve("TEST", operator_id="11111111-1111-4111-8111-111111111111")
 
+    def test_rejects_multiple_listed_classes_for_one_stable_issuer_identity(
+        self,
+    ) -> None:
+        client = SecurityRegistryClient(
+            SecSettings(user_agent="Investment Research OS test@example.com"),
+            transport=SecRegistryFake(
+                {
+                    "fields": ["cik", "name", "ticker", "exchange"],
+                    "data": [
+                        [1067983, "Example Holdings", "EX.A", "NYSE"],
+                        [1067983, "Example Holdings", "EX.B", "NYSE"],
+                    ],
+                }
+            ),
+        )
+
+        with self.assertRaisesRegex(
+            SecurityRegistryError,
+            "multiple listed securities",
+        ):
+            client.resolve(
+                "EX.A",
+                operator_id="11111111-1111-4111-8111-111111111111",
+            )
+
     def test_persists_canonical_security_by_owner_and_stable_id(self) -> None:
         security = SecurityRegistryClient(
             SecSettings(user_agent="Investment Research OS test@example.com"),

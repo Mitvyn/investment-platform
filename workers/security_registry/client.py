@@ -74,9 +74,27 @@ class SecurityRegistryClient:
             )
         cik_value, issuer_name, resolved_ticker, exchange = matches[0]
         try:
-            cik = str(int(cik_value)).zfill(10)
+            numeric_cik = int(cik_value)
+            cik = str(numeric_cik).zfill(10)
         except (TypeError, ValueError) as error:
             raise SecurityRegistryError("SEC security CIK is invalid") from error
+        issuer_tickers: set[str] = set()
+        for row in data:
+            if not isinstance(row, list) or len(row) != 4:
+                continue
+            try:
+                row_cik = int(row[0])
+            except (TypeError, ValueError):
+                continue
+            if row_cik == numeric_cik:
+                row_ticker = str(row[2]).strip().upper()
+                if row_ticker:
+                    issuer_tickers.add(row_ticker)
+        if len(issuer_tickers) != 1:
+            raise SecurityRegistryError(
+                "SEC issuer has multiple listed securities without a stable "
+                "class identity"
+            )
         issuer = str(issuer_name).strip()
         venue = str(exchange).strip()
         if not issuer or not venue:

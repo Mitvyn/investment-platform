@@ -19,6 +19,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { MarketPriceChart } from "@/components/market-price-chart";
 import { HoldingsTable } from "@/components/holdings-table";
+import { WorkflowJobPoller } from "@/components/workflow-job-poller";
 import {
   Card,
   CardContent,
@@ -27,6 +28,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
+import { Input } from "@/components/ui/input";
 import {
   dashboardSections,
   isDashboardSectionAvailable,
@@ -38,9 +40,11 @@ import { loadMarketSeries, loadTickerContext } from "../lib/context";
 import { loadEvidenceTrace } from "../lib/evidence";
 import { loadLatestHoldings } from "../lib/holdings";
 import { loadSecurityDirectory } from "../lib/securities";
+import { loadSecurityJob } from "../lib/security-jobs";
 import { createClient } from "../lib/supabase/server";
 import { loadWatchlist } from "../lib/watchlist";
 import { signOut, toggleWatchlist } from "./actions";
+import { registerSecurity } from "./security-actions";
 
 export const dynamic = "force-dynamic";
 
@@ -175,13 +179,22 @@ function SourceHealth({
 export default async function TickerWorkspace({
   searchParams,
 }: {
-  searchParams: Promise<{ security?: string }>;
+  searchParams: Promise<{
+    registration?: string;
+    registration_error?: string;
+    security?: string;
+  }>;
 }) {
   const supabase = await createClient();
   const { data, error } = await supabase.auth.getClaims();
   if (error || !data?.claims) redirect("/login");
 
-  const requestedSecurityId = (await searchParams).security;
+  const params = await searchParams;
+  const requestedSecurityId = params.security;
+  const operatorId = String(data.claims.sub ?? "");
+  const registrationJob = params.registration
+    ? await loadSecurityJob(operatorId, params.registration)
+    : null;
   const [securities, watchlist, holdingsResult] = await Promise.all([
     loadSecurityDirectory(),
     loadWatchlist(),
@@ -312,7 +325,7 @@ export default async function TickerWorkspace({
 
         <div className="mx-auto max-w-[1480px]">
           <Card className="mt-5">
-            <CardContent className="flex flex-col gap-4 pt-5 sm:flex-row sm:items-end sm:justify-between sm:pt-6">
+            <CardContent className="grid gap-6 pt-5 sm:pt-6 lg:grid-cols-2">
               <form className="flex flex-1 flex-col gap-2 sm:max-w-lg" method="get">
                 <label
                   className="text-xs font-medium text-muted-foreground"
@@ -348,12 +361,84 @@ export default async function TickerWorkspace({
                   </Button>
                 </div>
               </form>
-              <p className="max-w-xl text-xs leading-relaxed text-muted-foreground">
-                Security ID controls market-series identity. Ticker is the
-                current display alias; legacy issuer evidence remains ticker keyed.
-              </p>
+              <form action={registerSecurity} className="flex flex-col gap-2">
+                <label
+                  className="text-xs font-medium text-muted-foreground"
+                  htmlFor="ticker"
+                >
+                  Add security
+                </label>
+                <div className="flex gap-2">
+                  <Input
+                    autoCapitalize="characters"
+                    autoComplete="off"
+                    className="h-9 font-mono uppercase"
+                    id="ticker"
+                    maxLength={10}
+                    name="ticker"
+                    pattern="[A-Za-z][A-Za-z0-9.-]{0,9}"
+                    placeholder="CRSP"
+                    required
+                  />
+                  <Button type="submit">Add security</Button>
+                </div>
+                <p className="text-xs leading-relaxed text-muted-foreground">
+                  Resolves SEC issuer identity, then queues private market context.
+                  Registration does not grant biotech eligibility.
+                </p>
+              </form>
             </CardContent>
           </Card>
+          {params.registration_error ? (
+            <Card className="mt-5 border-challenge/35 bg-challenge-muted">
+              <CardContent className="py-4 text-sm text-challenge-muted-foreground">
+                {params.registration_error === "invalid_ticker"
+                  ? "Enter a valid US ticker using letters, numbers, dots, or hyphens."
+                  : "Security onboarding could not be queued. Retry after checking service status."}
+              </CardContent>
+            </Card>
+          ) : null}
+          {registrationJob ? (
+            <Card className="mt-5" aria-live="polite">
+              <CardContent className="flex flex-col gap-3 py-4 sm:flex-row sm:items-center">
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2">
+                    <span className="font-mono text-sm font-semibold">
+                      {registrationJob.ticker}
+                    </span>
+                    <Badge
+                      variant={
+                        registrationJob.state === "completed"
+                          ? "verified"
+                          : registrationJob.state === "failed"
+                            ? "destructive"
+                            : "default"
+                      }
+                    >
+                      {registrationJob.state}
+                    </Badge>
+                  </div>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    {registrationJob.state === "queued"
+                      ? "Waiting for security worker."
+                      : registrationJob.state === "running"
+                        ? "Resolving SEC identity and persisted market context."
+                        : registrationJob.state === "completed"
+                          ? "Canonical security ready. Opening workspace."
+                          : `Onboarding stopped: ${registrationJob.error_code ?? "unknown_error"}. Submit the ticker again to start a new bounded attempt.`}
+                  </p>
+                </div>
+                <span className="font-mono text-[10px] text-muted-foreground">
+                  {registrationJob.job_id}
+                </span>
+                <WorkflowJobPoller
+                  key={registrationJob.job_id}
+                  securityId={registrationJob.security_id}
+                  state={registrationJob.state}
+                />
+              </CardContent>
+            </Card>
+          ) : null}
           {holdingsResult.snapshot && holdingsSummary ? (
             <HoldingsTable
               snapshot={holdingsResult.snapshot}
