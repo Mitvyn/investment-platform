@@ -1,0 +1,23 @@
+{
+  "grader_id": "biotech",
+  "grader_version": "biotech-grader-v1",
+  "grader_contract_version": "biotech-grader-contract-v1",
+  "eligibility_rule_version": "biotech-eligibility-v1",
+  "rubric_version": "biotech-rubric-v1",
+  "output_schema_version": "biotech_grader_payload.v1",
+  "abstention_rules_version": "biotech-abstention-v1",
+  "prompt_version": "biotech_grader_v1",
+  "owned_decision_question": "Is the scientific and clinical evidence credible?",
+  "payload_key": "biotech_payload",
+  "payload": {
+    "contract_version": "biotech_grader_payload.v1",
+    "mechanism_plausibility": "credible",
+    "preclinical_evidence_quality": "moderate",
+    "clinical_evidence_quality": "weak",
+    "trial_design_assessment": "Early clinical design can test translation.",
+    "endpoint_relevance": "surrogate",
+    "regulatory_credibility": "mixed",
+    "claims_exceed_evidence": false,
+    "limitations": ["Controlled efficacy evidence remains unavailable."]
+  }
+}

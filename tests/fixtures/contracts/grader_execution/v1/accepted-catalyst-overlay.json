@@ -1,0 +1,31 @@
+{
+  "grader_id": "catalyst",
+  "grader_version": "catalyst-grader-v1",
+  "grader_contract_version": "catalyst-grader-contract-v1",
+  "eligibility_rule_version": "catalyst-eligibility-v1",
+  "rubric_version": "catalyst-rubric-v1",
+  "output_schema_version": "catalyst_grader_payload.v1",
+  "abstention_rules_version": "catalyst-abstention-v1",
+  "prompt_version": "catalyst_grader_v1",
+  "owned_decision_question": "What event resolves uncertainty, when, and with what outcomes?",
+  "payload_key": "catalyst_payload",
+  "payload": {
+    "contract_version": "catalyst_grader_payload.v1",
+    "catalyst_definition": "REC-4881 regulatory update",
+    "programme": "REC-4881",
+    "probability": {
+      "value": "0.55",
+      "unit": "probability",
+      "calculation_method": "scenario_assessment_v1",
+      "assumptions": ["Regulatory interaction occurs on schedule."],
+      "evidence_ids": ["8d80b1a6-0742-5b0c-bf48-4e0d32cb8200"],
+      "calculation_ids": []
+    },
+    "timing_window": "2026-H2",
+    "date_confidence": "medium",
+    "success_outcome": "Regulatory path becomes clearer.",
+    "delay_outcome": "Update moves beyond stated window.",
+    "partial_success_outcome": "Agency requests more evidence.",
+    "failure_outcome": "Programme cannot advance as planned."
+  }
+}

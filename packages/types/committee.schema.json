@@ -1,0 +1,422 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://investment-research-os.local/contracts/committee-state.v1.schema.json",
+  "title": "Committee State v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "contract_version", "research_run_id", "evidence_bundle_id",
+    "evidence_bundle_hash", "workflow_config_version", "proposition_id",
+    "proposition_version", "rendered_proposition_text", "committee_status",
+    "accounting", "stance_counts", "stance_matrix", "grader_results",
+    "derived_at"
+  ],
+  "properties": {
+    "contract_version": { "const": "committee_state.v1" },
+    "research_run_id": { "$ref": "#/$defs/uuid" },
+    "evidence_bundle_id": { "$ref": "#/$defs/uuid" },
+    "evidence_bundle_hash": { "$ref": "#/$defs/sha256" },
+    "workflow_config_version": { "$ref": "#/$defs/string" },
+    "proposition_id": { "const": "biotech_moonshot_catalyst_case" },
+    "proposition_version": { "const": "biotech_moonshot_catalyst_case.v1" },
+    "rendered_proposition_text": { "const": "As of the cutoff, the available evidence supports a credible Moonshot research case with an identifiable catalyst capable of materially resolving uncertainty." },
+    "committee_status": {
+      "enum": [
+        "complete", "complete_with_abstentions",
+        "incomplete_required_grader_failed", "insufficient_accepted_opinions"
+      ]
+    },
+    "accounting": { "$ref": "#/$defs/accounting" },
+    "stance_counts": { "$ref": "#/$defs/stance_counts" },
+    "stance_matrix": {
+      "type": "array",
+      "maxItems": 5,
+      "items": { "$ref": "#/$defs/stance_entry" }
+    },
+    "grader_results": {
+      "type": "array",
+      "minItems": 5,
+      "maxItems": 5,
+      "items": { "$ref": "#/$defs/grader_result" }
+    },
+    "derived_at": { "$ref": "#/$defs/timestamp" }
+  },
+  "$defs": {
+    "uuid": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "timestamp": { "type": "string", "format": "date-time" },
+    "string": { "type": "string", "minLength": 1 },
+    "strings": { "type": "array", "items": { "$ref": "#/$defs/string" } },
+    "non_empty_strings": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/string" }
+    },
+    "grader_id": {
+      "enum": ["moonshot", "catalyst", "biotech", "risk_dilution", "valuation"]
+    },
+    "stance": { "enum": ["supports", "mixed", "challenges"] },
+    "confidence": { "enum": ["high", "medium", "low"] },
+    "accounting": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "eligible_count", "accepted_count", "abstained_count",
+        "not_eligible_count", "failed_count", "not_executed_count"
+      ],
+      "properties": {
+        "eligible_count": { "type": "integer", "minimum": 0, "maximum": 5 },
+        "accepted_count": { "type": "integer", "minimum": 0, "maximum": 5 },
+        "abstained_count": { "type": "integer", "minimum": 0, "maximum": 5 },
+        "not_eligible_count": { "type": "integer", "minimum": 0, "maximum": 5 },
+        "failed_count": { "type": "integer", "minimum": 0, "maximum": 5 },
+        "not_executed_count": { "type": "integer", "minimum": 0, "maximum": 5 }
+      }
+    },
+    "stance_counts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["supports", "mixed", "challenges"],
+      "properties": {
+        "supports": { "type": "integer", "minimum": 0, "maximum": 5 },
+        "mixed": { "type": "integer", "minimum": 0, "maximum": 5 },
+        "challenges": { "type": "integer", "minimum": 0, "maximum": 5 }
+      }
+    },
+    "stance_entry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["grader_id", "opinion_id", "stance", "stance_rationale"],
+      "properties": {
+        "grader_id": { "$ref": "#/$defs/grader_id" },
+        "opinion_id": { "$ref": "#/$defs/uuid" },
+        "stance": { "$ref": "#/$defs/stance" },
+        "stance_rationale": { "$ref": "#/$defs/string" }
+      }
+    },
+    "numeric_value": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "value", "unit", "calculation_method", "assumptions",
+        "evidence_ids", "calculation_ids"
+      ],
+      "properties": {
+        "value": { "type": "string", "pattern": "^-?(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?$" },
+        "unit": { "$ref": "#/$defs/string" },
+        "calculation_method": { "$ref": "#/$defs/string" },
+        "assumptions": { "$ref": "#/$defs/strings" },
+        "evidence_ids": { "$ref": "#/$defs/strings" },
+        "calculation_ids": { "$ref": "#/$defs/strings" }
+      }
+    },
+    "material_claim": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["claim_id", "claim", "materiality", "evidence_ids"],
+      "properties": {
+        "claim_id": { "$ref": "#/$defs/string" },
+        "claim": { "$ref": "#/$defs/string" },
+        "materiality": { "enum": ["high", "medium", "low"] },
+        "evidence_ids": { "$ref": "#/$defs/non_empty_strings" }
+      }
+    },
+    "contradicting_evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["evidence_id", "explanation"],
+      "properties": {
+        "evidence_id": { "$ref": "#/$defs/string" },
+        "explanation": { "$ref": "#/$defs/string" }
+      }
+    },
+    "evidence_gap": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["gap_id", "description", "required_evidence"],
+      "properties": {
+        "gap_id": { "$ref": "#/$defs/string" },
+        "description": { "$ref": "#/$defs/string" },
+        "required_evidence": { "$ref": "#/$defs/string" }
+      }
+    },
+    "proposition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "proposition_id", "proposition_version", "rendered_proposition_text",
+        "grader_stance", "stance_rationale"
+      ],
+      "properties": {
+        "proposition_id": { "const": "biotech_moonshot_catalyst_case" },
+        "proposition_version": { "const": "biotech_moonshot_catalyst_case.v1" },
+        "rendered_proposition_text": { "const": "As of the cutoff, the available evidence supports a credible Moonshot research case with an identifiable catalyst capable of materially resolving uncertainty." },
+        "grader_stance": {
+          "anyOf": [{ "$ref": "#/$defs/stance" }, { "type": "null" }]
+        },
+        "stance_rationale": {
+          "anyOf": [{ "$ref": "#/$defs/string" }, { "type": "null" }]
+        }
+      }
+    },
+    "abstention": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "reason_code", "reason", "missing_or_inadequate_evidence",
+        "evidence_required", "confidence"
+      ],
+      "properties": {
+        "reason_code": { "$ref": "#/$defs/string" },
+        "reason": { "$ref": "#/$defs/string" },
+        "missing_or_inadequate_evidence": { "$ref": "#/$defs/non_empty_strings" },
+        "evidence_required": { "$ref": "#/$defs/non_empty_strings" },
+        "confidence": { "$ref": "#/$defs/confidence" }
+      }
+    },
+    "execution_metadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "execution_id", "grader_execution_contract_version", "prompt_version",
+        "model_config_id", "provider", "model", "attempt_count"
+      ],
+      "properties": {
+        "execution_id": { "$ref": "#/$defs/uuid" },
+        "grader_execution_contract_version": { "const": "grader_execution.v1" },
+        "prompt_version": { "$ref": "#/$defs/string" },
+        "model_config_id": { "$ref": "#/$defs/string" },
+        "provider": { "$ref": "#/$defs/string" },
+        "model": { "$ref": "#/$defs/string" },
+        "attempt_count": { "type": "integer", "minimum": 1, "maximum": 2 }
+      }
+    },
+    "moonshot_payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "contract_version", "mission_relevance", "asymmetry_assessment",
+        "evidence_maturity", "strategic_or_societal_value",
+        "asymmetry_drivers", "limiting_factors"
+      ],
+      "properties": {
+        "contract_version": { "const": "moonshot_grader_payload.v1" },
+        "mission_relevance": { "enum": ["material", "limited", "none", "indeterminate"] },
+        "asymmetry_assessment": { "enum": ["credible", "conditional", "not_supported", "indeterminate"] },
+        "evidence_maturity": { "enum": ["clinical", "preclinical", "mixed", "insufficient"] },
+        "strategic_or_societal_value": { "enum": ["material", "limited", "not_supported", "indeterminate"] },
+        "asymmetry_drivers": { "$ref": "#/$defs/strings" },
+        "limiting_factors": { "$ref": "#/$defs/strings" }
+      }
+    },
+    "catalyst_payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "contract_version", "catalyst_definition", "programme", "probability",
+        "timing_window", "date_confidence", "success_outcome", "delay_outcome",
+        "partial_success_outcome", "failure_outcome"
+      ],
+      "properties": {
+        "contract_version": { "const": "catalyst_grader_payload.v1" },
+        "catalyst_definition": { "$ref": "#/$defs/string" },
+        "programme": { "$ref": "#/$defs/string" },
+        "probability": { "$ref": "#/$defs/numeric_value" },
+        "timing_window": { "$ref": "#/$defs/string" },
+        "date_confidence": { "$ref": "#/$defs/confidence" },
+        "success_outcome": { "$ref": "#/$defs/string" },
+        "delay_outcome": { "$ref": "#/$defs/string" },
+        "partial_success_outcome": { "$ref": "#/$defs/string" },
+        "failure_outcome": { "$ref": "#/$defs/string" }
+      }
+    },
+    "biotech_payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "contract_version", "mechanism_plausibility",
+        "preclinical_evidence_quality", "clinical_evidence_quality",
+        "trial_design_assessment", "endpoint_relevance",
+        "regulatory_credibility", "claims_exceed_evidence", "limitations"
+      ],
+      "properties": {
+        "contract_version": { "const": "biotech_grader_payload.v1" },
+        "mechanism_plausibility": { "enum": ["credible", "mixed", "not_supported", "indeterminate"] },
+        "preclinical_evidence_quality": { "enum": ["strong", "moderate", "weak", "absent"] },
+        "clinical_evidence_quality": { "enum": ["strong", "moderate", "weak", "absent"] },
+        "trial_design_assessment": { "$ref": "#/$defs/string" },
+        "endpoint_relevance": { "enum": ["clinically_meaningful", "surrogate", "weak", "indeterminate"] },
+        "regulatory_credibility": { "enum": ["credible", "mixed", "weak", "indeterminate"] },
+        "claims_exceed_evidence": { "type": "boolean" },
+        "limitations": { "$ref": "#/$defs/strings" }
+      }
+    },
+    "risk_dilution_payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "contract_version", "cash_runway", "burn_rate", "going_concern_risk",
+        "dilution_mechanisms", "financing_required_before_catalyst",
+        "downside_mechanisms", "permanent_capital_loss_mechanisms"
+      ],
+      "properties": {
+        "contract_version": { "const": "risk_dilution_grader_payload.v1" },
+        "cash_runway": { "$ref": "#/$defs/numeric_value" },
+        "burn_rate": { "$ref": "#/$defs/numeric_value" },
+        "going_concern_risk": { "enum": ["low", "moderate", "high", "indeterminate"] },
+        "dilution_mechanisms": { "$ref": "#/$defs/strings" },
+        "financing_required_before_catalyst": { "enum": ["no", "possible", "yes", "indeterminate"] },
+        "downside_mechanisms": { "$ref": "#/$defs/strings" },
+        "permanent_capital_loss_mechanisms": { "$ref": "#/$defs/strings" }
+      }
+    },
+    "valuation_scenario": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "scenario_id", "case", "probability", "equity_value",
+        "implied_value_per_diluted_share", "assumptions"
+      ],
+      "properties": {
+        "scenario_id": { "$ref": "#/$defs/string" },
+        "case": { "enum": ["conservative", "base", "bull", "failure"] },
+        "probability": { "$ref": "#/$defs/numeric_value" },
+        "equity_value": { "$ref": "#/$defs/numeric_value" },
+        "implied_value_per_diluted_share": { "$ref": "#/$defs/numeric_value" },
+        "assumptions": { "$ref": "#/$defs/strings" }
+      }
+    },
+    "valuation_payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "contract_version", "valuation_method", "current_market_value",
+        "fully_diluted_shares", "scenarios", "sensitivities"
+      ],
+      "properties": {
+        "contract_version": { "const": "valuation_grader_payload.v1" },
+        "valuation_method": { "$ref": "#/$defs/string" },
+        "current_market_value": { "$ref": "#/$defs/numeric_value" },
+        "fully_diluted_shares": { "$ref": "#/$defs/numeric_value" },
+        "scenarios": {
+          "type": "array",
+          "minItems": 4,
+          "maxItems": 4,
+          "items": { "$ref": "#/$defs/valuation_scenario" }
+        },
+        "sensitivities": { "$ref": "#/$defs/strings" }
+      }
+    },
+    "domain_payload": {
+      "oneOf": [
+        { "$ref": "#/$defs/moonshot_payload" },
+        { "$ref": "#/$defs/catalyst_payload" },
+        { "$ref": "#/$defs/biotech_payload" },
+        { "$ref": "#/$defs/risk_dilution_payload" },
+        { "$ref": "#/$defs/valuation_payload" }
+      ]
+    },
+    "opinion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "opinion_id", "owned_decision_question", "stance", "confidence",
+        "summary", "material_claims", "assumptions", "contradicting_evidence",
+        "evidence_gaps", "invalidation_signals", "proposition",
+        "execution_metadata", "domain_payload", "abstention", "created_at"
+      ],
+      "properties": {
+        "opinion_id": { "$ref": "#/$defs/uuid" },
+        "owned_decision_question": { "$ref": "#/$defs/string" },
+        "stance": { "anyOf": [{ "$ref": "#/$defs/stance" }, { "type": "null" }] },
+        "confidence": { "$ref": "#/$defs/confidence" },
+        "summary": { "$ref": "#/$defs/string" },
+        "material_claims": { "type": "array", "items": { "$ref": "#/$defs/material_claim" } },
+        "assumptions": { "$ref": "#/$defs/strings" },
+        "contradicting_evidence": { "type": "array", "items": { "$ref": "#/$defs/contradicting_evidence" } },
+        "evidence_gaps": { "type": "array", "items": { "$ref": "#/$defs/evidence_gap" } },
+        "invalidation_signals": { "$ref": "#/$defs/strings" },
+        "proposition": { "$ref": "#/$defs/proposition" },
+        "execution_metadata": { "$ref": "#/$defs/execution_metadata" },
+        "domain_payload": { "$ref": "#/$defs/domain_payload" },
+        "abstention": { "anyOf": [{ "$ref": "#/$defs/abstention" }, { "type": "null" }] },
+        "created_at": { "$ref": "#/$defs/timestamp" }
+      }
+    },
+    "not_eligible": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "eligibility_rule_version", "eligibility_inputs", "reason_code",
+        "reason", "evaluated_at"
+      ],
+      "properties": {
+        "eligibility_rule_version": { "$ref": "#/$defs/string" },
+        "eligibility_inputs": {
+          "type": "object",
+          "additionalProperties": { "type": ["string", "boolean", "null"] }
+        },
+        "reason_code": { "$ref": "#/$defs/string" },
+        "reason": { "$ref": "#/$defs/string" },
+        "evaluated_at": { "$ref": "#/$defs/timestamp" }
+      }
+    },
+    "not_executed": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["reason_code", "reason", "gate_policy_version", "failed_gate_checks"],
+      "properties": {
+        "reason_code": { "$ref": "#/$defs/string" },
+        "reason": { "$ref": "#/$defs/string" },
+        "gate_policy_version": { "$ref": "#/$defs/string" },
+        "failed_gate_checks": { "$ref": "#/$defs/non_empty_strings" }
+      }
+    },
+    "failure": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "category", "attempt_count", "validation_errors", "final_reason",
+        "retry_policy_version"
+      ],
+      "properties": {
+        "category": { "enum": ["execution_failure", "timeout", "schema_validation", "citation_validation", "contract_violation", "unsupported_output"] },
+        "attempt_count": { "type": "integer", "minimum": 1, "maximum": 2 },
+        "validation_errors": { "$ref": "#/$defs/strings" },
+        "final_reason": { "$ref": "#/$defs/string" },
+        "retry_policy_version": { "$ref": "#/$defs/string" }
+      }
+    },
+    "grader_result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "contract_version", "grader_id", "grader_version",
+        "grader_contract_version", "output_schema_version", "required",
+        "evidence_bundle_id", "evidence_bundle_hash", "execution_id",
+        "execution_state", "opinion", "not_eligible", "not_executed",
+        "failure", "persisted_at"
+      ],
+      "properties": {
+        "contract_version": { "const": "committee_grader_result.v1" },
+        "grader_id": { "$ref": "#/$defs/grader_id" },
+        "grader_version": { "$ref": "#/$defs/string" },
+        "grader_contract_version": { "$ref": "#/$defs/string" },
+        "output_schema_version": { "$ref": "#/$defs/string" },
+        "required": { "const": true },
+        "evidence_bundle_id": { "$ref": "#/$defs/uuid" },
+        "evidence_bundle_hash": { "$ref": "#/$defs/sha256" },
+        "execution_id": { "anyOf": [{ "$ref": "#/$defs/uuid" }, { "type": "null" }] },
+        "execution_state": { "enum": ["accepted", "abstained", "failed", "not_eligible", "not_executed"] },
+        "opinion": { "anyOf": [{ "$ref": "#/$defs/opinion" }, { "type": "null" }] },
+        "not_eligible": { "anyOf": [{ "$ref": "#/$defs/not_eligible" }, { "type": "null" }] },
+        "not_executed": { "anyOf": [{ "$ref": "#/$defs/not_executed" }, { "type": "null" }] },
+        "failure": { "anyOf": [{ "$ref": "#/$defs/failure" }, { "type": "null" }] },
+        "persisted_at": { "$ref": "#/$defs/timestamp" }
+      }
+    }
+  }
+}

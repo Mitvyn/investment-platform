@@ -1,0 +1,290 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://investment-research-os.local/contracts/operator-decision.v1.schema.json",
+  "title": "Operator Decision and Guarded Handoff v1 Contracts",
+  "oneOf": [
+    {"$ref": "#/$defs/operator_decision_event"},
+    {"$ref": "#/$defs/operator_decision_history"},
+    {"$ref": "#/$defs/operator_decision_current_state"},
+    {"$ref": "#/$defs/operator_workflow_command"},
+    {"$ref": "#/$defs/portfolio_review_handoff_marker"}
+  ],
+  "$defs": {
+    "uuid": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "non_empty_string": {"type": "string", "minLength": 1},
+    "timestamp": {"type": "string", "format": "date-time"},
+    "thesis_contract_id": {"const": "biotech_moonshot_catalyst_assessment"},
+    "disposition": {
+      "enum": ["reject", "monitor", "deep_research", "decision_ready"]
+    },
+    "operator_action": {
+      "enum": [
+        "dismiss",
+        "monitor",
+        "request_deep_research",
+        "mark_for_future_portfolio_review",
+        "no_action"
+      ]
+    },
+    "operator_decision_event": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "contract_version",
+        "operator_decision_id",
+        "operator_id",
+        "security_id",
+        "thesis_contract_id",
+        "thesis_version_id",
+        "committee_result_id",
+        "readiness_gate_result_id",
+        "system_disposition",
+        "operator_action",
+        "relationship",
+        "rationale",
+        "supersedes_operator_decision_id",
+        "decision_policy_version",
+        "idempotency_key",
+        "created_at"
+      ],
+      "properties": {
+        "contract_version": {"const": "operator_decision_event.v1"},
+        "operator_decision_id": {"$ref": "#/$defs/uuid"},
+        "operator_id": {"$ref": "#/$defs/uuid"},
+        "security_id": {"$ref": "#/$defs/uuid"},
+        "thesis_contract_id": {"$ref": "#/$defs/thesis_contract_id"},
+        "thesis_version_id": {"$ref": "#/$defs/uuid"},
+        "committee_result_id": {"$ref": "#/$defs/uuid"},
+        "readiness_gate_result_id": {"$ref": "#/$defs/uuid"},
+        "system_disposition": {"$ref": "#/$defs/disposition"},
+        "operator_action": {"$ref": "#/$defs/operator_action"},
+        "relationship": {"enum": ["accept", "override", "defer"]},
+        "rationale": {"type": "string"},
+        "supersedes_operator_decision_id": {
+          "anyOf": [{"$ref": "#/$defs/uuid"}, {"type": "null"}]
+        },
+        "decision_policy_version": {"const": "operator_decision_policy.v1"},
+        "idempotency_key": {"$ref": "#/$defs/non_empty_string"},
+        "created_at": {"$ref": "#/$defs/timestamp"}
+      },
+      "oneOf": [
+        {
+          "properties": {
+            "operator_action": {"const": "no_action"},
+            "relationship": {"const": "defer"}
+          }
+        },
+        {
+          "properties": {"relationship": {"const": "accept"}},
+          "oneOf": [
+            {
+              "properties": {
+                "system_disposition": {"const": "reject"},
+                "operator_action": {"const": "dismiss"}
+              }
+            },
+            {
+              "properties": {
+                "system_disposition": {"const": "monitor"},
+                "operator_action": {"const": "monitor"}
+              }
+            },
+            {
+              "properties": {
+                "system_disposition": {"const": "deep_research"},
+                "operator_action": {"const": "request_deep_research"}
+              }
+            },
+            {
+              "properties": {
+                "system_disposition": {"const": "decision_ready"},
+                "operator_action": {"const": "mark_for_future_portfolio_review"}
+              }
+            }
+          ]
+        },
+        {
+          "properties": {
+            "relationship": {"const": "override"},
+            "rationale": {"type": "string", "minLength": 1},
+            "operator_action": {
+              "enum": [
+                "dismiss",
+                "monitor",
+                "request_deep_research",
+                "mark_for_future_portfolio_review"
+              ]
+            }
+          },
+          "not": {
+            "anyOf": [
+              {
+                "properties": {
+                  "system_disposition": {"const": "reject"},
+                  "operator_action": {"const": "dismiss"}
+                },
+                "required": ["system_disposition", "operator_action"]
+              },
+              {
+                "properties": {
+                  "system_disposition": {"const": "monitor"},
+                  "operator_action": {"const": "monitor"}
+                },
+                "required": ["system_disposition", "operator_action"]
+              },
+              {
+                "properties": {
+                  "system_disposition": {"const": "deep_research"},
+                  "operator_action": {"const": "request_deep_research"}
+                },
+                "required": ["system_disposition", "operator_action"]
+              },
+              {
+                "properties": {
+                  "system_disposition": {"const": "decision_ready"},
+                  "operator_action": {"const": "mark_for_future_portfolio_review"}
+                },
+                "required": ["system_disposition", "operator_action"]
+              }
+            ]
+          }
+        }
+      ]
+    },
+    "operator_decision_history": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "contract_version",
+        "operator_id",
+        "security_id",
+        "thesis_contract_id",
+        "events",
+        "generated_at"
+      ],
+      "properties": {
+        "contract_version": {"const": "operator_decision_history.v1"},
+        "operator_id": {"$ref": "#/$defs/uuid"},
+        "security_id": {"$ref": "#/$defs/uuid"},
+        "thesis_contract_id": {"$ref": "#/$defs/thesis_contract_id"},
+        "events": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/operator_decision_event"}
+        },
+        "generated_at": {"$ref": "#/$defs/timestamp"}
+      }
+    },
+    "operator_decision_current_state": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "contract_version",
+        "operator_id",
+        "security_id",
+        "thesis_contract_id",
+        "current_operator_decision_id",
+        "current_operator_action",
+        "current_relationship",
+        "supersession_depth",
+        "derived_at"
+      ],
+      "properties": {
+        "contract_version": {"const": "operator_decision_current_state.v1"},
+        "operator_id": {"$ref": "#/$defs/uuid"},
+        "security_id": {"$ref": "#/$defs/uuid"},
+        "thesis_contract_id": {"$ref": "#/$defs/thesis_contract_id"},
+        "current_operator_decision_id": {
+          "anyOf": [{"$ref": "#/$defs/uuid"}, {"type": "null"}]
+        },
+        "current_operator_action": {
+          "anyOf": [{"$ref": "#/$defs/operator_action"}, {"type": "null"}]
+        },
+        "current_relationship": {
+          "anyOf": [
+            {"enum": ["accept", "override", "defer"]},
+            {"type": "null"}
+          ]
+        },
+        "supersession_depth": {"type": "integer", "minimum": 0},
+        "derived_at": {"$ref": "#/$defs/timestamp"}
+      }
+    },
+    "operator_workflow_command": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "contract_version",
+        "workflow_command_id",
+        "operator_decision_id",
+        "operator_id",
+        "security_id",
+        "thesis_contract_id",
+        "thesis_version_id",
+        "committee_result_id",
+        "readiness_gate_result_id",
+        "command_type",
+        "command_policy_version",
+        "idempotency_key",
+        "command_state",
+        "created_at"
+      ],
+      "properties": {
+        "contract_version": {"const": "operator_workflow_command.v1"},
+        "workflow_command_id": {"$ref": "#/$defs/uuid"},
+        "operator_decision_id": {"$ref": "#/$defs/uuid"},
+        "operator_id": {"$ref": "#/$defs/uuid"},
+        "security_id": {"$ref": "#/$defs/uuid"},
+        "thesis_contract_id": {"$ref": "#/$defs/thesis_contract_id"},
+        "thesis_version_id": {"$ref": "#/$defs/uuid"},
+        "committee_result_id": {"$ref": "#/$defs/uuid"},
+        "readiness_gate_result_id": {"$ref": "#/$defs/uuid"},
+        "command_type": {"const": "create_research_request"},
+        "command_policy_version": {"const": "operator_workflow_command_policy.v1"},
+        "idempotency_key": {"$ref": "#/$defs/non_empty_string"},
+        "command_state": {"const": "pending"},
+        "created_at": {"$ref": "#/$defs/timestamp"}
+      }
+    },
+    "portfolio_review_handoff_marker": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "contract_version",
+        "portfolio_review_handoff_marker_id",
+        "operator_decision_id",
+        "operator_id",
+        "security_id",
+        "thesis_contract_id",
+        "thesis_version_id",
+        "committee_result_id",
+        "readiness_gate_result_id",
+        "thesis_status",
+        "final_system_disposition",
+        "readiness_status",
+        "handoff_policy_version",
+        "idempotency_key",
+        "created_at"
+      ],
+      "properties": {
+        "contract_version": {"const": "portfolio_review_handoff_marker.v1"},
+        "portfolio_review_handoff_marker_id": {"$ref": "#/$defs/uuid"},
+        "operator_decision_id": {"$ref": "#/$defs/uuid"},
+        "operator_id": {"$ref": "#/$defs/uuid"},
+        "security_id": {"$ref": "#/$defs/uuid"},
+        "thesis_contract_id": {"$ref": "#/$defs/thesis_contract_id"},
+        "thesis_version_id": {"$ref": "#/$defs/uuid"},
+        "committee_result_id": {"$ref": "#/$defs/uuid"},
+        "readiness_gate_result_id": {"$ref": "#/$defs/uuid"},
+        "thesis_status": {"const": "canonical"},
+        "final_system_disposition": {"const": "decision_ready"},
+        "readiness_status": {"const": "passed"},
+        "handoff_policy_version": {"const": "portfolio_review_handoff_policy.v1"},
+        "idempotency_key": {"$ref": "#/$defs/non_empty_string"},
+        "created_at": {"$ref": "#/$defs/timestamp"}
+      }
+    }
+  }
+}

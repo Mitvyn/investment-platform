@@ -1,0 +1,371 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://investment-research-os.local/contracts/valuation_snapshot.v1.schema.json",
+  "title": "Valuation Snapshot v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "contract_version",
+    "id",
+    "operator_id",
+    "research_run_id",
+    "evidence_bundle_id",
+    "evidence_bundle_hash",
+    "security_id",
+    "as_of_cutoff",
+    "snapshot_status",
+    "invalid_reason_codes",
+    "currency",
+    "price_basis",
+    "basic_shares_outstanding",
+    "dilution_instruments",
+    "fully_diluted_shares",
+    "cash",
+    "debt",
+    "market_capitalization",
+    "enterprise_value",
+    "source_references",
+    "evidence_ids",
+    "calculation_ids",
+    "corporate_action_reconciliation",
+    "evidence_materiality",
+    "price_information_state",
+    "market_relative_analysis_permitted",
+    "price_basis_policy_version",
+    "freshness_policy_version",
+    "materiality_policy_version",
+    "created_at"
+  ],
+  "properties": {
+    "contract_version": { "const": "valuation_snapshot.v1" },
+    "id": { "$ref": "#/$defs/uuid" },
+    "operator_id": { "$ref": "#/$defs/uuid" },
+    "research_run_id": { "$ref": "#/$defs/uuid" },
+    "evidence_bundle_id": { "$ref": "#/$defs/uuid" },
+    "evidence_bundle_hash": { "$ref": "#/$defs/sha256" },
+    "security_id": { "$ref": "#/$defs/uuid" },
+    "as_of_cutoff": { "$ref": "#/$defs/timestamp" },
+    "snapshot_status": { "enum": ["valid", "invalid"] },
+    "invalid_reason_codes": { "$ref": "#/$defs/non_empty_string_array" },
+    "currency": { "type": "string", "pattern": "^[A-Z]{3}$" },
+    "price_basis": {
+      "oneOf": [{ "$ref": "#/$defs/price_basis" }, { "type": "null" }]
+    },
+    "basic_shares_outstanding": {
+      "oneOf": [{ "$ref": "#/$defs/capital_measure" }, { "type": "null" }]
+    },
+    "dilution_instruments": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/dilution_instrument" }
+    },
+    "fully_diluted_shares": {
+      "oneOf": [{ "$ref": "#/$defs/capital_measure" }, { "type": "null" }]
+    },
+    "cash": {
+      "oneOf": [{ "$ref": "#/$defs/capital_measure" }, { "type": "null" }]
+    },
+    "debt": {
+      "oneOf": [{ "$ref": "#/$defs/capital_measure" }, { "type": "null" }]
+    },
+    "market_capitalization": {
+      "oneOf": [{ "$ref": "#/$defs/derived_valuation" }, { "type": "null" }]
+    },
+    "enterprise_value": {
+      "oneOf": [{ "$ref": "#/$defs/derived_valuation" }, { "type": "null" }]
+    },
+    "source_references": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/source_reference" }
+    },
+    "evidence_ids": { "$ref": "#/$defs/non_empty_string_array" },
+    "calculation_ids": { "$ref": "#/$defs/non_empty_string_array" },
+    "corporate_action_reconciliation": {
+      "$ref": "#/$defs/corporate_action_reconciliation"
+    },
+    "evidence_materiality": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/market_materiality" }
+    },
+    "price_information_state": {
+      "enum": ["aligned", "pre_material_evidence", "indeterminate"]
+    },
+    "market_relative_analysis_permitted": { "type": "boolean" },
+    "price_basis_policy_version": { "$ref": "#/$defs/non_empty_string" },
+    "freshness_policy_version": { "$ref": "#/$defs/non_empty_string" },
+    "materiality_policy_version": { "$ref": "#/$defs/non_empty_string" },
+    "created_at": { "$ref": "#/$defs/timestamp" }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "snapshot_status": { "const": "valid" } } },
+      "then": {
+        "properties": {
+          "invalid_reason_codes": { "maxItems": 0 },
+          "price_basis": { "$ref": "#/$defs/price_basis" },
+          "basic_shares_outstanding": { "$ref": "#/$defs/capital_measure" },
+          "fully_diluted_shares": { "$ref": "#/$defs/capital_measure" },
+          "cash": { "$ref": "#/$defs/capital_measure" },
+          "debt": { "$ref": "#/$defs/capital_measure" },
+          "market_capitalization": { "$ref": "#/$defs/derived_valuation" },
+          "enterprise_value": { "$ref": "#/$defs/derived_valuation" }
+        }
+      },
+      "else": {
+        "properties": {
+          "invalid_reason_codes": { "minItems": 1 },
+          "market_relative_analysis_permitted": { "const": false }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "price_information_state": { "const": "aligned" } }
+      },
+      "else": {
+        "properties": {
+          "market_relative_analysis_permitted": { "const": false }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "non_empty_string": { "type": "string", "minLength": 1 },
+    "non_empty_string_array": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/non_empty_string" },
+      "uniqueItems": true
+    },
+    "uuid": {
+      "type": "string",
+      "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
+    },
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "decimal": {
+      "type": "string",
+      "pattern": "^-?(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?$"
+    },
+    "date": { "type": "string", "format": "date" },
+    "timestamp": { "type": "string", "format": "date-time" },
+    "price_basis": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "input_id",
+        "price_type",
+        "session_type",
+        "session_date",
+        "primary_listing_exchange",
+        "share_price",
+        "official_close_timestamp",
+        "market_calendar_version",
+        "market_status",
+        "corporate_action_adjustment_status",
+        "provider_source_reference_id"
+      ],
+      "properties": {
+        "input_id": { "$ref": "#/$defs/non_empty_string" },
+        "price_type": { "const": "official_unadjusted_close" },
+        "session_type": { "const": "regular_us_trading_session" },
+        "session_date": { "$ref": "#/$defs/date" },
+        "primary_listing_exchange": { "$ref": "#/$defs/non_empty_string" },
+        "share_price": { "$ref": "#/$defs/decimal" },
+        "official_close_timestamp": { "$ref": "#/$defs/timestamp" },
+        "market_calendar_version": { "$ref": "#/$defs/non_empty_string" },
+        "market_status": { "enum": ["closed", "halted"] },
+        "corporate_action_adjustment_status": {
+          "enum": ["unadjusted", "indeterminate"]
+        },
+        "provider_source_reference_id": { "$ref": "#/$defs/non_empty_string" }
+      }
+    },
+    "capital_measure": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "input_id",
+        "value",
+        "unit",
+        "effective_at",
+        "calculation_method",
+        "formula",
+        "calculation_id",
+        "input_ids",
+        "supporting_evidence_ids",
+        "freshness_state",
+        "freshness_reason_code",
+        "freshness_policy_version"
+      ],
+      "properties": {
+        "input_id": { "$ref": "#/$defs/non_empty_string" },
+        "value": { "$ref": "#/$defs/decimal" },
+        "unit": { "$ref": "#/$defs/non_empty_string" },
+        "effective_at": { "$ref": "#/$defs/timestamp" },
+        "calculation_method": { "enum": ["reported", "calculated"] },
+        "formula": {
+          "oneOf": [{ "$ref": "#/$defs/non_empty_string" }, { "type": "null" }]
+        },
+        "calculation_id": {
+          "oneOf": [{ "$ref": "#/$defs/non_empty_string" }, { "type": "null" }]
+        },
+        "input_ids": { "$ref": "#/$defs/non_empty_string_array" },
+        "supporting_evidence_ids": { "$ref": "#/$defs/non_empty_string_array" },
+        "freshness_state": { "enum": ["current", "stale", "indeterminate"] },
+        "freshness_reason_code": { "$ref": "#/$defs/non_empty_string" },
+        "freshness_policy_version": { "$ref": "#/$defs/non_empty_string" }
+      }
+    },
+    "dilution_instrument": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "instrument_id",
+        "instrument_type",
+        "diluted_share_increment",
+        "effective_at",
+        "supporting_evidence_ids"
+      ],
+      "properties": {
+        "instrument_id": { "$ref": "#/$defs/non_empty_string" },
+        "instrument_type": {
+          "enum": ["options", "warrants", "convertibles", "rsus", "preferred", "other"]
+        },
+        "diluted_share_increment": { "$ref": "#/$defs/decimal" },
+        "effective_at": { "$ref": "#/$defs/timestamp" },
+        "supporting_evidence_ids": { "$ref": "#/$defs/non_empty_string_array" }
+      }
+    },
+    "derived_valuation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "value",
+        "unit",
+        "formula",
+        "formula_version",
+        "input_ids",
+        "calculation_id",
+        "supporting_evidence_ids"
+      ],
+      "properties": {
+        "value": { "$ref": "#/$defs/decimal" },
+        "unit": { "$ref": "#/$defs/non_empty_string" },
+        "formula": { "$ref": "#/$defs/non_empty_string" },
+        "formula_version": { "$ref": "#/$defs/non_empty_string" },
+        "input_ids": { "$ref": "#/$defs/non_empty_string_array" },
+        "calculation_id": { "$ref": "#/$defs/non_empty_string" },
+        "supporting_evidence_ids": { "$ref": "#/$defs/non_empty_string_array" }
+      }
+    },
+    "source_reference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source_reference_id",
+        "source_type",
+        "provider",
+        "locator",
+        "published_at",
+        "retrieved_at",
+        "effective_at"
+      ],
+      "properties": {
+        "source_reference_id": { "$ref": "#/$defs/non_empty_string" },
+        "source_type": { "enum": ["licensed_market_data", "primary_filing"] },
+        "provider": { "$ref": "#/$defs/non_empty_string" },
+        "locator": { "$ref": "#/$defs/non_empty_string" },
+        "published_at": {
+          "oneOf": [{ "$ref": "#/$defs/timestamp" }, { "type": "null" }]
+        },
+        "retrieved_at": { "$ref": "#/$defs/timestamp" },
+        "effective_at": {
+          "oneOf": [{ "$ref": "#/$defs/timestamp" }, { "type": "null" }]
+        }
+      }
+    },
+    "corporate_action_reconciliation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "event_id",
+        "event_type",
+        "effective_at",
+        "price_adjustment_status",
+        "share_count_adjustment_status",
+        "reconciliation_result"
+      ],
+      "properties": {
+        "event_id": {
+          "oneOf": [{ "$ref": "#/$defs/non_empty_string" }, { "type": "null" }]
+        },
+        "event_type": {
+          "enum": [
+            "none",
+            "stock_split",
+            "reverse_split",
+            "merger",
+            "conversion",
+            "ticker_change",
+            "exchange_change",
+            "spin_off",
+            "recapitalization",
+            "share_class_conversion",
+            "other"
+          ]
+        },
+        "effective_at": {
+          "oneOf": [{ "$ref": "#/$defs/timestamp" }, { "type": "null" }]
+        },
+        "price_adjustment_status": {
+          "enum": ["unadjusted", "adjusted", "not_applicable", "indeterminate"]
+        },
+        "share_count_adjustment_status": {
+          "enum": ["adjusted", "unadjusted", "not_applicable", "indeterminate"]
+        },
+        "reconciliation_result": {
+          "enum": ["reconciled", "not_required", "unresolved", "mismatch"]
+        }
+      }
+    },
+    "market_materiality": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "evidence_id",
+        "publication_at",
+        "timing_state",
+        "market_materiality",
+        "materiality_reason_code",
+        "materiality_policy_version",
+        "affected_domains"
+      ],
+      "properties": {
+        "evidence_id": { "$ref": "#/$defs/non_empty_string" },
+        "publication_at": {
+          "oneOf": [{ "$ref": "#/$defs/timestamp" }, { "type": "null" }]
+        },
+        "timing_state": {
+          "enum": ["before_or_at_close", "after_close_before_or_at_cutoff", "indeterminate"]
+        },
+        "market_materiality": { "enum": ["material", "non_material", "indeterminate"] },
+        "materiality_reason_code": { "$ref": "#/$defs/non_empty_string" },
+        "materiality_policy_version": { "$ref": "#/$defs/non_empty_string" },
+        "affected_domains": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "catalyst",
+              "clinical",
+              "regulatory",
+              "financing",
+              "dilution",
+              "valuation",
+              "management",
+              "commercial"
+            ]
+          }
+        }
+      }
+    }
+  }
+}

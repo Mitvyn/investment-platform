@@ -1,0 +1,309 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://investment-research-os.local/contracts/committee-memo.v1.schema.json",
+  "title": "Committee Memo v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "contract_version",
+    "memo_id",
+    "synthesis_execution_id",
+    "committee_id",
+    "research_run_id",
+    "evidence_bundle_id",
+    "evidence_bundle_hash",
+    "workflow_config_version",
+    "proposition_id",
+    "proposition_version",
+    "committee_status",
+    "requested_disposition",
+    "executive_summary_statement_ids",
+    "statements",
+    "common_ground_statement_ids",
+    "disagreement_records",
+    "disputed_assumption_statement_ids",
+    "evidence_gap_statement_ids",
+    "invalidation_statement_ids",
+    "required_next_evidence_statement_ids",
+    "review_trigger",
+    "state_disclosure",
+    "execution_metadata",
+    "created_at"
+  ],
+  "properties": {
+    "contract_version": {"const": "committee_memo.v1"},
+    "memo_id": {"$ref": "#/$defs/uuid"},
+    "synthesis_execution_id": {"$ref": "#/$defs/uuid"},
+    "committee_id": {"$ref": "#/$defs/uuid"},
+    "research_run_id": {"$ref": "#/$defs/uuid"},
+    "evidence_bundle_id": {"$ref": "#/$defs/uuid"},
+    "evidence_bundle_hash": {"$ref": "#/$defs/sha256"},
+    "workflow_config_version": {"$ref": "#/$defs/non_empty_string"},
+    "proposition_id": {"$ref": "#/$defs/non_empty_string"},
+    "proposition_version": {"$ref": "#/$defs/non_empty_string"},
+    "committee_status": {
+      "enum": [
+        "complete",
+        "complete_with_abstentions",
+        "incomplete_required_grader_failed",
+        "insufficient_accepted_opinions"
+      ]
+    },
+    "requested_disposition": {
+      "enum": ["reject", "monitor", "deep_research", "decision_ready"]
+    },
+    "executive_summary_statement_ids": {"$ref": "#/$defs/statement_ids"},
+    "statements": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "#/$defs/statement"}
+    },
+    "common_ground_statement_ids": {"$ref": "#/$defs/statement_ids"},
+    "disagreement_records": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/disagreement"}
+    },
+    "disputed_assumption_statement_ids": {"$ref": "#/$defs/statement_ids"},
+    "evidence_gap_statement_ids": {"$ref": "#/$defs/statement_ids"},
+    "invalidation_statement_ids": {"$ref": "#/$defs/statement_ids"},
+    "required_next_evidence_statement_ids": {"$ref": "#/$defs/statement_ids"},
+    "review_trigger": {"$ref": "#/$defs/review_trigger"},
+    "state_disclosure": {
+      "type": "array",
+      "minItems": 5,
+      "maxItems": 5,
+      "items": {"$ref": "#/$defs/state_disclosure"}
+    },
+    "execution_metadata": {"$ref": "#/$defs/execution_metadata"},
+    "created_at": {"type": "string", "format": "date-time"}
+  },
+  "$defs": {
+    "uuid": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "non_empty_string": {"type": "string", "minLength": 1},
+    "reference_ids": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/non_empty_string"}
+    },
+    "statement_ids": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/non_empty_string"}
+    },
+    "statement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "statement_id",
+        "text",
+        "provenance_type",
+        "evidence_ids",
+        "opinion_ids",
+        "calculation_ids"
+      ],
+      "properties": {
+        "statement_id": {"$ref": "#/$defs/non_empty_string"},
+        "text": {"$ref": "#/$defs/non_empty_string"},
+        "provenance_type": {
+          "enum": [
+            "fact",
+            "grader_interpretation",
+            "synthesis_interpretation",
+            "assumption",
+            "gap"
+          ]
+        },
+        "evidence_ids": {"$ref": "#/$defs/reference_ids"},
+        "opinion_ids": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/uuid"}
+        },
+        "calculation_ids": {"$ref": "#/$defs/reference_ids"}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"provenance_type": {"const": "fact"}}},
+          "then": {
+            "properties": {
+              "evidence_ids": {"minItems": 1},
+              "opinion_ids": {"maxItems": 0}
+            }
+          }
+        },
+        {
+          "if": {"properties": {"provenance_type": {"const": "grader_interpretation"}}},
+          "then": {"properties": {"opinion_ids": {"minItems": 1, "maxItems": 1}}}
+        },
+        {
+          "if": {"properties": {"provenance_type": {"const": "synthesis_interpretation"}}},
+          "then": {"properties": {"opinion_ids": {"minItems": 2}}}
+        }
+      ]
+    },
+    "disagreement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "disagreement_id",
+        "disputed_question_statement_id",
+        "position_statement_ids",
+        "contributing_opinion_ids",
+        "affects_disposition",
+        "resolving_evidence_statement_ids"
+      ],
+      "properties": {
+        "disagreement_id": {"$ref": "#/$defs/non_empty_string"},
+        "disputed_question_statement_id": {"$ref": "#/$defs/non_empty_string"},
+        "position_statement_ids": {
+          "type": "array",
+          "minItems": 2,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/non_empty_string"}
+        },
+        "contributing_opinion_ids": {
+          "type": "array",
+          "minItems": 2,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/uuid"}
+        },
+        "affects_disposition": {"type": "boolean"},
+        "resolving_evidence_statement_ids": {"$ref": "#/$defs/statement_ids"}
+      }
+    },
+    "review_trigger": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["trigger_type", "review_at", "statement_id"],
+      "properties": {
+        "trigger_type": {"enum": ["date", "evidence_event"]},
+        "review_at": {"type": ["string", "null"], "format": "date-time"},
+        "statement_id": {"$ref": "#/$defs/non_empty_string"}
+      }
+    },
+    "state_disclosure": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["grader_id", "execution_state", "opinion_id", "stance"],
+      "properties": {
+        "grader_id": {
+          "enum": ["moonshot", "catalyst", "biotech", "risk_dilution", "valuation"]
+        },
+        "execution_state": {
+          "enum": ["accepted", "abstained", "failed", "not_eligible", "not_executed"]
+        },
+        "opinion_id": {"oneOf": [{"$ref": "#/$defs/uuid"}, {"type": "null"}]},
+        "stance": {
+          "type": ["string", "null"],
+          "enum": ["supports", "mixed", "challenges", null]
+        }
+      }
+    },
+    "execution_metadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "prompt_version",
+        "model_config_id",
+        "provider",
+        "model",
+        "attempt_count",
+        "provider_request_ids",
+        "attempts",
+        "input_tokens",
+        "cached_input_tokens",
+        "cache_write_tokens",
+        "uncached_input_tokens",
+        "output_tokens",
+        "reasoning_tokens",
+        "total_tokens",
+        "usage_complete",
+        "estimated_cost_usd",
+        "price_card_version",
+        "retry_policy_version",
+        "started_at",
+        "completed_at"
+      ],
+      "properties": {
+        "prompt_version": {"$ref": "#/$defs/non_empty_string"},
+        "model_config_id": {"$ref": "#/$defs/non_empty_string"},
+        "provider": {"$ref": "#/$defs/non_empty_string"},
+        "model": {"$ref": "#/$defs/non_empty_string"},
+        "attempt_count": {"type": "integer", "minimum": 1, "maximum": 2},
+        "provider_request_ids": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 2,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/non_empty_string"}
+        },
+        "attempts": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 2,
+          "items": {"$ref": "#/$defs/synthesis_attempt"}
+        },
+        "input_tokens": {"type": "integer", "minimum": 0},
+        "cached_input_tokens": {"type": "integer", "minimum": 0},
+        "cache_write_tokens": {"type": "integer", "minimum": 0},
+        "uncached_input_tokens": {"type": "integer", "minimum": 0},
+        "output_tokens": {"type": "integer", "minimum": 0},
+        "reasoning_tokens": {"type": "integer", "minimum": 0},
+        "total_tokens": {"type": "integer", "minimum": 0},
+        "usage_complete": {"type": "boolean"},
+        "estimated_cost_usd": {
+          "type": "string",
+          "pattern": "^(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?$"
+        },
+        "price_card_version": {"$ref": "#/$defs/non_empty_string"},
+        "retry_policy_version": {"$ref": "#/$defs/non_empty_string"},
+        "started_at": {"type": "string", "format": "date-time"},
+        "completed_at": {"type": "string", "format": "date-time"}
+      }
+    },
+    "synthesis_attempt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "attempt_id", "attempt_number", "provider_request_id", "result",
+        "validation_status", "validation_errors", "retry_reason", "started_at",
+        "completed_at", "duration_ms", "input_tokens", "cached_input_tokens",
+        "cache_write_tokens", "uncached_input_tokens", "output_tokens",
+        "reasoning_tokens", "total_tokens", "usage_complete", "estimated_cost_usd"
+      ],
+      "properties": {
+        "attempt_id": {"$ref": "#/$defs/uuid"},
+        "attempt_number": {"type": "integer", "minimum": 1, "maximum": 2},
+        "provider_request_id": {"$ref": "#/$defs/non_empty_string"},
+        "result": {"enum": ["validation_error", "accepted"]},
+        "validation_status": {"enum": ["failed", "passed"]},
+        "validation_errors": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/non_empty_string"}
+        },
+        "retry_reason": {
+          "anyOf": [{"$ref": "#/$defs/non_empty_string"}, {"type": "null"}]
+        },
+        "started_at": {"type": "string", "format": "date-time"},
+        "completed_at": {"type": "string", "format": "date-time"},
+        "duration_ms": {"type": "integer", "minimum": 0},
+        "input_tokens": {"type": "integer", "minimum": 0},
+        "cached_input_tokens": {"type": "integer", "minimum": 0},
+        "cache_write_tokens": {"type": "integer", "minimum": 0},
+        "uncached_input_tokens": {"type": "integer", "minimum": 0},
+        "output_tokens": {"type": "integer", "minimum": 0},
+        "reasoning_tokens": {"type": "integer", "minimum": 0},
+        "total_tokens": {"type": "integer", "minimum": 0},
+        "usage_complete": {"type": "boolean"},
+        "estimated_cost_usd": {
+          "type": "string",
+          "pattern": "^(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?$"
+        }
+      }
+    }
+  }
+}

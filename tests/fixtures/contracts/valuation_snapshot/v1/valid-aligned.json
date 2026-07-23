@@ -1,0 +1,160 @@
+{
+  "contract_version": "valuation_snapshot.v1",
+  "id": "9513f998-4993-56cc-94a2-f79adb8bd7e1",
+  "operator_id": "8ed47ebc-d5cf-40ad-80ce-d4d803f7c735",
+  "research_run_id": "78d9ab11-17a1-567c-a192-fb91ec9de3be",
+  "evidence_bundle_id": "9581bcf2-27f8-5c12-a3fc-39b43fd5e098",
+  "evidence_bundle_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "security_id": "f594edb2-7fff-4e40-9c26-2c06bcbecb91",
+  "as_of_cutoff": "2026-05-06T23:59:59+00:00",
+  "snapshot_status": "valid",
+  "invalid_reason_codes": [],
+  "currency": "USD",
+  "price_basis": {
+    "input_id": "official_close",
+    "price_type": "official_unadjusted_close",
+    "session_type": "regular_us_trading_session",
+    "session_date": "2026-05-06",
+    "primary_listing_exchange": "NASDAQ",
+    "share_price": "6.20",
+    "official_close_timestamp": "2026-05-06T20:00:00+00:00",
+    "market_calendar_version": "us-market-calendar-v1",
+    "market_status": "closed",
+    "corporate_action_adjustment_status": "unadjusted",
+    "provider_source_reference_id": "market-close-source"
+  },
+  "basic_shares_outstanding": {
+    "input_id": "basic_shares_outstanding",
+    "value": "357000000",
+    "unit": "shares",
+    "effective_at": "2026-03-31T23:59:59+00:00",
+    "calculation_method": "reported",
+    "formula": null,
+    "calculation_id": null,
+    "input_ids": [],
+    "supporting_evidence_ids": ["55555555-5555-4555-8555-555555555555"],
+    "freshness_state": "current",
+    "freshness_reason_code": "latest_required_filing_at_cutoff",
+    "freshness_policy_version": "biotech-valuation-freshness-v1"
+  },
+  "dilution_instruments": [
+    {
+      "instrument_id": "equity-awards",
+      "instrument_type": "options",
+      "diluted_share_increment": "26000000",
+      "effective_at": "2026-03-31T23:59:59+00:00",
+      "supporting_evidence_ids": ["55555555-5555-4555-8555-555555555555"]
+    }
+  ],
+  "fully_diluted_shares": {
+    "input_id": "fully_diluted_shares",
+    "value": "383000000",
+    "unit": "shares",
+    "effective_at": "2026-03-31T23:59:59+00:00",
+    "calculation_method": "calculated",
+    "formula": "basic shares outstanding + dilution instruments",
+    "calculation_id": "fully-diluted-shares-v1-result",
+    "input_ids": ["basic_shares_outstanding", "equity-awards"],
+    "supporting_evidence_ids": ["55555555-5555-4555-8555-555555555555"],
+    "freshness_state": "current",
+    "freshness_reason_code": "latest_required_filing_at_cutoff",
+    "freshness_policy_version": "biotech-valuation-freshness-v1"
+  },
+  "cash": {
+    "input_id": "included_cash",
+    "value": "665200000",
+    "unit": "USD",
+    "effective_at": "2026-03-31T23:59:59+00:00",
+    "calculation_method": "reported",
+    "formula": null,
+    "calculation_id": null,
+    "input_ids": [],
+    "supporting_evidence_ids": ["55555555-5555-4555-8555-555555555555"],
+    "freshness_state": "current",
+    "freshness_reason_code": "latest_required_filing_at_cutoff",
+    "freshness_policy_version": "biotech-valuation-freshness-v1"
+  },
+  "debt": {
+    "input_id": "included_debt",
+    "value": "5100000",
+    "unit": "USD",
+    "effective_at": "2026-03-31T23:59:59+00:00",
+    "calculation_method": "reported",
+    "formula": null,
+    "calculation_id": null,
+    "input_ids": [],
+    "supporting_evidence_ids": ["55555555-5555-4555-8555-555555555555"],
+    "freshness_state": "current",
+    "freshness_reason_code": "latest_required_filing_at_cutoff",
+    "freshness_policy_version": "biotech-valuation-freshness-v1"
+  },
+  "market_capitalization": {
+    "value": "2374600000",
+    "unit": "USD",
+    "formula": "share price * fully diluted shares",
+    "formula_version": "market-capitalization-v1",
+    "input_ids": ["official_close", "fully_diluted_shares"],
+    "calculation_id": "market-capitalization-result",
+    "supporting_evidence_ids": ["55555555-5555-4555-8555-555555555555"]
+  },
+  "enterprise_value": {
+    "value": "1714500000",
+    "unit": "USD",
+    "formula": "market capitalization + debt - cash",
+    "formula_version": "enterprise-value-v1",
+    "input_ids": ["market-capitalization-result", "included_debt", "included_cash"],
+    "calculation_id": "enterprise-value-result",
+    "supporting_evidence_ids": ["55555555-5555-4555-8555-555555555555"]
+  },
+  "source_references": [
+    {
+      "source_reference_id": "market-close-source",
+      "source_type": "licensed_market_data",
+      "provider": "licensed-market-provider",
+      "locator": "RXRX official close 2026-05-06",
+      "published_at": "2026-05-06T20:00:00+00:00",
+      "retrieved_at": "2026-05-07T01:00:00+00:00",
+      "effective_at": "2026-05-06T20:00:00+00:00"
+    },
+    {
+      "source_reference_id": "primary-filing-source",
+      "source_type": "primary_filing",
+      "provider": "SEC",
+      "locator": "Form 10-Q, cash and share capital",
+      "published_at": "2026-03-31T20:00:00+00:00",
+      "retrieved_at": "2026-05-07T00:20:00+00:00",
+      "effective_at": "2026-03-31T23:59:59+00:00"
+    }
+  ],
+  "evidence_ids": ["55555555-5555-4555-8555-555555555555"],
+  "calculation_ids": [
+    "fully-diluted-shares-v1-result",
+    "market-capitalization-result",
+    "enterprise-value-result"
+  ],
+  "corporate_action_reconciliation": {
+    "event_id": null,
+    "event_type": "none",
+    "effective_at": null,
+    "price_adjustment_status": "unadjusted",
+    "share_count_adjustment_status": "not_applicable",
+    "reconciliation_result": "not_required"
+  },
+  "evidence_materiality": [
+    {
+      "evidence_id": "55555555-5555-4555-8555-555555555555",
+      "publication_at": "2026-03-31T20:00:00+00:00",
+      "timing_state": "before_or_at_close",
+      "market_materiality": "material",
+      "materiality_reason_code": "financing_evidence_published_before_close",
+      "materiality_policy_version": "biotech-market-materiality-v1",
+      "affected_domains": ["financing", "dilution", "valuation"]
+    }
+  ],
+  "price_information_state": "aligned",
+  "market_relative_analysis_permitted": true,
+  "price_basis_policy_version": "official-unadjusted-close-v1",
+  "freshness_policy_version": "biotech-valuation-freshness-v1",
+  "materiality_policy_version": "biotech-market-materiality-v1",
+  "created_at": "2026-05-07T01:10:00+00:00"
+}

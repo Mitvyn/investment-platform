@@ -1,0 +1,185 @@
+{
+  "contract_version": "committee_memo.v1",
+  "memo_id": "30000000-0000-4000-8000-000000000001",
+  "synthesis_execution_id": "31000000-0000-4000-8000-000000000001",
+  "committee_id": "32000000-0000-4000-8000-000000000001",
+  "research_run_id": "33000000-0000-4000-8000-000000000001",
+  "evidence_bundle_id": "4478d37e-95c4-545f-826c-d77257dfd4aa",
+  "evidence_bundle_hash": "2d13851bd2d0b99ad5d5665506d36d181c68bd01501001f2da67fbcd6912cafe",
+  "workflow_config_version": "biotech_moonshot_catalyst_workflow.v1",
+  "proposition_id": "biotech_moonshot_catalyst_case",
+  "proposition_version": "biotech_moonshot_catalyst_case.v1",
+  "committee_status": "complete",
+  "requested_disposition": "deep_research",
+  "executive_summary_statement_ids": ["statement-common-ground"],
+  "statements": [
+    {
+      "statement_id": "statement-fact",
+      "text": "Frozen evidence identifies an active clinical programme.",
+      "provenance_type": "fact",
+      "evidence_ids": ["8d80b1a6-0742-5b0c-bf48-4e0d32cb8200"],
+      "opinion_ids": [],
+      "calculation_ids": []
+    },
+    {
+      "statement_id": "statement-moonshot",
+      "text": "Moonshot analysis finds meaningful asymmetry with clinical uncertainty.",
+      "provenance_type": "grader_interpretation",
+      "evidence_ids": [],
+      "opinion_ids": ["20000000-0000-4000-8000-000000000001"],
+      "calculation_ids": []
+    },
+    {
+      "statement_id": "statement-common-ground",
+      "text": "Moonshot and Catalyst opinions support continued research while uncertainty remains material.",
+      "provenance_type": "synthesis_interpretation",
+      "evidence_ids": [],
+      "opinion_ids": ["20000000-0000-4000-8000-000000000001", "20000000-0000-4000-8000-000000000002"],
+      "calculation_ids": []
+    },
+    {
+      "statement_id": "statement-assumption",
+      "text": "Risk analysis assumes quarterly burn remains near its reported level.",
+      "provenance_type": "assumption",
+      "evidence_ids": [],
+      "opinion_ids": ["20000000-0000-4000-8000-000000000004"],
+      "calculation_ids": ["calc-enterprise-value-v1"]
+    },
+    {
+      "statement_id": "statement-gap",
+      "text": "Mature clinical efficacy evidence remains unavailable.",
+      "provenance_type": "gap",
+      "evidence_ids": [],
+      "opinion_ids": ["20000000-0000-4000-8000-000000000003"],
+      "calculation_ids": []
+    },
+    {
+      "statement_id": "statement-invalidation",
+      "text": "A failed efficacy readout would invalidate core clinical and catalyst interpretations.",
+      "provenance_type": "synthesis_interpretation",
+      "evidence_ids": [],
+      "opinion_ids": ["20000000-0000-4000-8000-000000000002", "20000000-0000-4000-8000-000000000003"],
+      "calculation_ids": []
+    },
+    {
+      "statement_id": "statement-next-evidence",
+      "text": "Obtain controlled efficacy results and updated financing disclosures.",
+      "provenance_type": "gap",
+      "evidence_ids": [],
+      "opinion_ids": ["20000000-0000-4000-8000-000000000003", "20000000-0000-4000-8000-000000000004"],
+      "calculation_ids": []
+    },
+    {
+      "statement_id": "statement-review-trigger",
+      "text": "Review when controlled efficacy results become public.",
+      "provenance_type": "gap",
+      "evidence_ids": [],
+      "opinion_ids": ["20000000-0000-4000-8000-000000000002"],
+      "calculation_ids": []
+    },
+    {
+      "statement_id": "statement-disputed-question",
+      "text": "Whether financing risk preserves or erodes per-share asymmetry remains disputed.",
+      "provenance_type": "synthesis_interpretation",
+      "evidence_ids": [],
+      "opinion_ids": ["20000000-0000-4000-8000-000000000001", "20000000-0000-4000-8000-000000000004"],
+      "calculation_ids": []
+    },
+    {
+      "statement_id": "statement-position-moonshot",
+      "text": "Moonshot opinion finds strategic upside sufficient for continued research.",
+      "provenance_type": "grader_interpretation",
+      "evidence_ids": [],
+      "opinion_ids": ["20000000-0000-4000-8000-000000000001"],
+      "calculation_ids": []
+    },
+    {
+      "statement_id": "statement-position-risk",
+      "text": "Risk opinion finds possible financing before catalyst resolution.",
+      "provenance_type": "grader_interpretation",
+      "evidence_ids": [],
+      "opinion_ids": ["20000000-0000-4000-8000-000000000004"],
+      "calculation_ids": []
+    },
+    {
+      "statement_id": "statement-resolving-evidence",
+      "text": "Updated cash, burn, and financing disclosures could narrow this disagreement.",
+      "provenance_type": "gap",
+      "evidence_ids": [],
+      "opinion_ids": ["20000000-0000-4000-8000-000000000001", "20000000-0000-4000-8000-000000000004"],
+      "calculation_ids": []
+    }
+  ],
+  "common_ground_statement_ids": ["statement-common-ground"],
+  "disagreement_records": [
+    {
+      "disagreement_id": "disagreement-financing-asymmetry",
+      "disputed_question_statement_id": "statement-disputed-question",
+      "position_statement_ids": ["statement-position-moonshot", "statement-position-risk"],
+      "contributing_opinion_ids": ["20000000-0000-4000-8000-000000000001", "20000000-0000-4000-8000-000000000004"],
+      "affects_disposition": true,
+      "resolving_evidence_statement_ids": ["statement-resolving-evidence"]
+    }
+  ],
+  "disputed_assumption_statement_ids": ["statement-assumption"],
+  "evidence_gap_statement_ids": ["statement-gap"],
+  "invalidation_statement_ids": ["statement-invalidation"],
+  "required_next_evidence_statement_ids": ["statement-next-evidence"],
+  "review_trigger": {
+    "trigger_type": "evidence_event",
+    "review_at": null,
+    "statement_id": "statement-review-trigger"
+  },
+  "state_disclosure": [
+    {"grader_id": "moonshot", "execution_state": "accepted", "opinion_id": "20000000-0000-4000-8000-000000000001", "stance": "supports"},
+    {"grader_id": "catalyst", "execution_state": "accepted", "opinion_id": "20000000-0000-4000-8000-000000000002", "stance": "mixed"},
+    {"grader_id": "biotech", "execution_state": "accepted", "opinion_id": "20000000-0000-4000-8000-000000000003", "stance": "challenges"},
+    {"grader_id": "risk_dilution", "execution_state": "accepted", "opinion_id": "20000000-0000-4000-8000-000000000004", "stance": "challenges"},
+    {"grader_id": "valuation", "execution_state": "accepted", "opinion_id": "20000000-0000-4000-8000-000000000005", "stance": "mixed"}
+  ],
+  "execution_metadata": {
+    "prompt_version": "committee_reconcile_v1",
+    "model_config_id": "biotech_committee_synthesizer_gpt_5_6_sol_medium_v1",
+    "provider": "openai",
+    "model": "gpt-5.6-sol",
+    "attempt_count": 1,
+    "provider_request_ids": ["offline-request-001"],
+    "attempts": [
+      {
+        "attempt_id": "34000000-0000-4000-8000-000000000001",
+        "attempt_number": 1,
+        "provider_request_id": "offline-request-001",
+        "result": "accepted",
+        "validation_status": "passed",
+        "validation_errors": [],
+        "retry_reason": null,
+        "started_at": "2026-05-06T22:03:00Z",
+        "completed_at": "2026-05-06T22:03:04Z",
+        "duration_ms": 4000,
+        "input_tokens": 3200,
+        "cached_input_tokens": 500,
+        "cache_write_tokens": 700,
+        "uncached_input_tokens": 2000,
+        "output_tokens": 900,
+        "reasoning_tokens": 300,
+        "total_tokens": 4100,
+        "usage_complete": true,
+        "estimated_cost_usd": "0.000000"
+      }
+    ],
+    "input_tokens": 3200,
+    "cached_input_tokens": 500,
+    "cache_write_tokens": 700,
+    "uncached_input_tokens": 2000,
+    "output_tokens": 900,
+    "reasoning_tokens": 300,
+    "total_tokens": 4100,
+    "usage_complete": true,
+    "estimated_cost_usd": "0.000000",
+    "price_card_version": "gpt_5_6_sol_usd.v1",
+    "retry_policy_version": "grader-retry-policy-v1",
+    "started_at": "2026-05-06T22:03:00Z",
+    "completed_at": "2026-05-06T22:03:04Z"
+  },
+  "created_at": "2026-05-06T22:03:05Z"
+}

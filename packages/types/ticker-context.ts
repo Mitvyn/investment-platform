@@ -31,7 +31,7 @@ export type CatalystContext = {
 };
 
 export type MarketContext = {
-  provider: "twelve_data";
+  provider: "twelve_data" | "yahoo_finance_via_yfinance";
   exchange: string;
   currency: string;
   marketTime: string;
@@ -43,6 +43,38 @@ export type MarketContext = {
   isMarketOpen: boolean;
   sourceUrl: string;
   retrievedAt: string;
+};
+
+export type MarketBarContext = {
+  barId: string;
+  sessionDate: string;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number | null;
+  dividends: number;
+  stockSplits: number;
+  sessionStatus: "completed";
+  barSha256: string;
+};
+
+export type MarketSeriesContext = {
+  securityId: string;
+  seriesId: string;
+  ticker: string;
+  provider: "yahoo_finance_via_yfinance";
+  providerConfigVersion: string;
+  exchange: string;
+  currency: string;
+  interval: "1d";
+  adjustmentStatus: "unadjusted";
+  sessionStart: string;
+  sessionEnd: string;
+  sourceUrl: string;
+  retrievedAt: string;
+  responseSha256: string;
+  bars: MarketBarContext[];
 };
 
 export type RiskContext = {
@@ -60,6 +92,7 @@ export type RiskContext = {
 };
 
 export type WatchlistItem = {
+  securityId: string | null;
   ticker: string;
   companyName: string;
   disposition: "monitor" | "deep_research" | "decision_ready";
@@ -67,9 +100,18 @@ export type WatchlistItem = {
   updatedAt: string;
 };
 
+export type SecurityDirectoryItem = {
+  securityId: string;
+  cik: string;
+  ticker: string;
+  companyName: string;
+  primaryListingExchange: string;
+};
+
 export type TickerContext = {
   financialMetrics: FinancialMetric[];
   catalyst: CatalystContext | null;
   risk: RiskContext | null;
   market: MarketContext | null;
+  marketSeries: MarketSeriesContext | null;
 };

@@ -1,0 +1,309 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://investment-research-os.local/evidence-bundle.v1.schema.json",
+  "title": "EvidenceBundleV1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "contract_version",
+    "id",
+    "operator_id",
+    "research_run_id",
+    "security_id",
+    "security_identity",
+    "as_of_cutoff",
+    "bundle_hash",
+    "manifest",
+    "verified_metrics",
+    "catalysts",
+    "risks",
+    "eligibility",
+    "evidence_policy_version",
+    "freshness_policy_version",
+    "grader_ready",
+    "gaps",
+    "created_at"
+  ],
+  "properties": {
+    "contract_version": { "const": "evidence_bundle.v1" },
+    "id": { "type": "string", "format": "uuid" },
+    "operator_id": { "type": "string", "format": "uuid" },
+    "research_run_id": { "type": "string", "format": "uuid" },
+    "security_id": { "type": "string", "format": "uuid" },
+    "security_identity": { "$ref": "#/$defs/security_identity" },
+    "as_of_cutoff": { "type": "string", "format": "date-time" },
+    "bundle_hash": { "$ref": "#/$defs/sha256" },
+    "manifest": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/manifest_entry" }
+    },
+    "verified_metrics": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/verified_metric" }
+    },
+    "catalysts": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/catalyst" }
+    },
+    "risks": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/risk" }
+    },
+    "eligibility": { "$ref": "#/$defs/eligibility" },
+    "evidence_policy_version": { "type": "string", "minLength": 1 },
+    "freshness_policy_version": { "type": "string", "minLength": 1 },
+    "grader_ready": { "type": "boolean" },
+    "gaps": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/gap" }
+    },
+    "created_at": { "type": "string", "format": "date-time" }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": { "grader_ready": { "const": true } },
+        "required": ["grader_ready"]
+      },
+      "then": {
+        "properties": {
+          "gaps": { "maxItems": 0 },
+          "eligibility": {
+            "properties": { "eligible": { "const": true } },
+            "required": ["eligible"]
+          },
+          "manifest": {
+            "allOf": [
+              { "contains": { "properties": { "source_class": { "const": "sec" } }, "required": ["source_class"] } },
+              { "contains": { "properties": { "source_class": { "const": "issuer" } }, "required": ["source_class"] } },
+              { "contains": { "properties": { "source_class": { "const": "clinical" } }, "required": ["source_class"] } },
+              { "contains": { "properties": { "source_class": { "const": "regulatory" } }, "required": ["source_class"] } },
+              { "contains": { "properties": { "source_class": { "const": "financing" } }, "required": ["source_class"] } }
+            ]
+          }
+        }
+      },
+      "else": {
+        "properties": { "gaps": { "minItems": 1 } }
+      }
+    }
+  ],
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "nullable_timestamp": {
+      "type": ["string", "null"],
+      "format": "date-time"
+    },
+    "nullable_date": {
+      "type": ["string", "null"],
+      "format": "date"
+    },
+    "security_identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "cik",
+        "issuer_name",
+        "symbol",
+        "primary_listing_exchange"
+      ],
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "cik": { "type": "string", "minLength": 1 },
+        "issuer_name": { "type": "string", "minLength": 1 },
+        "symbol": { "type": "string", "minLength": 1 },
+        "primary_listing_exchange": { "type": "string", "minLength": 1 }
+      }
+    },
+    "manifest_entry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "ordinal",
+        "item_id",
+        "item_version_id",
+        "item_kind",
+        "source_class",
+        "source_locator",
+        "locator",
+        "content_sha256",
+        "published_at",
+        "retrieved_at",
+        "effective_at",
+        "filing_period_start",
+        "filing_period_end",
+        "freshness_state",
+        "freshness_reason_code",
+        "freshness_policy_version"
+      ],
+      "properties": {
+        "ordinal": { "type": "integer", "minimum": 1 },
+        "item_id": { "type": "string", "format": "uuid" },
+        "item_version_id": { "type": "string", "format": "uuid" },
+        "item_kind": {
+          "enum": ["passage", "metric", "catalyst", "risk"]
+        },
+        "source_class": {
+          "enum": ["sec", "issuer", "clinical", "regulatory", "financing"]
+        },
+        "source_locator": {
+          "type": "string",
+          "format": "uri",
+          "pattern": "^https://"
+        },
+        "locator": { "type": "string", "minLength": 1 },
+        "content_sha256": { "$ref": "#/$defs/sha256" },
+        "published_at": { "$ref": "#/$defs/nullable_timestamp" },
+        "retrieved_at": { "type": "string", "format": "date-time" },
+        "effective_at": { "$ref": "#/$defs/nullable_timestamp" },
+        "filing_period_start": { "$ref": "#/$defs/nullable_date" },
+        "filing_period_end": { "$ref": "#/$defs/nullable_date" },
+        "freshness_state": { "enum": ["current", "stale", "indeterminate"] },
+        "freshness_reason_code": { "type": "string", "minLength": 1 },
+        "freshness_policy_version": { "type": "string", "minLength": 1 }
+      }
+    },
+    "evidence_ids": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": { "type": "string", "format": "uuid" }
+    },
+    "verified_metric": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "metric_key",
+        "value",
+        "unit",
+        "period_start",
+        "period_end",
+        "calculation_method",
+        "formula",
+        "supporting_evidence_ids"
+      ],
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "metric_key": { "type": "string", "minLength": 1 },
+        "value": {
+          "type": "string",
+          "pattern": "^-?(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?$"
+        },
+        "unit": { "type": "string", "minLength": 1 },
+        "period_start": { "$ref": "#/$defs/nullable_date" },
+        "period_end": { "$ref": "#/$defs/nullable_date" },
+        "calculation_method": { "enum": ["reported", "calculated"] },
+        "formula": { "type": ["string", "null"] },
+        "supporting_evidence_ids": { "$ref": "#/$defs/evidence_ids" }
+      }
+    },
+    "catalyst": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "program",
+        "event",
+        "basis",
+        "status",
+        "window_start",
+        "window_end",
+        "supporting_evidence_ids"
+      ],
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "program": { "type": "string", "minLength": 1 },
+        "event": { "type": "string", "minLength": 1 },
+        "basis": { "enum": ["clinical", "regulatory"] },
+        "status": { "type": "string", "minLength": 1 },
+        "window_start": { "type": "string", "format": "date" },
+        "window_end": { "type": "string", "format": "date" },
+        "supporting_evidence_ids": { "$ref": "#/$defs/evidence_ids" }
+      }
+    },
+    "risk": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "title",
+        "risk_type",
+        "severity",
+        "status",
+        "supporting_evidence_ids"
+      ],
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "title": { "type": "string", "minLength": 1 },
+        "risk_type": { "type": "string", "minLength": 1 },
+        "severity": { "type": "string", "minLength": 1 },
+        "status": { "type": "string", "minLength": 1 },
+        "supporting_evidence_ids": { "$ref": "#/$defs/evidence_ids" }
+      }
+    },
+    "eligibility_check": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "rule_id",
+        "rule_version",
+        "passed",
+        "evidence_reference",
+        "reason_code",
+        "explanation",
+        "evaluated_at"
+      ],
+      "properties": {
+        "rule_id": { "type": "string", "minLength": 1 },
+        "rule_version": { "type": "string", "minLength": 1 },
+        "passed": { "type": "boolean" },
+        "evidence_reference": { "type": ["string", "null"] },
+        "reason_code": { "type": "string", "minLength": 1 },
+        "explanation": { "type": "string", "minLength": 1 },
+        "evaluated_at": { "type": "string", "format": "date-time" }
+      }
+    },
+    "eligibility": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["policy_version", "eligible", "checks", "evaluated_at"],
+      "properties": {
+        "policy_version": { "type": "string", "minLength": 1 },
+        "eligible": { "type": "boolean" },
+        "checks": {
+          "type": "array",
+          "minItems": 9,
+          "maxItems": 9,
+          "items": { "$ref": "#/$defs/eligibility_check" }
+        },
+        "evaluated_at": { "type": "string", "format": "date-time" }
+      }
+    },
+    "gap": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "gap_id",
+        "requirement_id",
+        "source_class",
+        "reason_code",
+        "explanation"
+      ],
+      "properties": {
+        "gap_id": { "type": "string", "minLength": 1 },
+        "requirement_id": { "type": "string", "minLength": 1 },
+        "source_class": {
+          "enum": ["sec", "issuer", "clinical", "regulatory", "financing"]
+        },
+        "reason_code": { "type": "string", "minLength": 1 },
+        "explanation": { "type": "string", "minLength": 1 }
+      }
+    }
+  }
+}

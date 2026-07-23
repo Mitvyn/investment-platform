@@ -2,11 +2,13 @@ import type {
   CatalystContext,
   FinancialMetric,
   MarketContext,
+  MarketSeriesContext,
   RiskContext,
   TickerContext,
 } from "@iros/types";
 
 import { createClient } from "./supabase/server";
+import { marketSeriesUnavailableReason } from "./market-series-load-error";
 
 type FinancialRow = {
   metric_key: string;
@@ -67,6 +69,39 @@ type RiskRow = {
   published_at: string;
   source_url: string;
   retrieved_at: string;
+};
+
+type MarketSeriesRow = {
+  security_id: string;
+  series_id: string;
+  ticker: string;
+  provider: MarketSeriesContext["provider"];
+  provider_config_version: string;
+  exchange: string;
+  currency: string;
+  interval: MarketSeriesContext["interval"];
+  adjustment_status: MarketSeriesContext["adjustmentStatus"];
+  session_start: string;
+  session_end: string;
+  source_url: string;
+  retrieved_at: string;
+  response_sha256: string;
+  bar_id: string;
+  session_date: string;
+  open: number | string;
+  high: number | string;
+  low: number | string;
+  close: number | string;
+  volume: number | string | null;
+  dividends: number | string;
+  stock_splits: number | string;
+  session_status: "completed";
+  bar_sha256: string;
+};
+
+export type MarketSeriesLoadResult = {
+  series: MarketSeriesContext | null;
+  unavailableReason: string | null;
 };
 
 function mapFinancial(row: FinancialRow): FinancialMetric {
@@ -138,42 +173,41 @@ function mapRisk(row: RiskRow): RiskContext {
   };
 }
 
-export async function loadTickerContext(ticker: string): Promise<TickerContext> {
+export async function loadTickerContext(securityId: string): Promise<TickerContext> {
   const supabase = await createClient();
-  const normalizedTicker = ticker.toUpperCase();
   const [financialResult, catalystResult, riskResult, marketResult] =
     await Promise.all([
     supabase
-      .from("iros_v_financial_health")
+      .from("iros_v_security_financial_health")
       .select(
-        "metric_key,metric_label,metric_kind,value,unit,source_period,comparison_period,formula,locator,passage_text,passage_sha256,source_title,published_at,source_url,retrieved_at",
+        "security_id,metric_key,metric_label,metric_kind,value,unit,source_period,comparison_period,formula,locator,passage_text,passage_sha256,source_title,published_at,source_url,retrieved_at",
       )
-      .eq("ticker", normalizedTicker)
+      .eq("security_id", securityId)
       .order("published_at", { ascending: false }),
     supabase
-      .from("iros_v_catalyst_context")
+      .from("iros_v_security_catalyst_context")
       .select(
-        "title,status,window_start,window_end,locator,passage_text,passage_sha256,source_title,published_at,source_url,retrieved_at",
+        "security_id,title,status,window_start,window_end,locator,passage_text,passage_sha256,source_title,published_at,source_url,retrieved_at",
       )
-      .eq("ticker", normalizedTicker)
+      .eq("security_id", securityId)
       .order("window_start", { ascending: true })
       .limit(1)
       .maybeSingle(),
     supabase
-      .from("iros_v_risk_context")
+      .from("iros_v_security_risk_context")
       .select(
-        "title,risk_type,severity,status,locator,passage_text,passage_sha256,source_title,published_at,source_url,retrieved_at",
+        "security_id,title,risk_type,severity,status,locator,passage_text,passage_sha256,source_title,published_at,source_url,retrieved_at",
       )
-      .eq("ticker", normalizedTicker)
+      .eq("security_id", securityId)
       .eq("status", "active")
       .limit(1)
       .maybeSingle(),
     supabase
-      .from("iros_v_market_context")
+      .from("iros_v_security_market_context")
       .select(
-        "provider,exchange,currency,market_time,close,previous_close,change,percent_change,volume,is_market_open,source_url,retrieved_at",
+        "security_id,provider,exchange,currency,market_time,close,previous_close,change,percent_change,volume,is_market_open,source_url,retrieved_at",
       )
-      .eq("ticker", normalizedTicker)
+      .eq("security_id", securityId)
       .order("market_time", { ascending: false })
       .limit(1)
       .maybeSingle(),
@@ -186,6 +220,15 @@ export async function loadTickerContext(ticker: string): Promise<TickerContext> 
     marketResult,
   ]) {
     if (result.error) {
+      if (result.error.code === "42P01" || result.error.code === "PGRST205") {
+        return {
+          financialMetrics: [],
+          catalyst: null,
+          risk: null,
+          market: null,
+          marketSeries: null,
+        };
+      }
       throw new Error(`Ticker context API failed: ${result.error.message}`);
     }
   }
@@ -201,5 +244,71 @@ export async function loadTickerContext(ticker: string): Promise<TickerContext> 
       : null,
     risk: riskResult.data ? mapRisk(riskResult.data as RiskRow) : null,
     market: marketResult.data ? mapMarket(marketResult.data as MarketRow) : null,
+    marketSeries: null,
+  };
+}
+
+export async function loadMarketSeries(
+  securityId: string,
+): Promise<MarketSeriesLoadResult> {
+  const supabase = await createClient();
+  const { data, error } = await supabase
+    .from("iros_v_market_series")
+    .select(
+      "security_id,series_id,ticker,provider,provider_config_version,exchange,currency,interval,adjustment_status,session_start,session_end,source_url,retrieved_at,response_sha256,bar_id,session_date,open,high,low,close,volume,dividends,stock_splits,session_status,bar_sha256",
+    )
+    .eq("security_id", securityId)
+    .order("session_date", { ascending: true });
+
+  if (error) {
+    return {
+      series: null,
+      unavailableReason: marketSeriesUnavailableReason(error),
+    };
+  }
+  const rows = (data ?? []) as MarketSeriesRow[];
+  if (!rows.length) return { series: null, unavailableReason: null };
+  const first = rows[0];
+  if (
+    rows.some(
+      (row) =>
+        row.security_id !== first.security_id ||
+        row.series_id !== first.series_id ||
+        row.response_sha256 !== first.response_sha256,
+    )
+  ) {
+    throw new Error("Market series API returned mixed immutable series");
+  }
+  return {
+    series: {
+      securityId: first.security_id,
+      seriesId: first.series_id,
+      ticker: first.ticker,
+      provider: first.provider,
+      providerConfigVersion: first.provider_config_version,
+      exchange: first.exchange,
+      currency: first.currency,
+      interval: first.interval,
+      adjustmentStatus: first.adjustment_status,
+      sessionStart: first.session_start,
+      sessionEnd: first.session_end,
+      sourceUrl: first.source_url,
+      retrievedAt: first.retrieved_at,
+      responseSha256: first.response_sha256,
+      bars: rows.map((row) => ({
+        barId: row.bar_id,
+        sessionDate: row.session_date,
+        open: Number(row.open),
+        high: Number(row.high),
+        low: Number(row.low),
+        close: Number(row.close),
+        volume: row.volume === null ? null : Number(row.volume),
+        dividends: Number(row.dividends),
+        stockSplits: Number(row.stock_splits),
+        sessionStatus: row.session_status,
+        barSha256: row.bar_sha256,
+      })),
+    },
+    unavailableReason: null,
   };
 }

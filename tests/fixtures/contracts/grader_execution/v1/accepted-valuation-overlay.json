@@ -1,0 +1,67 @@
+{
+  "grader_id": "valuation",
+  "grader_version": "valuation-grader-v1",
+  "grader_contract_version": "valuation-grader-contract-v1",
+  "eligibility_rule_version": "valuation-eligibility-v1",
+  "rubric_version": "valuation-rubric-v1",
+  "output_schema_version": "valuation_grader_payload.v1",
+  "abstention_rules_version": "valuation-abstention-v1",
+  "prompt_version": "valuation_grader_v1",
+  "owned_decision_question": "What outcomes and assumptions justify the current or implied value?",
+  "payload_key": "valuation_payload",
+  "payload": {
+    "contract_version": "valuation_grader_payload.v1",
+    "valuation_method": "scenario_weighted_equity_value",
+    "current_market_value": {
+      "value": "610",
+      "unit": "USD_millions",
+      "calculation_method": "market_cap_v1",
+      "assumptions": ["Official unadjusted close."],
+      "evidence_ids": ["8d80b1a6-0742-5b0c-bf48-4e0d32cb8200"],
+      "calculation_ids": []
+    },
+    "fully_diluted_shares": {
+      "value": "200",
+      "unit": "millions_of_shares",
+      "calculation_method": "fully_diluted_shares_v1",
+      "assumptions": ["Includes disclosed dilutive instruments."],
+      "evidence_ids": ["8d80b1a6-0742-5b0c-bf48-4e0d32cb8200"],
+      "calculation_ids": []
+    },
+    "scenarios": [
+      {
+        "scenario_id": "failure",
+        "case": "failure",
+        "probability": {"value": "0.30", "unit": "probability", "calculation_method": "scenario_probability_v1", "assumptions": ["Programme fails."], "evidence_ids": ["8d80b1a6-0742-5b0c-bf48-4e0d32cb8200"], "calculation_ids": []},
+        "equity_value": {"value": "150", "unit": "USD_millions", "calculation_method": "scenario_equity_value_v1", "assumptions": ["Residual platform value."], "evidence_ids": ["8d80b1a6-0742-5b0c-bf48-4e0d32cb8200"], "calculation_ids": []},
+        "implied_value_per_diluted_share": {"value": "0.75", "unit": "USD_per_share", "calculation_method": "equity_value_per_share_v1", "assumptions": ["No additional dilution."], "evidence_ids": ["8d80b1a6-0742-5b0c-bf48-4e0d32cb8200"], "calculation_ids": []},
+        "assumptions": ["Lead programme fails."]
+      },
+      {
+        "scenario_id": "conservative",
+        "case": "conservative",
+        "probability": {"value": "0.30", "unit": "probability", "calculation_method": "scenario_probability_v1", "assumptions": ["Delayed progress."], "evidence_ids": ["8d80b1a6-0742-5b0c-bf48-4e0d32cb8200"], "calculation_ids": []},
+        "equity_value": {"value": "500", "unit": "USD_millions", "calculation_method": "scenario_equity_value_v1", "assumptions": ["Limited pipeline credit."], "evidence_ids": ["8d80b1a6-0742-5b0c-bf48-4e0d32cb8200"], "calculation_ids": []},
+        "implied_value_per_diluted_share": {"value": "2.50", "unit": "USD_per_share", "calculation_method": "equity_value_per_share_v1", "assumptions": ["No additional dilution."], "evidence_ids": ["8d80b1a6-0742-5b0c-bf48-4e0d32cb8200"], "calculation_ids": []},
+        "assumptions": ["Catalyst only partly reduces uncertainty."]
+      },
+      {
+        "scenario_id": "base",
+        "case": "base",
+        "probability": {"value": "0.25", "unit": "probability", "calculation_method": "scenario_probability_v1", "assumptions": ["Expected progress."], "evidence_ids": ["8d80b1a6-0742-5b0c-bf48-4e0d32cb8200"], "calculation_ids": []},
+        "equity_value": {"value": "1200", "unit": "USD_millions", "calculation_method": "scenario_equity_value_v1", "assumptions": ["Meaningful pipeline credit."], "evidence_ids": ["8d80b1a6-0742-5b0c-bf48-4e0d32cb8200"], "calculation_ids": []},
+        "implied_value_per_diluted_share": {"value": "6.00", "unit": "USD_per_share", "calculation_method": "equity_value_per_share_v1", "assumptions": ["No additional dilution."], "evidence_ids": ["8d80b1a6-0742-5b0c-bf48-4e0d32cb8200"], "calculation_ids": []},
+        "assumptions": ["Catalyst validates the lead programme."]
+      },
+      {
+        "scenario_id": "bull",
+        "case": "bull",
+        "probability": {"value": "0.15", "unit": "probability", "calculation_method": "scenario_probability_v1", "assumptions": ["Broad platform validation."], "evidence_ids": ["8d80b1a6-0742-5b0c-bf48-4e0d32cb8200"], "calculation_ids": []},
+        "equity_value": {"value": "3000", "unit": "USD_millions", "calculation_method": "scenario_equity_value_v1", "assumptions": ["Multiple programmes succeed."], "evidence_ids": ["8d80b1a6-0742-5b0c-bf48-4e0d32cb8200"], "calculation_ids": []},
+        "implied_value_per_diluted_share": {"value": "15.00", "unit": "USD_per_share", "calculation_method": "equity_value_per_share_v1", "assumptions": ["No additional dilution."], "evidence_ids": ["8d80b1a6-0742-5b0c-bf48-4e0d32cb8200"], "calculation_ids": []},
+        "assumptions": ["Platform produces repeatable clinical success."]
+      }
+    ],
+    "sensitivities": ["Clinical success probability", "Fully diluted share count"]
+  }
+}

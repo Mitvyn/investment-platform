@@ -1,31 +1,43 @@
 import type { WatchlistItem } from "@iros/types";
 
 import { createClient } from "./supabase/server";
-
-type WatchlistRow = {
-  ticker: string;
-  company_name: string;
-  disposition: WatchlistItem["disposition"];
-  added_at: string;
-  updated_at: string;
-};
+import {
+  resolveWatchlistRows,
+  type WatchlistRow,
+  type WatchlistSecurityRow,
+} from "./watchlist-identity";
 
 export async function loadWatchlist(): Promise<WatchlistItem[]> {
   const supabase = await createClient();
-  const { data, error } = await supabase
-    .from("iros_watchlist_items")
-    .select("ticker,company_name,disposition,added_at,updated_at")
-    .order("updated_at", { ascending: false });
+  const [{ data: securityData, error: securityError }, watchlistResult] =
+    await Promise.all([
+      supabase.from("iros_securities").select("id,symbol,issuer_name"),
+      supabase
+        .from("iros_watchlist_items")
+        .select("security_id,ticker,company_name,disposition,added_at,updated_at")
+        .order("updated_at", { ascending: false }),
+    ]);
 
+  if (securityError) {
+    throw new Error(`Watchlist security API failed: ${securityError.message}`);
+  }
+
+  let { data, error } = watchlistResult;
+
+  if (error) {
+    const legacy = await supabase
+      .from("iros_watchlist_items")
+      .select("ticker,company_name,disposition,added_at,updated_at")
+      .order("updated_at", { ascending: false });
+    data = legacy.data?.map((row) => ({ ...row, security_id: null })) ?? null;
+    error = legacy.error;
+  }
   if (error) {
     throw new Error(`Watchlist API failed: ${error.message}`);
   }
 
-  return ((data ?? []) as WatchlistRow[]).map((row) => ({
-    ticker: row.ticker,
-    companyName: row.company_name,
-    disposition: row.disposition,
-    addedAt: row.added_at,
-    updatedAt: row.updated_at,
-  }));
+  return resolveWatchlistRows(
+    (data ?? []) as WatchlistRow[],
+    (securityData ?? []) as WatchlistSecurityRow[],
+  );
 }

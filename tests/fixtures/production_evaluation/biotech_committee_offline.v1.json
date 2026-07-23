@@ -1,0 +1,35 @@
+{
+  "contract_version": "evaluation_corpus.v1",
+  "corpus_id": "biotech_committee_offline_v1",
+  "corpus_version": "biotech_committee_offline_v1",
+  "question_type_version": "biotech_moonshot_catalyst_assessment.v1",
+  "workflow_config_version": "biotech-moonshot-catalyst-v1",
+  "evaluation_policy_version": "committee-evaluation-policy-v1",
+  "execution_roles": [
+    "grader:moonshot",
+    "grader:catalyst",
+    "grader:biotech",
+    "grader:risk_dilution",
+    "grader:valuation",
+    "synthesizer"
+  ],
+  "cases": [
+    {
+      "case_id": "existing_grader_ready_bundle_v1",
+      "evidence_bundle_id": "9581bcf2-27f8-5c12-a3fc-39b43fd5e098",
+      "evidence_bundle_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "fixture_sha256": "215a6821ef2d5977d407c9b442b766feaf90a11a555c553beb34d120cd7902c4",
+      "expected_checks": [
+        "grader_schema_valid",
+        "grader_citations_valid",
+        "synthesis_schema_valid",
+        "synthesis_provenance_valid",
+        "synthesis_authority_valid",
+        "usage_within_token_caps",
+        "estimated_cost_within_hard_budgets",
+        "operator_sample_memo_approved"
+      ]
+    }
+  ],
+  "content_sha256": "54336b11da0e63fa433c8434def8bc3b710d008a75b85dc1ff8ad7ca6252cf4f"
+}

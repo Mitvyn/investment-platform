@@ -3,8 +3,10 @@
   "private": true,
   "packageManager": "pnpm@11.9.0",
   "scripts": {
+    "contracts:test": "node --test packages/types/*.test.ts",
     "dashboard:build": "pnpm --filter @iros/dashboard build",
     "dashboard:dev": "pnpm --filter @iros/dashboard dev",
+    "dashboard:test": "pnpm --filter @iros/dashboard test",
     "dashboard:typecheck": "pnpm --filter @iros/dashboard typecheck"
   }
 }

@@ -1,0 +1,61 @@
+{
+  "fixture_contract": "offline_biotech_fixture.v1",
+  "case_id": "single-asset-biotech",
+  "security": {
+    "id": "8f121435-e5af-4df5-8328-d191463a50ae",
+    "cik": "0001900001",
+    "issuer_name": "Single Asset Therapeutics, Inc.",
+    "symbol": "SATX",
+    "exchange": "NASDAQ"
+  },
+  "cutoff": "2026-05-06T23:59:59+00:00",
+  "program": "SAT-101",
+  "catalyst": "SAT-101 Phase 2 efficacy readout",
+  "catalyst_basis": "clinical",
+  "evidence_seed": "single-asset-primary-evidence",
+  "valuation": {
+    "price": "12.00",
+    "basic_shares": "40000000",
+    "fully_diluted_shares": "50000000",
+    "cash": "90000000",
+    "debt": "20000000"
+  },
+  "analysis": {
+    "stance": "challenges",
+    "confidence": "high",
+    "claim": "Short runway and single-program concentration challenge the research proposition.",
+    "stance_rationale": "Financing need and concentrated clinical risk challenge the shared proposition.",
+    "moonshot": {
+      "mission_relevance": "limited",
+      "asymmetry_assessment": "conditional",
+      "evidence_maturity": "clinical",
+      "strategic_or_societal_value": "limited",
+      "asymmetry_drivers": ["Single programme efficacy upside"],
+      "limiting_factors": ["Single-program concentration"]
+    },
+    "catalyst": {
+      "probability": "0.35",
+      "timing_window": "2026-Q4",
+      "date_confidence": "low"
+    },
+    "biotech": {
+      "mechanism_plausibility": "mixed",
+      "preclinical_evidence_quality": "moderate",
+      "clinical_evidence_quality": "weak",
+      "endpoint_relevance": "surrogate",
+      "regulatory_credibility": "mixed",
+      "claims_exceed_evidence": true
+    },
+    "risk_dilution": {
+      "runway_months": "9",
+      "burn_rate": "30",
+      "going_concern_risk": "high",
+      "financing_required_before_catalyst": "yes"
+    },
+    "valuation": {
+      "method": "probability_weighted_scenarios",
+      "sensitivities": ["Financing dilution", "Clinical efficacy"]
+    }
+  },
+  "requested_disposition": "monitor"
+}

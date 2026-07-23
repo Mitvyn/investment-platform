@@ -82,8 +82,8 @@ Phase 2 ticker context:
 - requires exact unique passages before emitting financial, catalyst, or risk
   records;
 - calculates runway and cash-flow changes with formulas and source periods;
-- provides an injectable Twelve Data quote adapter that fails before network
-  when no key is configured;
+- provides an injectable Yahoo Finance adapter through pinned yfinance for
+  private personal-use market context, with no API key;
 - reads issuer, risk, market, and operator-managed Watchlist data through
   authenticated Supabase paths;
 - keeps provider and backend secret credentials out of the dashboard.
@@ -192,21 +192,51 @@ release, four passages, five financial metrics, one catalyst, and one risk.
 Canonical evidence hash is
 `72b553aee645c8d3d4ba9fa42ee8a1cdfc545beef18ed7f8dc9b4b2326f32505`.
 
-Market ingestion additionally requires `TWELVE_DATA_API_KEY` from a plan whose
-license permits authenticated dashboard display:
+Market ingestion uses pinned yfinance and requires no market-data API key:
 
 ```bash
-python3 -m workers.market
+python3 -m workers.security_registry TICKER
+python3 -m workers.market TICKER SECURITY_ID
 ```
 
-No live market request has been made. The dashboard shows a gated empty state
-until a licensed snapshot exists.
+The security-registry command resolves an exact ticker match from the SEC
+company-ticker exchange file, stores the stable owner-scoped CIK identity, and
+prints its `security_id`. Registration establishes issuer identity only; it
+does not establish biotech workflow eligibility.
+
+Private holdings import is separate from research and accepts a local JSON file
+containing stable security IDs and exact operator observations:
+
+```bash
+python3 -m workers.holdings import-json PRIVATE_FILE
+```
+
+Never commit that file. Holdings do not enter evidence, graders, readiness,
+sizing, allocation, or execution logic.
+
+`SECURITY_ID` must already exist in owner-scoped `iros_securities`. Worker
+stores one year of unadjusted completed daily OHLCV as immutable series and
+bars. If market is open, current partial session is excluded.
+
+No live market request has been made. Yahoo Finance via yfinance is unofficial,
+personal-use data with no SLA. It supports the private Ticker Context only and
+does not satisfy the licensed, venue-official `valuation_snapshot.v1` readiness
+gate.
 
 Phase 2 migrations:
 
 - `20260717021804_iros_phase2_ticker_context.sql` was applied on 2026-07-17;
 - operator reports `20260717023818_iros_phase2_watchlist_risks.sql` applied on
   2026-07-17; issuer verification confirms risk persistence.
+- `20260722024500_iros_yfinance_market_provider.sql` is prepared and unapplied.
+- `20260722050000_iros_market_series.sql` is prepared and unapplied. It adds
+  stable-security market series/bars, read view, and Watchlist identity bridge.
+- `20260722080603_iros_private_holdings.sql` was applied on 2026-07-22. It adds
+  owner-scoped immutable holdings snapshots and authenticated latest view.
+- `20260722120000_iros_market_series_atomic_finalize.sql` is prepared and
+  unapplied. It adds owner-composite links plus draft/finalize OHLCV persistence.
+- `20260722204027_iros_stable_security_context.sql` is prepared and unapplied.
+  It materializes stable research-run identity and security-keyed context views.
 
 The operator applies migrations. Agents must not push, query, ingest, run
 advisors, or database-smoke the hosted project without explicit permission in
@@ -219,9 +249,16 @@ isolated through the `iros_` object prefix.
 
 Authenticated dashboard reads require `IROS_SUPABASE_URL`,
 `IROS_SUPABASE_PUBLISHABLE_KEY`, and a pre-provisioned Supabase Auth operator.
-Set `IROS_SITE_URL` to the deployed origin. The login form requests a
-passwordless link but cannot create new users. Supabase SSR owns the session
-cookies and the dashboard redirects unauthenticated requests to `/login`.
+The login form requests a six-digit email OTP and cannot create new users.
+Verification occurs server-side with `verifyOtp`; Supabase SSR owns session
+cookies and unauthenticated requests redirect to `/login`.
+
+Supabase Auth email templates are shared by every app using this project. In
+Auth > Email Templates > Magic Link, add `{{ .Token }}` while retaining the
+existing `{{ .ConfirmationURL }}` link until Wellness consumers are audited.
+IROS uses only the numeric code. Configure email OTP length to six digits and
+expiry to ten minutes. This is an operator-owned hosted setting, not a database
+migration.
 
 ## Validation
 
@@ -264,7 +301,7 @@ packages/types/                evidence and ticker-context contracts
 supabase/migrations/           `iros_` evidence, context, RLS, Watchlist
 workers/sec/                   injectable SEC collector and persistence
 workers/issuer/                official release, financial, catalyst, risk path
-workers/market/                gated Twelve Data quote adapter
+workers/market/                personal-use Yahoo Finance/yfinance adapter
 src/investment_research_os/  read-only OAuth client and CLI
 tests/                         offline contract and migration tests
 ```

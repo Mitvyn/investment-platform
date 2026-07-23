@@ -1,0 +1,143 @@
+{
+  "contract_version": "committee_state.v1",
+  "research_run_id": "984cce87-acde-4c65-8566-86fe27d21df3",
+  "evidence_bundle_id": "4478d37e-95c4-545f-826c-d77257dfd4aa",
+  "evidence_bundle_hash": "2d13851bd2d0b99ad5d5665506d36d181c68bd01501001f2da67fbcd6912cafe",
+  "workflow_config_version": "biotech_committee.v1",
+  "proposition_id": "biotech_moonshot_catalyst_case",
+  "proposition_version": "biotech_moonshot_catalyst_case.v1",
+  "rendered_proposition_text": "As of the cutoff, the available evidence supports a credible Moonshot research case with an identifiable catalyst capable of materially resolving uncertainty.",
+  "committee_status": "insufficient_accepted_opinions",
+  "accounting": {
+    "eligible_count": 0,
+    "accepted_count": 0,
+    "abstained_count": 0,
+    "not_eligible_count": 5,
+    "failed_count": 0,
+    "not_executed_count": 0
+  },
+  "stance_counts": {
+    "supports": 0,
+    "mixed": 0,
+    "challenges": 0
+  },
+  "stance_matrix": [],
+  "grader_results": [
+    {
+      "contract_version": "committee_grader_result.v1",
+      "grader_id": "moonshot",
+      "grader_version": "moonshot-grader-v1",
+      "grader_contract_version": "moonshot-grader-contract-v1",
+      "output_schema_version": "moonshot_grader_payload.v1",
+      "required": true,
+      "evidence_bundle_id": "4478d37e-95c4-545f-826c-d77257dfd4aa",
+      "evidence_bundle_hash": "2d13851bd2d0b99ad5d5665506d36d181c68bd01501001f2da67fbcd6912cafe",
+      "execution_id": null,
+      "execution_state": "not_eligible",
+      "opinion": null,
+      "not_eligible": {
+        "eligibility_rule_version": "moonshot_eligibility.v1",
+        "eligibility_inputs": { "workflow_eligible": false },
+        "reason_code": "grader_not_applicable",
+        "reason": "Versioned grader eligibility rule does not apply.",
+        "evaluated_at": "2026-05-06T22:01:00Z"
+      },
+      "not_executed": null,
+      "failure": null,
+      "persisted_at": "2026-05-06T22:01:05Z"
+    },
+    {
+      "contract_version": "committee_grader_result.v1",
+      "grader_id": "catalyst",
+      "grader_version": "catalyst-grader-v1",
+      "grader_contract_version": "catalyst-grader-contract-v1",
+      "output_schema_version": "catalyst_grader_payload.v1",
+      "required": true,
+      "evidence_bundle_id": "4478d37e-95c4-545f-826c-d77257dfd4aa",
+      "evidence_bundle_hash": "2d13851bd2d0b99ad5d5665506d36d181c68bd01501001f2da67fbcd6912cafe",
+      "execution_id": null,
+      "execution_state": "not_eligible",
+      "opinion": null,
+      "not_eligible": {
+        "eligibility_rule_version": "catalyst_eligibility.v1",
+        "eligibility_inputs": { "workflow_eligible": false },
+        "reason_code": "grader_not_applicable",
+        "reason": "Versioned grader eligibility rule does not apply.",
+        "evaluated_at": "2026-05-06T22:01:00Z"
+      },
+      "not_executed": null,
+      "failure": null,
+      "persisted_at": "2026-05-06T22:01:05Z"
+    },
+    {
+      "contract_version": "committee_grader_result.v1",
+      "grader_id": "biotech",
+      "grader_version": "biotech-grader-v1",
+      "grader_contract_version": "biotech-grader-contract-v1",
+      "output_schema_version": "biotech_grader_payload.v1",
+      "required": true,
+      "evidence_bundle_id": "4478d37e-95c4-545f-826c-d77257dfd4aa",
+      "evidence_bundle_hash": "2d13851bd2d0b99ad5d5665506d36d181c68bd01501001f2da67fbcd6912cafe",
+      "execution_id": null,
+      "execution_state": "not_eligible",
+      "opinion": null,
+      "not_eligible": {
+        "eligibility_rule_version": "biotech_eligibility.v1",
+        "eligibility_inputs": { "workflow_eligible": false },
+        "reason_code": "grader_not_applicable",
+        "reason": "Versioned grader eligibility rule does not apply.",
+        "evaluated_at": "2026-05-06T22:01:00Z"
+      },
+      "not_executed": null,
+      "failure": null,
+      "persisted_at": "2026-05-06T22:01:05Z"
+    },
+    {
+      "contract_version": "committee_grader_result.v1",
+      "grader_id": "risk_dilution",
+      "grader_version": "risk_dilution-grader-v1",
+      "grader_contract_version": "risk_dilution-grader-contract-v1",
+      "output_schema_version": "risk_dilution_grader_payload.v1",
+      "required": true,
+      "evidence_bundle_id": "4478d37e-95c4-545f-826c-d77257dfd4aa",
+      "evidence_bundle_hash": "2d13851bd2d0b99ad5d5665506d36d181c68bd01501001f2da67fbcd6912cafe",
+      "execution_id": null,
+      "execution_state": "not_eligible",
+      "opinion": null,
+      "not_eligible": {
+        "eligibility_rule_version": "risk_dilution_eligibility.v1",
+        "eligibility_inputs": { "workflow_eligible": false },
+        "reason_code": "grader_not_applicable",
+        "reason": "Versioned grader eligibility rule does not apply.",
+        "evaluated_at": "2026-05-06T22:01:00Z"
+      },
+      "not_executed": null,
+      "failure": null,
+      "persisted_at": "2026-05-06T22:01:05Z"
+    },
+    {
+      "contract_version": "committee_grader_result.v1",
+      "grader_id": "valuation",
+      "grader_version": "valuation-grader-v1",
+      "grader_contract_version": "valuation-grader-contract-v1",
+      "output_schema_version": "valuation_grader_payload.v1",
+      "required": true,
+      "evidence_bundle_id": "4478d37e-95c4-545f-826c-d77257dfd4aa",
+      "evidence_bundle_hash": "2d13851bd2d0b99ad5d5665506d36d181c68bd01501001f2da67fbcd6912cafe",
+      "execution_id": null,
+      "execution_state": "not_eligible",
+      "opinion": null,
+      "not_eligible": {
+        "eligibility_rule_version": "valuation_eligibility.v1",
+        "eligibility_inputs": { "workflow_eligible": false },
+        "reason_code": "grader_not_applicable",
+        "reason": "Versioned grader eligibility rule does not apply.",
+        "evaluated_at": "2026-05-06T22:01:00Z"
+      },
+      "not_executed": null,
+      "failure": null,
+      "persisted_at": "2026-05-06T22:01:05Z"
+    }
+  ],
+  "derived_at": "2026-05-06T22:02:00Z"
+}

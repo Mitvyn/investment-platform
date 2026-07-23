@@ -1,0 +1,296 @@
+{
+  "contract_version": "evidence_bundle.v1",
+  "id": "9581bcf2-27f8-5c12-a3fc-39b43fd5e098",
+  "operator_id": "8ed47ebc-d5cf-40ad-80ce-d4d803f7c735",
+  "research_run_id": "78d9ab11-17a1-567c-a192-fb91ec9de3be",
+  "security_id": "f594edb2-7fff-4e40-9c26-2c06bcbecb91",
+  "security_identity": {
+    "id": "f594edb2-7fff-4e40-9c26-2c06bcbecb91",
+    "cik": "0001601830",
+    "issuer_name": "Recursion Pharmaceuticals, Inc.",
+    "symbol": "RXRX",
+    "primary_listing_exchange": "NASDAQ"
+  },
+  "as_of_cutoff": "2026-05-06T23:59:59+00:00",
+  "bundle_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "manifest": [
+    {
+      "ordinal": 1,
+      "item_id": "11111111-1111-4111-8111-111111111111",
+      "item_version_id": "11111111-1111-5111-8111-111111111112",
+      "item_kind": "passage",
+      "source_class": "sec",
+      "source_locator": "https://www.sec.gov/Archives/edgar/data/1601830/filing.htm",
+      "locator": "Form 10-Q, liquidity",
+      "content_sha256": "0101010101010101010101010101010101010101010101010101010101010101",
+      "published_at": "2026-03-31T20:00:00+00:00",
+      "retrieved_at": "2026-05-07T00:20:00+00:00",
+      "effective_at": "2026-03-31T23:59:59+00:00",
+      "filing_period_start": "2026-01-01",
+      "filing_period_end": "2026-03-31",
+      "freshness_state": "current",
+      "freshness_reason_code": "latest_required_filing_at_cutoff",
+      "freshness_policy_version": "biotech-evidence-freshness-v1"
+    },
+    {
+      "ordinal": 2,
+      "item_id": "22222222-2222-4222-8222-222222222222",
+      "item_version_id": "22222222-2222-5222-8222-222222222223",
+      "item_kind": "passage",
+      "source_class": "issuer",
+      "source_locator": "https://ir.example.com/q1-2026",
+      "locator": "Q1 release, pipeline update",
+      "content_sha256": "0202020202020202020202020202020202020202020202020202020202020202",
+      "published_at": "2026-05-06T12:00:00+00:00",
+      "retrieved_at": "2026-05-07T00:21:00+00:00",
+      "effective_at": "2026-05-06T12:00:00+00:00",
+      "filing_period_start": null,
+      "filing_period_end": null,
+      "freshness_state": "current",
+      "freshness_reason_code": "latest_issuer_release_at_cutoff",
+      "freshness_policy_version": "biotech-evidence-freshness-v1"
+    },
+    {
+      "ordinal": 3,
+      "item_id": "33333333-3333-4333-8333-333333333333",
+      "item_version_id": "33333333-3333-5333-8333-333333333334",
+      "item_kind": "passage",
+      "source_class": "clinical",
+      "source_locator": "https://clinicaltrials.gov/study/NCT00000001",
+      "locator": "Study overview, primary outcome",
+      "content_sha256": "0303030303030303030303030303030303030303030303030303030303030303",
+      "published_at": "2026-04-01T16:00:00+00:00",
+      "retrieved_at": "2026-05-07T00:22:00+00:00",
+      "effective_at": "2026-04-01T16:00:00+00:00",
+      "filing_period_start": null,
+      "filing_period_end": null,
+      "freshness_state": "current",
+      "freshness_reason_code": "active_trial_record_at_cutoff",
+      "freshness_policy_version": "biotech-evidence-freshness-v1"
+    },
+    {
+      "ordinal": 4,
+      "item_id": "77777777-7777-4777-8777-777777777777",
+      "item_version_id": "77777777-7777-5777-8777-777777777778",
+      "item_kind": "catalyst",
+      "source_class": "clinical",
+      "source_locator": "https://clinicaltrials.gov/study/NCT00000001",
+      "locator": "Study overview, completion date",
+      "content_sha256": "0707070707070707070707070707070707070707070707070707070707070707",
+      "published_at": "2026-04-01T16:00:00+00:00",
+      "retrieved_at": "2026-05-07T00:22:00+00:00",
+      "effective_at": "2026-04-01T16:00:00+00:00",
+      "filing_period_start": null,
+      "filing_period_end": null,
+      "freshness_state": "current",
+      "freshness_reason_code": "active_trial_record_at_cutoff",
+      "freshness_policy_version": "biotech-evidence-freshness-v1"
+    },
+    {
+      "ordinal": 5,
+      "item_id": "44444444-4444-4444-8444-444444444444",
+      "item_version_id": "44444444-4444-5444-8444-444444444445",
+      "item_kind": "passage",
+      "source_class": "regulatory",
+      "source_locator": "https://www.fda.gov/drugs/example-program",
+      "locator": "Regulatory designation record",
+      "content_sha256": "0404040404040404040404040404040404040404040404040404040404040404",
+      "published_at": "2026-04-15T15:00:00+00:00",
+      "retrieved_at": "2026-05-07T00:23:00+00:00",
+      "effective_at": "2026-04-15T15:00:00+00:00",
+      "filing_period_start": null,
+      "filing_period_end": null,
+      "freshness_state": "current",
+      "freshness_reason_code": "latest_regulatory_record_at_cutoff",
+      "freshness_policy_version": "biotech-evidence-freshness-v1"
+    },
+    {
+      "ordinal": 6,
+      "item_id": "55555555-5555-4555-8555-555555555555",
+      "item_version_id": "55555555-5555-5555-8555-555555555556",
+      "item_kind": "passage",
+      "source_class": "financing",
+      "source_locator": "https://www.sec.gov/Archives/edgar/data/1601830/filing.htm",
+      "locator": "Form 10-Q, cash and share capital",
+      "content_sha256": "0505050505050505050505050505050505050505050505050505050505050505",
+      "published_at": "2026-03-31T20:00:00+00:00",
+      "retrieved_at": "2026-05-07T00:20:00+00:00",
+      "effective_at": "2026-03-31T23:59:59+00:00",
+      "filing_period_start": "2026-01-01",
+      "filing_period_end": "2026-03-31",
+      "freshness_state": "current",
+      "freshness_reason_code": "latest_financing_disclosure_at_cutoff",
+      "freshness_policy_version": "biotech-evidence-freshness-v1"
+    },
+    {
+      "ordinal": 7,
+      "item_id": "66666666-6666-4666-8666-666666666666",
+      "item_version_id": "66666666-6666-5666-8666-666666666667",
+      "item_kind": "metric",
+      "source_class": "financing",
+      "source_locator": "https://www.sec.gov/Archives/edgar/data/1601830/filing.htm",
+      "locator": "Form 10-Q, cash and share capital",
+      "content_sha256": "0606060606060606060606060606060606060606060606060606060606060606",
+      "published_at": "2026-03-31T20:00:00+00:00",
+      "retrieved_at": "2026-05-07T00:20:00+00:00",
+      "effective_at": "2026-03-31T23:59:59+00:00",
+      "filing_period_start": "2026-01-01",
+      "filing_period_end": "2026-03-31",
+      "freshness_state": "current",
+      "freshness_reason_code": "latest_financing_disclosure_at_cutoff",
+      "freshness_policy_version": "biotech-evidence-freshness-v1"
+    },
+    {
+      "ordinal": 8,
+      "item_id": "88888888-8888-4888-8888-888888888888",
+      "item_version_id": "88888888-8888-5888-8888-888888888889",
+      "item_kind": "risk",
+      "source_class": "financing",
+      "source_locator": "https://www.sec.gov/Archives/edgar/data/1601830/filing.htm",
+      "locator": "Form 10-Q, liquidity risk",
+      "content_sha256": "0808080808080808080808080808080808080808080808080808080808080808",
+      "published_at": "2026-03-31T20:00:00+00:00",
+      "retrieved_at": "2026-05-07T00:20:00+00:00",
+      "effective_at": "2026-03-31T23:59:59+00:00",
+      "filing_period_start": "2026-01-01",
+      "filing_period_end": "2026-03-31",
+      "freshness_state": "current",
+      "freshness_reason_code": "latest_financing_disclosure_at_cutoff",
+      "freshness_policy_version": "biotech-evidence-freshness-v1"
+    }
+  ],
+  "verified_metrics": [
+    {
+      "id": "66666666-6666-4666-8666-666666666666",
+      "metric_key": "cash_and_restricted_cash",
+      "value": "665.2",
+      "unit": "USD_millions",
+      "period_start": "2026-01-01",
+      "period_end": "2026-03-31",
+      "calculation_method": "reported",
+      "formula": null,
+      "supporting_evidence_ids": [
+        "55555555-5555-4555-8555-555555555555"
+      ]
+    }
+  ],
+  "catalysts": [
+    {
+      "id": "77777777-7777-4777-8777-777777777777",
+      "program": "REC-4881",
+      "event": "Phase 2 top-line data",
+      "basis": "clinical",
+      "status": "expected",
+      "window_start": "2026-10-01",
+      "window_end": "2026-12-31",
+      "supporting_evidence_ids": [
+        "33333333-3333-4333-8333-333333333333"
+      ]
+    }
+  ],
+  "risks": [
+    {
+      "id": "88888888-8888-4888-8888-888888888888",
+      "title": "Runway depends on current operating plans",
+      "risk_type": "financial",
+      "severity": "medium",
+      "status": "active",
+      "supporting_evidence_ids": [
+        "55555555-5555-4555-8555-555555555555"
+      ]
+    }
+  ],
+  "eligibility": {
+    "policy_version": "biotech-security-eligibility-v1",
+    "eligible": true,
+    "checks": [
+      {
+        "rule_id": "security_identity_verified",
+        "rule_version": "security_identity_verified.v1",
+        "passed": true,
+        "evidence_reference": "evidence-security_identity_verified",
+        "reason_code": "eligible",
+        "explanation": "Rule passed using evidence valid at cutoff.",
+        "evaluated_at": "2026-05-07T01:00:00+00:00"
+      },
+      {
+        "rule_id": "us_listing",
+        "rule_version": "us_listing.v1",
+        "passed": true,
+        "evidence_reference": "evidence-us_listing",
+        "reason_code": "eligible",
+        "explanation": "Rule passed using evidence valid at cutoff.",
+        "evaluated_at": "2026-05-07T01:00:00+00:00"
+      },
+      {
+        "rule_id": "cik_match",
+        "rule_version": "cik_match.v1",
+        "passed": true,
+        "evidence_reference": "evidence-cik_match",
+        "reason_code": "eligible",
+        "explanation": "Rule passed using evidence valid at cutoff.",
+        "evaluated_at": "2026-05-07T01:00:00+00:00"
+      },
+      {
+        "rule_id": "common_equity",
+        "rule_version": "common_equity.v1",
+        "passed": true,
+        "evidence_reference": "evidence-common_equity",
+        "reason_code": "eligible",
+        "explanation": "Rule passed using evidence valid at cutoff.",
+        "evaluated_at": "2026-05-07T01:00:00+00:00"
+      },
+      {
+        "rule_id": "operating_company",
+        "rule_version": "operating_company.v1",
+        "passed": true,
+        "evidence_reference": "evidence-operating_company",
+        "reason_code": "eligible",
+        "explanation": "Rule passed using evidence valid at cutoff.",
+        "evaluated_at": "2026-05-07T01:00:00+00:00"
+      },
+      {
+        "rule_id": "therapeutics_classification",
+        "rule_version": "therapeutics_classification.v1",
+        "passed": true,
+        "evidence_reference": "evidence-therapeutics_classification",
+        "reason_code": "eligible",
+        "explanation": "Rule passed using evidence valid at cutoff.",
+        "evaluated_at": "2026-05-07T01:00:00+00:00"
+      },
+      {
+        "rule_id": "active_therapeutic_program",
+        "rule_version": "active_therapeutic_program.v1",
+        "passed": true,
+        "evidence_reference": "evidence-active_therapeutic_program",
+        "reason_code": "eligible",
+        "explanation": "Rule passed using evidence valid at cutoff.",
+        "evaluated_at": "2026-05-07T01:00:00+00:00"
+      },
+      {
+        "rule_id": "defined_clinical_or_regulatory_catalyst",
+        "rule_version": "defined_clinical_or_regulatory_catalyst.v1",
+        "passed": true,
+        "evidence_reference": "evidence-defined_clinical_or_regulatory_catalyst",
+        "reason_code": "eligible",
+        "explanation": "Rule passed using evidence valid at cutoff.",
+        "evaluated_at": "2026-05-07T01:00:00+00:00"
+      },
+      {
+        "rule_id": "required_primary_source_coverage",
+        "rule_version": "required_primary_source_coverage.v1",
+        "passed": true,
+        "evidence_reference": "evidence-required_primary_source_coverage",
+        "reason_code": "eligible",
+        "explanation": "Rule passed using evidence valid at cutoff.",
+        "evaluated_at": "2026-05-07T01:00:00+00:00"
+      }
+    ],
+    "evaluated_at": "2026-05-07T01:00:00+00:00"
+  },
+  "evidence_policy_version": "biotech-primary-evidence-v1",
+  "freshness_policy_version": "biotech-evidence-freshness-v1",
+  "grader_ready": true,
+  "gaps": [],
+  "created_at": "2026-05-07T01:05:00+00:00"
+}

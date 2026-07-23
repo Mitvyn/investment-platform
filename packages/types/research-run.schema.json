@@ -1,0 +1,231 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://investment-research-os.local/research-run.v1.schema.json",
+  "title": "ResearchRunV1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "contract_version",
+    "id",
+    "operator_id",
+    "security_id",
+    "security_identity",
+    "question_type",
+    "question_type_version",
+    "workflow_config_version",
+    "thesis_contract_id",
+    "as_of_cutoff",
+    "operator_focus_original",
+    "operator_focus_normalized",
+    "status",
+    "idempotency_key",
+    "eligibility",
+    "created_at"
+  ],
+  "properties": {
+    "contract_version": { "const": "research_run.v1" },
+    "id": { "type": "string", "format": "uuid" },
+    "operator_id": { "type": "string", "format": "uuid" },
+    "security_id": { "type": "string", "format": "uuid" },
+    "security_identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "cik",
+        "issuer_name",
+        "symbol",
+        "primary_listing_exchange"
+      ],
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "cik": { "type": "string" },
+        "issuer_name": { "type": "string" },
+        "symbol": { "type": "string" },
+        "primary_listing_exchange": { "type": "string" }
+      }
+    },
+    "question_type": {
+      "const": "biotech_moonshot_catalyst_assessment"
+    },
+    "question_type_version": {
+      "const": "biotech_moonshot_catalyst_assessment.v1"
+    },
+    "workflow_config_version": {
+      "const": "biotech-moonshot-catalyst-v1"
+    },
+    "thesis_contract_id": {
+      "const": "biotech_moonshot_catalyst_assessment"
+    },
+    "as_of_cutoff": { "type": "string", "format": "date-time" },
+    "operator_focus_original": { "type": ["string", "null"] },
+    "operator_focus_normalized": { "type": ["string", "null"] },
+    "status": { "const": "eligibility_evaluated" },
+    "idempotency_key": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "eligibility": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["policy_version", "eligible", "checks", "evaluated_at"],
+      "properties": {
+        "policy_version": { "const": "biotech-security-eligibility-v1" },
+        "eligible": { "type": "boolean" },
+        "checks": {
+          "type": "array",
+          "minItems": 9,
+          "maxItems": 9,
+          "prefixItems": [
+            { "$ref": "#/$defs/check_security_identity_verified" },
+            { "$ref": "#/$defs/check_us_listing" },
+            { "$ref": "#/$defs/check_cik_match" },
+            { "$ref": "#/$defs/check_common_equity" },
+            { "$ref": "#/$defs/check_operating_company" },
+            { "$ref": "#/$defs/check_therapeutics_classification" },
+            { "$ref": "#/$defs/check_active_therapeutic_program" },
+            { "$ref": "#/$defs/check_defined_catalyst" },
+            { "$ref": "#/$defs/check_required_primary_source_coverage" }
+          ],
+          "items": false
+        },
+        "evaluated_at": { "type": "string", "format": "date-time" }
+      }
+    },
+    "created_at": { "type": "string", "format": "date-time" }
+  },
+  "$defs": {
+    "eligibility_check": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "rule_id",
+        "rule_version",
+        "passed",
+        "evidence_reference",
+        "reason_code",
+        "explanation",
+        "evaluated_at"
+      ],
+      "properties": {
+        "rule_id": { "type": "string" },
+        "rule_version": { "type": "string" },
+        "passed": { "type": "boolean" },
+        "evidence_reference": { "type": ["string", "null"] },
+        "reason_code": { "type": "string", "minLength": 1 },
+        "explanation": { "type": "string", "minLength": 1 },
+        "evaluated_at": { "type": "string", "format": "date-time" }
+      }
+    },
+    "check_security_identity_verified": {
+      "allOf": [
+        { "$ref": "#/$defs/eligibility_check" },
+        { "properties": { "rule_id": { "const": "security_identity_verified" }, "rule_version": { "const": "security_identity_verified.v1" } } }
+      ]
+    },
+    "check_us_listing": {
+      "allOf": [
+        { "$ref": "#/$defs/eligibility_check" },
+        { "properties": { "rule_id": { "const": "us_listing" }, "rule_version": { "const": "us_listing.v1" } } }
+      ]
+    },
+    "check_cik_match": {
+      "allOf": [
+        { "$ref": "#/$defs/eligibility_check" },
+        { "properties": { "rule_id": { "const": "cik_match" }, "rule_version": { "const": "cik_match.v1" } } }
+      ]
+    },
+    "check_common_equity": {
+      "allOf": [
+        { "$ref": "#/$defs/eligibility_check" },
+        { "properties": { "rule_id": { "const": "common_equity" }, "rule_version": { "const": "common_equity.v1" } } }
+      ]
+    },
+    "check_operating_company": {
+      "allOf": [
+        { "$ref": "#/$defs/eligibility_check" },
+        { "properties": { "rule_id": { "const": "operating_company" }, "rule_version": { "const": "operating_company.v1" } } }
+      ]
+    },
+    "check_therapeutics_classification": {
+      "allOf": [
+        { "$ref": "#/$defs/eligibility_check" },
+        { "properties": { "rule_id": { "const": "therapeutics_classification" }, "rule_version": { "const": "therapeutics_classification.v1" } } }
+      ]
+    },
+    "check_active_therapeutic_program": {
+      "allOf": [
+        { "$ref": "#/$defs/eligibility_check" },
+        { "properties": { "rule_id": { "const": "active_therapeutic_program" }, "rule_version": { "const": "active_therapeutic_program.v1" } } }
+      ]
+    },
+    "check_defined_catalyst": {
+      "allOf": [
+        { "$ref": "#/$defs/eligibility_check" },
+        { "properties": { "rule_id": { "const": "defined_clinical_or_regulatory_catalyst" }, "rule_version": { "const": "defined_clinical_or_regulatory_catalyst.v1" } } }
+      ]
+    },
+    "check_required_primary_source_coverage": {
+      "allOf": [
+        { "$ref": "#/$defs/eligibility_check" },
+        { "properties": { "rule_id": { "const": "required_primary_source_coverage" }, "rule_version": { "const": "required_primary_source_coverage.v1" } } }
+      ]
+    },
+    "research_question_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "question_type",
+        "security_id",
+        "as_of_cutoff",
+        "workflow_config_version"
+      ],
+      "properties": {
+        "question_type": {
+          "const": "biotech_moonshot_catalyst_assessment"
+        },
+        "security_id": { "type": "string", "format": "uuid" },
+        "as_of_cutoff": { "type": "string", "format": "date-time" },
+        "workflow_config_version": {
+          "const": "biotech-moonshot-catalyst-v1"
+        },
+        "operator_focus": { "type": ["string", "null"], "maxLength": 2000 }
+      }
+    },
+    "normalized_research_question_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "question_type",
+        "question_type_version",
+        "security_id",
+        "as_of_cutoff",
+        "workflow_config_version",
+        "thesis_contract_id",
+        "operator_focus_original",
+        "operator_focus_normalized"
+      ],
+      "properties": {
+        "question_type": {
+          "const": "biotech_moonshot_catalyst_assessment"
+        },
+        "question_type_version": {
+          "const": "biotech_moonshot_catalyst_assessment.v1"
+        },
+        "security_id": { "type": "string", "format": "uuid" },
+        "as_of_cutoff": { "type": "string", "format": "date-time" },
+        "workflow_config_version": {
+          "const": "biotech-moonshot-catalyst-v1"
+        },
+        "thesis_contract_id": {
+          "const": "biotech_moonshot_catalyst_assessment"
+        },
+        "operator_focus_original": { "type": ["string", "null"] },
+        "operator_focus_normalized": {
+          "type": ["string", "null"],
+          "maxLength": 2000
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,405 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://investment-research-os.local/contracts/readiness-thesis.v1.schema.json",
+  "title": "Readiness and Thesis v1 Contracts",
+  "oneOf": [
+    {"$ref": "#/$defs/readiness_gate_result"},
+    {"$ref": "#/$defs/thesis_version"},
+    {"$ref": "#/$defs/thesis_creation_result"},
+    {"$ref": "#/$defs/thesis_chain"}
+  ],
+  "$defs": {
+    "uuid": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "non_empty_string": {"type": "string", "minLength": 1},
+    "timestamp": {"type": "string", "format": "date-time"},
+    "uuid_array": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/uuid"}
+    },
+    "string_array": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/non_empty_string"}
+    },
+    "disposition": {
+      "enum": ["reject", "monitor", "deep_research", "decision_ready"]
+    },
+    "committee_status": {
+      "enum": [
+        "complete",
+        "complete_with_abstentions",
+        "incomplete_required_grader_failed",
+        "insufficient_accepted_opinions"
+      ]
+    },
+    "check_id": {
+      "enum": [
+        "committee_status_complete",
+        "all_eligible_graders_accepted",
+        "zero_eligible_abstentions",
+        "zero_required_grader_failures",
+        "blocking_evidence_requirements_satisfied",
+        "aligned_valuation_snapshot_required",
+        "source_freshness_passed",
+        "material_claims_citation_valid",
+        "grader_decision_questions_answered",
+        "material_disagreement_preserved",
+        "thesis_required_contents_present"
+      ]
+    },
+    "readiness_check": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "check_id",
+        "check_version",
+        "reason_code",
+        "explanation",
+        "reference_ids"
+      ],
+      "properties": {
+        "check_id": {"$ref": "#/$defs/check_id"},
+        "check_version": {"$ref": "#/$defs/non_empty_string"},
+        "reason_code": {"$ref": "#/$defs/non_empty_string"},
+        "explanation": {"$ref": "#/$defs/non_empty_string"},
+        "reference_ids": {"$ref": "#/$defs/string_array"}
+      }
+    },
+    "blocking_reason": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["reason_code", "check_id", "explanation"],
+      "properties": {
+        "reason_code": {"$ref": "#/$defs/non_empty_string"},
+        "check_id": {"$ref": "#/$defs/check_id"},
+        "explanation": {"$ref": "#/$defs/non_empty_string"}
+      }
+    },
+    "required_next_evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["requirement_id", "description", "affected_check_ids"],
+      "properties": {
+        "requirement_id": {"$ref": "#/$defs/non_empty_string"},
+        "description": {"$ref": "#/$defs/non_empty_string"},
+        "affected_check_ids": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/check_id"}
+        }
+      }
+    },
+    "readiness_gate_result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "contract_version",
+        "readiness_gate_result_id",
+        "operator_id",
+        "security_id",
+        "thesis_contract_id",
+        "research_run_id",
+        "evidence_bundle_id",
+        "evidence_bundle_hash",
+        "validated_grader_opinion_ids",
+        "committee_result_id",
+        "committee_memo_id",
+        "committee_status",
+        "requested_disposition",
+        "final_disposition",
+        "readiness_status",
+        "gate_policy_version",
+        "passed_checks",
+        "failed_checks",
+        "blocking_reasons",
+        "required_next_evidence",
+        "evaluated_at"
+      ],
+      "properties": {
+        "contract_version": {"const": "readiness_gate_result.v1"},
+        "readiness_gate_result_id": {"$ref": "#/$defs/uuid"},
+        "operator_id": {"$ref": "#/$defs/uuid"},
+        "security_id": {"$ref": "#/$defs/uuid"},
+        "thesis_contract_id": {"const": "biotech_moonshot_catalyst_assessment"},
+        "research_run_id": {"$ref": "#/$defs/uuid"},
+        "evidence_bundle_id": {"$ref": "#/$defs/uuid"},
+        "evidence_bundle_hash": {"$ref": "#/$defs/sha256"},
+        "validated_grader_opinion_ids": {"$ref": "#/$defs/uuid_array"},
+        "committee_result_id": {"$ref": "#/$defs/uuid"},
+        "committee_memo_id": {"$ref": "#/$defs/uuid"},
+        "committee_status": {"$ref": "#/$defs/committee_status"},
+        "requested_disposition": {"$ref": "#/$defs/disposition"},
+        "final_disposition": {"$ref": "#/$defs/disposition"},
+        "readiness_status": {"enum": ["passed", "blocked", "not_requested"]},
+        "gate_policy_version": {"$ref": "#/$defs/non_empty_string"},
+        "passed_checks": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/readiness_check"}
+        },
+        "failed_checks": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/readiness_check"}
+        },
+        "blocking_reasons": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/blocking_reason"}
+        },
+        "required_next_evidence": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/required_next_evidence"}
+        },
+        "evaluated_at": {"$ref": "#/$defs/timestamp"}
+      },
+      "oneOf": [
+        {
+          "properties": {
+            "requested_disposition": {"const": "reject"},
+            "final_disposition": {"const": "reject"},
+            "readiness_status": {"const": "not_requested"}
+          }
+        },
+        {
+          "properties": {
+            "requested_disposition": {"const": "monitor"},
+            "final_disposition": {"const": "monitor"},
+            "readiness_status": {"const": "not_requested"}
+          }
+        },
+        {
+          "properties": {
+            "requested_disposition": {"const": "deep_research"},
+            "final_disposition": {"const": "deep_research"},
+            "readiness_status": {"const": "not_requested"}
+          }
+        },
+        {
+          "properties": {
+            "requested_disposition": {"const": "decision_ready"},
+            "final_disposition": {"const": "decision_ready"},
+            "readiness_status": {"const": "passed"},
+            "failed_checks": {"maxItems": 0},
+            "blocking_reasons": {"maxItems": 0},
+            "required_next_evidence": {"maxItems": 0}
+          }
+        },
+        {
+          "properties": {
+            "requested_disposition": {"const": "decision_ready"},
+            "final_disposition": {"const": "deep_research"},
+            "readiness_status": {"const": "blocked"},
+            "failed_checks": {"minItems": 1},
+            "blocking_reasons": {"minItems": 1},
+            "required_next_evidence": {"minItems": 1}
+          }
+        }
+      ]
+    },
+    "thesis_content": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "core_thesis_statement_ids",
+        "unresolved_disagreement_ids",
+        "invalidation_statement_ids",
+        "evidence_gap_statement_ids",
+        "review_trigger_statement_id"
+      ],
+      "properties": {
+        "core_thesis_statement_ids": {
+          "allOf": [{"$ref": "#/$defs/string_array"}, {"minItems": 1}]
+        },
+        "unresolved_disagreement_ids": {"$ref": "#/$defs/string_array"},
+        "invalidation_statement_ids": {
+          "allOf": [{"$ref": "#/$defs/string_array"}, {"minItems": 1}]
+        },
+        "evidence_gap_statement_ids": {"$ref": "#/$defs/string_array"},
+        "review_trigger_statement_id": {"$ref": "#/$defs/non_empty_string"}
+      }
+    },
+    "thesis_version": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "contract_version",
+        "thesis_version_id",
+        "thesis_status",
+        "operator_id",
+        "security_id",
+        "thesis_contract_id",
+        "previous_canonical_thesis_version_id",
+        "based_on_thesis_version_id",
+        "research_run_id",
+        "evidence_bundle_id",
+        "evidence_bundle_hash",
+        "question_type_version",
+        "workflow_config_version",
+        "proposition_id",
+        "proposition_version",
+        "validated_grader_opinion_ids",
+        "committee_result_id",
+        "committee_memo_id",
+        "committee_status",
+        "readiness_gate_result_id",
+        "readiness_gate_policy_version",
+        "requested_disposition",
+        "final_disposition",
+        "content",
+        "created_at"
+      ],
+      "properties": {
+        "contract_version": {"const": "thesis_version.v1"},
+        "thesis_version_id": {"$ref": "#/$defs/uuid"},
+        "thesis_status": {"enum": ["canonical", "provisional"]},
+        "operator_id": {"$ref": "#/$defs/uuid"},
+        "security_id": {"$ref": "#/$defs/uuid"},
+        "thesis_contract_id": {"const": "biotech_moonshot_catalyst_assessment"},
+        "previous_canonical_thesis_version_id": {
+          "anyOf": [{"$ref": "#/$defs/uuid"}, {"type": "null"}]
+        },
+        "based_on_thesis_version_id": {
+          "anyOf": [{"$ref": "#/$defs/uuid"}, {"type": "null"}]
+        },
+        "research_run_id": {"$ref": "#/$defs/uuid"},
+        "evidence_bundle_id": {"$ref": "#/$defs/uuid"},
+        "evidence_bundle_hash": {"$ref": "#/$defs/sha256"},
+        "question_type_version": {"const": "biotech_moonshot_catalyst_assessment.v1"},
+        "workflow_config_version": {"$ref": "#/$defs/non_empty_string"},
+        "proposition_id": {"$ref": "#/$defs/non_empty_string"},
+        "proposition_version": {"$ref": "#/$defs/non_empty_string"},
+        "validated_grader_opinion_ids": {"$ref": "#/$defs/uuid_array"},
+        "committee_result_id": {"$ref": "#/$defs/uuid"},
+        "committee_memo_id": {"$ref": "#/$defs/uuid"},
+        "committee_status": {"$ref": "#/$defs/committee_status"},
+        "readiness_gate_result_id": {"$ref": "#/$defs/uuid"},
+        "readiness_gate_policy_version": {"$ref": "#/$defs/non_empty_string"},
+        "requested_disposition": {"$ref": "#/$defs/disposition"},
+        "final_disposition": {"$ref": "#/$defs/disposition"},
+        "content": {"$ref": "#/$defs/thesis_content"},
+        "created_at": {"$ref": "#/$defs/timestamp"}
+      },
+      "oneOf": [
+        {
+          "properties": {
+            "thesis_status": {"const": "canonical"},
+            "committee_status": {"const": "complete"}
+          }
+        },
+        {
+          "properties": {
+            "thesis_status": {"const": "provisional"},
+            "committee_status": {"const": "complete_with_abstentions"},
+            "final_disposition": {"enum": ["reject", "monitor", "deep_research"]}
+          }
+        }
+      ]
+    },
+    "thesis_creation_result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "contract_version",
+        "thesis_creation_result_id",
+        "operator_id",
+        "security_id",
+        "thesis_contract_id",
+        "research_run_id",
+        "committee_result_id",
+        "readiness_gate_result_id",
+        "committee_status",
+        "creation_outcome",
+        "thesis_version_id",
+        "reason_code",
+        "created_at"
+      ],
+      "properties": {
+        "contract_version": {"const": "thesis_creation_result.v1"},
+        "thesis_creation_result_id": {"$ref": "#/$defs/uuid"},
+        "operator_id": {"$ref": "#/$defs/uuid"},
+        "security_id": {"$ref": "#/$defs/uuid"},
+        "thesis_contract_id": {"const": "biotech_moonshot_catalyst_assessment"},
+        "research_run_id": {"$ref": "#/$defs/uuid"},
+        "committee_result_id": {"$ref": "#/$defs/uuid"},
+        "readiness_gate_result_id": {"$ref": "#/$defs/uuid"},
+        "committee_status": {"$ref": "#/$defs/committee_status"},
+        "creation_outcome": {
+          "enum": ["canonical_created", "provisional_created", "no_thesis"]
+        },
+        "thesis_version_id": {
+          "anyOf": [{"$ref": "#/$defs/uuid"}, {"type": "null"}]
+        },
+        "reason_code": {"$ref": "#/$defs/non_empty_string"},
+        "created_at": {"$ref": "#/$defs/timestamp"}
+      },
+      "oneOf": [
+        {
+          "properties": {
+            "committee_status": {"const": "complete"},
+            "creation_outcome": {"const": "canonical_created"},
+            "thesis_version_id": {"$ref": "#/$defs/uuid"}
+          }
+        },
+        {
+          "properties": {
+            "committee_status": {"const": "complete_with_abstentions"},
+            "creation_outcome": {"const": "provisional_created"},
+            "thesis_version_id": {"$ref": "#/$defs/uuid"}
+          }
+        },
+        {
+          "properties": {
+            "committee_status": {
+              "enum": [
+                "incomplete_required_grader_failed",
+                "insufficient_accepted_opinions"
+              ]
+            },
+            "creation_outcome": {"const": "no_thesis"},
+            "thesis_version_id": {"type": "null"}
+          }
+        }
+      ]
+    },
+    "thesis_chain": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "contract_version",
+        "operator_id",
+        "security_id",
+        "thesis_contract_id",
+        "active_canonical_thesis_version_id",
+        "canonical_versions",
+        "provisional_branches",
+        "generated_at"
+      ],
+      "properties": {
+        "contract_version": {"const": "thesis_chain.v1"},
+        "operator_id": {"$ref": "#/$defs/uuid"},
+        "security_id": {"$ref": "#/$defs/uuid"},
+        "thesis_contract_id": {"const": "biotech_moonshot_catalyst_assessment"},
+        "active_canonical_thesis_version_id": {
+          "anyOf": [{"$ref": "#/$defs/uuid"}, {"type": "null"}]
+        },
+        "canonical_versions": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/thesis_version"}
+        },
+        "provisional_branches": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/thesis_version"}
+        },
+        "generated_at": {"$ref": "#/$defs/timestamp"}
+      }
+    }
+  }
+}

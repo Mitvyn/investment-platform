@@ -1,0 +1,111 @@
+{
+  "contract_version": "research_run.v1",
+  "id": "78d9ab11-17a1-567c-a192-fb91ec9de3be",
+  "operator_id": "8ed47ebc-d5cf-40ad-80ce-d4d803f7c735",
+  "security_id": "f594edb2-7fff-4e40-9c26-2c06bcbecb91",
+  "security_identity": {
+    "id": "f594edb2-7fff-4e40-9c26-2c06bcbecb91",
+    "cik": "0001601830",
+    "issuer_name": "Recursion Pharmaceuticals, Inc.",
+    "symbol": "RXRX",
+    "primary_listing_exchange": "NASDAQ"
+  },
+  "question_type": "biotech_moonshot_catalyst_assessment",
+  "question_type_version": "biotech_moonshot_catalyst_assessment.v1",
+  "workflow_config_version": "biotech-moonshot-catalyst-v1",
+  "thesis_contract_id": "biotech_moonshot_catalyst_assessment",
+  "as_of_cutoff": "2026-05-06T23:59:59+00:00",
+  "operator_focus_original": "Review financing through catalyst.",
+  "operator_focus_normalized": "Review financing through catalyst.",
+  "status": "eligibility_evaluated",
+  "idempotency_key": "71dbfab2a8a61829082bce99872bca630f2ed3a30c149cd82cb10d56e9610f4e",
+  "eligibility": {
+    "policy_version": "biotech-security-eligibility-v1",
+    "eligible": true,
+    "checks": [
+      {
+        "rule_id": "security_identity_verified",
+        "rule_version": "security_identity_verified.v1",
+        "passed": true,
+        "evidence_reference": "evidence-security_identity_verified",
+        "reason_code": "eligible",
+        "explanation": "Rule passed using evidence valid at cutoff.",
+        "evaluated_at": "2026-05-07T01:00:00+00:00"
+      },
+      {
+        "rule_id": "us_listing",
+        "rule_version": "us_listing.v1",
+        "passed": true,
+        "evidence_reference": "evidence-us_listing",
+        "reason_code": "eligible",
+        "explanation": "Rule passed using evidence valid at cutoff.",
+        "evaluated_at": "2026-05-07T01:00:00+00:00"
+      },
+      {
+        "rule_id": "cik_match",
+        "rule_version": "cik_match.v1",
+        "passed": true,
+        "evidence_reference": "evidence-cik_match",
+        "reason_code": "eligible",
+        "explanation": "Rule passed using evidence valid at cutoff.",
+        "evaluated_at": "2026-05-07T01:00:00+00:00"
+      },
+      {
+        "rule_id": "common_equity",
+        "rule_version": "common_equity.v1",
+        "passed": true,
+        "evidence_reference": "evidence-common_equity",
+        "reason_code": "eligible",
+        "explanation": "Rule passed using evidence valid at cutoff.",
+        "evaluated_at": "2026-05-07T01:00:00+00:00"
+      },
+      {
+        "rule_id": "operating_company",
+        "rule_version": "operating_company.v1",
+        "passed": true,
+        "evidence_reference": "evidence-operating_company",
+        "reason_code": "eligible",
+        "explanation": "Rule passed using evidence valid at cutoff.",
+        "evaluated_at": "2026-05-07T01:00:00+00:00"
+      },
+      {
+        "rule_id": "therapeutics_classification",
+        "rule_version": "therapeutics_classification.v1",
+        "passed": true,
+        "evidence_reference": "evidence-therapeutics_classification",
+        "reason_code": "eligible",
+        "explanation": "Rule passed using evidence valid at cutoff.",
+        "evaluated_at": "2026-05-07T01:00:00+00:00"
+      },
+      {
+        "rule_id": "active_therapeutic_program",
+        "rule_version": "active_therapeutic_program.v1",
+        "passed": true,
+        "evidence_reference": "evidence-active_therapeutic_program",
+        "reason_code": "eligible",
+        "explanation": "Rule passed using evidence valid at cutoff.",
+        "evaluated_at": "2026-05-07T01:00:00+00:00"
+      },
+      {
+        "rule_id": "defined_clinical_or_regulatory_catalyst",
+        "rule_version": "defined_clinical_or_regulatory_catalyst.v1",
+        "passed": true,
+        "evidence_reference": "evidence-defined_clinical_or_regulatory_catalyst",
+        "reason_code": "eligible",
+        "explanation": "Rule passed using evidence valid at cutoff.",
+        "evaluated_at": "2026-05-07T01:00:00+00:00"
+      },
+      {
+        "rule_id": "required_primary_source_coverage",
+        "rule_version": "required_primary_source_coverage.v1",
+        "passed": true,
+        "evidence_reference": "evidence-required_primary_source_coverage",
+        "reason_code": "eligible",
+        "explanation": "Rule passed using evidence valid at cutoff.",
+        "evaluated_at": "2026-05-07T01:00:00+00:00"
+      }
+    ],
+    "evaluated_at": "2026-05-07T01:00:00+00:00"
+  },
+  "created_at": "2026-05-07T01:00:00+00:00"
+}

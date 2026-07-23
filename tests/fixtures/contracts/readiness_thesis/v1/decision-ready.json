@@ -1,0 +1,41 @@
+{
+  "contract_version": "readiness_gate_result.v1",
+  "readiness_gate_result_id": "40000000-0000-4000-8000-000000000001",
+  "operator_id": "8ed47ebc-d5cf-40ad-80ce-d4d803f7c735",
+  "security_id": "f594edb2-7fff-4e40-9c26-2c06bcbecb91",
+  "thesis_contract_id": "biotech_moonshot_catalyst_assessment",
+  "research_run_id": "33000000-0000-4000-8000-000000000001",
+  "evidence_bundle_id": "4478d37e-95c4-545f-826c-d77257dfd4aa",
+  "evidence_bundle_hash": "2d13851bd2d0b99ad5d5665506d36d181c68bd01501001f2da67fbcd6912cafe",
+  "validated_grader_opinion_ids": [
+    "20000000-0000-4000-8000-000000000001",
+    "20000000-0000-4000-8000-000000000002",
+    "20000000-0000-4000-8000-000000000003",
+    "20000000-0000-4000-8000-000000000004",
+    "20000000-0000-4000-8000-000000000005"
+  ],
+  "committee_result_id": "32000000-0000-4000-8000-000000000001",
+  "committee_memo_id": "30000000-0000-4000-8000-000000000001",
+  "committee_status": "complete",
+  "requested_disposition": "decision_ready",
+  "final_disposition": "decision_ready",
+  "readiness_status": "passed",
+  "gate_policy_version": "biotech_decision_readiness.v1",
+  "passed_checks": [
+    {"check_id":"committee_status_complete","check_version":"committee_status_complete.v1","reason_code":"passed","explanation":"Committee status is complete.","reference_ids":["32000000-0000-4000-8000-000000000001"]},
+    {"check_id":"all_eligible_graders_accepted","check_version":"all_eligible_graders_accepted.v1","reason_code":"passed","explanation":"Every eligible grader produced an accepted opinion.","reference_ids":["20000000-0000-4000-8000-000000000001","20000000-0000-4000-8000-000000000002","20000000-0000-4000-8000-000000000003","20000000-0000-4000-8000-000000000004","20000000-0000-4000-8000-000000000005"]},
+    {"check_id":"zero_eligible_abstentions","check_version":"zero_eligible_abstentions.v1","reason_code":"passed","explanation":"No eligible grader abstained.","reference_ids":["32000000-0000-4000-8000-000000000001"]},
+    {"check_id":"zero_required_grader_failures","check_version":"zero_required_grader_failures.v1","reason_code":"passed","explanation":"No required grader failed.","reference_ids":["32000000-0000-4000-8000-000000000001"]},
+    {"check_id":"blocking_evidence_requirements_satisfied","check_version":"blocking_evidence_requirements_satisfied.v1","reason_code":"passed","explanation":"All blocking evidence requirements are satisfied.","reference_ids":["4478d37e-95c4-545f-826c-d77257dfd4aa"]},
+    {"check_id":"aligned_valuation_snapshot_required","check_version":"aligned_valuation_snapshot_required.v1","reason_code":"passed","explanation":"An aligned valuation snapshot supports market-relative analysis.","reference_ids":["4478d37e-95c4-545f-826c-d77257dfd4aa"]},
+    {"check_id":"source_freshness_passed","check_version":"source_freshness_passed.v1","reason_code":"passed","explanation":"All source freshness policies pass.","reference_ids":["4478d37e-95c4-545f-826c-d77257dfd4aa"]},
+    {"check_id":"material_claims_citation_valid","check_version":"material_claims_citation_valid.v1","reason_code":"passed","explanation":"Every material claim is citation-valid.","reference_ids":["30000000-0000-4000-8000-000000000001"]},
+    {"check_id":"grader_decision_questions_answered","check_version":"grader_decision_questions_answered.v1","reason_code":"passed","explanation":"Every grader-owned decision question has a defensible answer.","reference_ids":["32000000-0000-4000-8000-000000000001"]},
+    {"check_id":"material_disagreement_preserved","check_version":"material_disagreement_preserved.v1","reason_code":"passed","explanation":"Material disagreement remains explicit.","reference_ids":["30000000-0000-4000-8000-000000000001"]},
+    {"check_id":"thesis_required_contents_present","check_version":"thesis_required_contents_present.v1","reason_code":"passed","explanation":"Required thesis contents are present.","reference_ids":["30000000-0000-4000-8000-000000000001"]}
+  ],
+  "failed_checks": [],
+  "blocking_reasons": [],
+  "required_next_evidence": [],
+  "evaluated_at": "2026-05-06T22:03:06Z"
+}

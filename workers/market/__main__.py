@@ -9,7 +9,7 @@ from workers.sec.storage import (
     SupabaseStorageSettings,
 )
 
-from .client import MarketDataError, TwelveDataClient, TwelveDataSettings
+from .client import MarketDataError, YFinanceClient, YFinanceSettings
 from .storage import SupabaseMarketStore
 
 
@@ -20,13 +20,17 @@ def required_env(name: str) -> str:
     return value
 
 
-def run() -> int:
+def run(argv: list[str] | None = None) -> int:
     try:
-        snapshot = TwelveDataClient(
-            TwelveDataSettings(api_key=required_env("TWELVE_DATA_API_KEY"))
-        ).fetch_quote(
-            "RXRX",
-            operator_id=required_env("IROS_OPERATOR_ID"),
+        operator_id = required_env("IROS_OPERATOR_ID")
+        args = argv or []
+        if len(args) != 2:
+            raise ValueError("usage: python3 -m workers.market TICKER SECURITY_ID")
+        ticker, security_id = args
+        snapshot = YFinanceClient(YFinanceSettings()).fetch_quote(
+            ticker,
+            operator_id=operator_id,
+            security_id=security_id,
         )
         SupabaseMarketStore(
             SupabaseStorageSettings(
@@ -42,4 +46,4 @@ def run() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(run())
+    raise SystemExit(run(sys.argv[1:]))

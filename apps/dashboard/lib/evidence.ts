@@ -3,6 +3,7 @@ import type { EvidenceTrace } from "@iros/types";
 import { createClient } from "./supabase/server";
 
 type EvidenceRow = {
+  security_id: string;
   ticker: string;
   company_name: string;
   research_run_id: string;
@@ -49,20 +50,23 @@ function mapRow(row: EvidenceRow): EvidenceTrace {
 }
 
 export async function loadEvidenceTrace(
-  ticker: string,
+  securityId: string,
 ): Promise<EvidenceResult> {
   const supabase = await createClient();
   const { data, error } = await supabase
-    .from("iros_v_claim_evidence_trace")
+    .from("iros_v_security_claim_evidence_trace")
     .select(
-      "ticker,company_name,research_run_id,run_status,source_provider,source_title,filing_form,filed_at,period_end,accession_number,source_url,retrieved_at,locator,passage_text,passage_sha256,claim_text,verification_state",
+      "security_id,ticker,company_name,research_run_id,run_status,source_provider,source_title,filing_form,filed_at,period_end,accession_number,source_url,retrieved_at,locator,passage_text,passage_sha256,claim_text,verification_state",
     )
-    .eq("ticker", ticker.toUpperCase())
+    .eq("security_id", securityId)
     .order("filed_at", { ascending: false })
     .limit(1)
     .maybeSingle();
 
   if (error) {
+    if (error.code === "42P01" || error.code === "PGRST205") {
+      return { trace: null };
+    }
     throw new Error(`Evidence API failed: ${error.message}`);
   }
 

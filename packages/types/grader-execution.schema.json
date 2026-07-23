@@ -1,0 +1,549 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://investment-research-os.local/contracts/grader-execution.v1.schema.json",
+  "title": "Grader Execution v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "contract_version", "id", "operator_id", "research_run_id",
+    "evidence_bundle_id", "evidence_bundle_hash", "execution_key",
+    "question_type_id", "question_type_version", "workflow_config_version",
+    "thesis_contract_id", "grader_id", "grader_version",
+    "grader_contract_version", "eligibility_rule_version", "rubric_version",
+    "output_schema_version", "abstention_rules_version", "prompt_version",
+    "model_config_id", "provider", "model", "inference_parameter_hash",
+    "retry_policy_version", "required", "execution_state", "pre_call_gate",
+    "budget", "attempts", "total_usage", "total_cost", "not_executed",
+    "failure", "opinion", "started_at", "finished_at"
+  ],
+  "properties": {
+    "contract_version": { "const": "grader_execution.v1" },
+    "id": { "$ref": "#/$defs/uuid" },
+    "operator_id": { "$ref": "#/$defs/uuid" },
+    "research_run_id": { "$ref": "#/$defs/uuid" },
+    "evidence_bundle_id": { "$ref": "#/$defs/uuid" },
+    "evidence_bundle_hash": { "$ref": "#/$defs/sha256" },
+    "execution_key": { "$ref": "#/$defs/sha256" },
+    "question_type_id": { "const": "biotech_moonshot_catalyst_assessment" },
+    "question_type_version": { "$ref": "#/$defs/non_empty_string" },
+    "workflow_config_version": { "$ref": "#/$defs/non_empty_string" },
+    "thesis_contract_id": { "const": "biotech_moonshot_catalyst_assessment" },
+    "grader_id": {
+      "enum": ["moonshot", "catalyst", "biotech", "risk_dilution", "valuation"]
+    },
+    "grader_version": { "$ref": "#/$defs/non_empty_string" },
+    "grader_contract_version": { "$ref": "#/$defs/non_empty_string" },
+    "eligibility_rule_version": { "$ref": "#/$defs/non_empty_string" },
+    "rubric_version": { "$ref": "#/$defs/non_empty_string" },
+    "output_schema_version": {
+      "enum": [
+        "moonshot_grader_payload.v1", "catalyst_grader_payload.v1",
+        "biotech_grader_payload.v1", "risk_dilution_grader_payload.v1",
+        "valuation_grader_payload.v1"
+      ]
+    },
+    "abstention_rules_version": { "$ref": "#/$defs/non_empty_string" },
+    "prompt_version": { "$ref": "#/$defs/non_empty_string" },
+    "model_config_id": { "$ref": "#/$defs/non_empty_string" },
+    "provider": { "$ref": "#/$defs/non_empty_string" },
+    "model": { "$ref": "#/$defs/non_empty_string" },
+    "inference_parameter_hash": { "$ref": "#/$defs/sha256" },
+    "retry_policy_version": { "$ref": "#/$defs/non_empty_string" },
+    "required": { "type": "boolean" },
+    "execution_state": {
+      "enum": ["not_executed", "failed", "abstained", "accepted"]
+    },
+    "pre_call_gate": { "$ref": "#/$defs/pre_call_gate" },
+    "budget": { "$ref": "#/$defs/budget" },
+    "attempts": {
+      "type": "array",
+      "maxItems": 2,
+      "items": { "$ref": "#/$defs/attempt" }
+    },
+    "total_usage": { "$ref": "#/$defs/usage" },
+    "total_cost": { "$ref": "#/$defs/cost" },
+    "not_executed": {
+      "anyOf": [{ "$ref": "#/$defs/not_executed" }, { "type": "null" }]
+    },
+    "failure": {
+      "anyOf": [{ "$ref": "#/$defs/failure" }, { "type": "null" }]
+    },
+    "opinion": {
+      "anyOf": [{ "$ref": "#/$defs/opinion" }, { "type": "null" }]
+    },
+    "started_at": { "$ref": "#/$defs/timestamp" },
+    "finished_at": { "$ref": "#/$defs/timestamp" }
+  },
+  "allOf": [{
+    "oneOf": [
+      { "properties": { "grader_id": { "const": "moonshot" }, "output_schema_version": { "const": "moonshot_grader_payload.v1" } } },
+      { "properties": { "grader_id": { "const": "catalyst" }, "output_schema_version": { "const": "catalyst_grader_payload.v1" } } },
+      { "properties": { "grader_id": { "const": "biotech" }, "output_schema_version": { "const": "biotech_grader_payload.v1" } } },
+      { "properties": { "grader_id": { "const": "risk_dilution" }, "output_schema_version": { "const": "risk_dilution_grader_payload.v1" } } },
+      { "properties": { "grader_id": { "const": "valuation" }, "output_schema_version": { "const": "valuation_grader_payload.v1" } } }
+    ]
+  }],
+  "$defs": {
+    "uuid": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "timestamp": { "type": "string", "format": "date-time" },
+    "non_empty_string": { "type": "string", "minLength": 1 },
+    "string_array": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/non_empty_string" }
+    },
+    "non_empty_string_array": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/non_empty_string" }
+    },
+    "decimal": {
+      "type": "string",
+      "pattern": "^(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?$"
+    },
+    "usage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "input_tokens", "cached_input_tokens", "cache_write_tokens",
+        "uncached_input_tokens",
+        "output_tokens", "reasoning_tokens", "total_tokens",
+        "tool_call_count", "usage_complete"
+      ],
+      "properties": {
+        "input_tokens": { "type": "integer", "minimum": 0 },
+        "cached_input_tokens": { "type": "integer", "minimum": 0 },
+        "cache_write_tokens": { "type": "integer", "minimum": 0 },
+        "uncached_input_tokens": { "type": "integer", "minimum": 0 },
+        "output_tokens": { "type": "integer", "minimum": 0 },
+        "reasoning_tokens": { "type": "integer", "minimum": 0 },
+        "total_tokens": { "type": "integer", "minimum": 0 },
+        "tool_call_count": { "type": "integer", "minimum": 0 },
+        "usage_complete": { "type": "boolean" }
+      }
+    },
+    "cost": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "reserved_cost_usd", "estimated_cost_usd", "billed_cost_usd",
+        "currency", "price_card_version"
+      ],
+      "properties": {
+        "reserved_cost_usd": { "$ref": "#/$defs/decimal" },
+        "estimated_cost_usd": { "$ref": "#/$defs/decimal" },
+        "billed_cost_usd": {
+          "anyOf": [{ "$ref": "#/$defs/decimal" }, { "type": "null" }]
+        },
+        "currency": { "const": "USD" },
+        "price_card_version": { "$ref": "#/$defs/non_empty_string" }
+      }
+    },
+    "gate_check": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["check_id", "passed", "reason_code"],
+      "properties": {
+        "check_id": {
+          "enum": [
+            "config_approved", "retention_policy_approved",
+            "evaluation_release_approved", "price_card_available",
+            "budget_available", "token_caps_valid",
+            "operator_environment_allowed"
+          ]
+        },
+        "passed": { "type": "boolean" },
+        "reason_code": { "$ref": "#/$defs/non_empty_string" }
+      }
+    },
+    "pre_call_gate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["policy_version", "status", "checked_at", "checks"],
+      "properties": {
+        "policy_version": { "$ref": "#/$defs/non_empty_string" },
+        "status": { "enum": ["passed", "blocked"] },
+        "checked_at": { "$ref": "#/$defs/timestamp" },
+        "checks": {
+          "type": "array",
+          "minItems": 7,
+          "maxItems": 7,
+          "items": { "$ref": "#/$defs/gate_check" }
+        }
+      }
+    },
+    "budget": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "reservation_id", "budget_policy_version", "currency",
+        "reserved_cost_usd", "reconciled_cost_usd", "status"
+      ],
+      "properties": {
+        "reservation_id": {
+          "anyOf": [{ "$ref": "#/$defs/uuid" }, { "type": "null" }]
+        },
+        "budget_policy_version": { "$ref": "#/$defs/non_empty_string" },
+        "currency": { "const": "USD" },
+        "reserved_cost_usd": { "$ref": "#/$defs/decimal" },
+        "reconciled_cost_usd": {
+          "anyOf": [{ "$ref": "#/$defs/decimal" }, { "type": "null" }]
+        },
+        "status": {
+          "enum": ["not_reserved", "reserved", "reconciled", "released"]
+        }
+      }
+    },
+    "attempt_validation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "schema_valid", "citations_valid", "errors"],
+      "properties": {
+        "status": { "enum": ["not_run", "passed", "failed"] },
+        "schema_valid": { "type": ["boolean", "null"] },
+        "citations_valid": { "type": ["boolean", "null"] },
+        "errors": { "$ref": "#/$defs/string_array" }
+      }
+    },
+    "attempt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "attempt_id", "attempt_number", "request_sha256", "provider", "model",
+        "model_config_id", "prompt_version", "started_at", "finished_at",
+        "duration_ms", "result", "provider_request_id", "raw_payload_id",
+        "raw_payload_sha256", "usage", "cost", "validation", "retry_reason"
+      ],
+      "properties": {
+        "attempt_id": { "$ref": "#/$defs/uuid" },
+        "attempt_number": { "enum": [1, 2] },
+        "request_sha256": { "$ref": "#/$defs/sha256" },
+        "provider": { "$ref": "#/$defs/non_empty_string" },
+        "model": { "$ref": "#/$defs/non_empty_string" },
+        "model_config_id": { "$ref": "#/$defs/non_empty_string" },
+        "prompt_version": { "$ref": "#/$defs/non_empty_string" },
+        "started_at": { "$ref": "#/$defs/timestamp" },
+        "finished_at": { "$ref": "#/$defs/timestamp" },
+        "duration_ms": { "type": "integer", "minimum": 0 },
+        "result": {
+          "enum": [
+            "transport_error", "validation_error", "accepted", "abstained"
+          ]
+        },
+        "provider_request_id": {
+          "type": ["string", "null"],
+          "minLength": 1
+        },
+        "raw_payload_id": {
+          "anyOf": [{ "$ref": "#/$defs/uuid" }, { "type": "null" }]
+        },
+        "raw_payload_sha256": {
+          "anyOf": [{ "$ref": "#/$defs/sha256" }, { "type": "null" }]
+        },
+        "usage": { "$ref": "#/$defs/usage" },
+        "cost": { "$ref": "#/$defs/cost" },
+        "validation": { "$ref": "#/$defs/attempt_validation" },
+        "retry_reason": { "type": ["string", "null"], "minLength": 1 }
+      }
+    },
+    "material_claim": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["claim_id", "claim", "materiality", "evidence_ids"],
+      "properties": {
+        "claim_id": { "$ref": "#/$defs/non_empty_string" },
+        "claim": { "$ref": "#/$defs/non_empty_string" },
+        "materiality": { "enum": ["high", "medium", "low"] },
+        "evidence_ids": { "$ref": "#/$defs/non_empty_string_array" }
+      }
+    },
+    "contradicting_evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["evidence_id", "explanation"],
+      "properties": {
+        "evidence_id": { "$ref": "#/$defs/non_empty_string" },
+        "explanation": { "$ref": "#/$defs/non_empty_string" }
+      }
+    },
+    "evidence_gap": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["gap_id", "description", "required_evidence"],
+      "properties": {
+        "gap_id": { "$ref": "#/$defs/non_empty_string" },
+        "description": { "$ref": "#/$defs/non_empty_string" },
+        "required_evidence": { "$ref": "#/$defs/non_empty_string" }
+      }
+    },
+    "proposition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "proposition_id", "proposition_version", "rendered_proposition_text",
+        "grader_stance", "stance_rationale"
+      ],
+      "properties": {
+        "proposition_id": { "const": "biotech_moonshot_catalyst_case" },
+        "proposition_version": {
+          "const": "biotech_moonshot_catalyst_case.v1"
+        },
+        "rendered_proposition_text": {
+          "const": "As of the cutoff, the available evidence supports a credible Moonshot research case with an identifiable catalyst capable of materially resolving uncertainty."
+        },
+        "grader_stance": {
+          "enum": ["supports", "mixed", "challenges", null]
+        },
+        "stance_rationale": { "type": ["string", "null"], "minLength": 1 }
+      }
+    },
+    "moonshot_payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "contract_version", "mission_relevance", "asymmetry_assessment",
+        "evidence_maturity", "strategic_or_societal_value",
+        "asymmetry_drivers", "limiting_factors"
+      ],
+      "properties": {
+        "contract_version": { "const": "moonshot_grader_payload.v1" },
+        "mission_relevance": {
+          "enum": ["material", "limited", "none", "indeterminate"]
+        },
+        "asymmetry_assessment": {
+          "enum": ["credible", "conditional", "not_supported", "indeterminate"]
+        },
+        "evidence_maturity": {
+          "enum": ["clinical", "preclinical", "mixed", "insufficient"]
+        },
+        "strategic_or_societal_value": {
+          "enum": ["material", "limited", "not_supported", "indeterminate"]
+        },
+        "asymmetry_drivers": { "$ref": "#/$defs/string_array" },
+        "limiting_factors": { "$ref": "#/$defs/string_array" }
+      }
+    },
+    "numeric_value": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "value", "unit", "calculation_method", "assumptions",
+        "evidence_ids", "calculation_ids"
+      ],
+      "properties": {
+        "value": { "type": "string", "pattern": "^-?(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?$" },
+        "unit": { "$ref": "#/$defs/non_empty_string" },
+        "calculation_method": { "$ref": "#/$defs/non_empty_string" },
+        "assumptions": { "$ref": "#/$defs/string_array" },
+        "evidence_ids": { "$ref": "#/$defs/string_array" },
+        "calculation_ids": { "$ref": "#/$defs/string_array" }
+      }
+    },
+    "catalyst_payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "contract_version", "catalyst_definition", "programme", "probability",
+        "timing_window", "date_confidence", "success_outcome", "delay_outcome",
+        "partial_success_outcome", "failure_outcome"
+      ],
+      "properties": {
+        "contract_version": { "const": "catalyst_grader_payload.v1" },
+        "catalyst_definition": { "$ref": "#/$defs/non_empty_string" },
+        "programme": { "$ref": "#/$defs/non_empty_string" },
+        "probability": { "$ref": "#/$defs/numeric_value" },
+        "timing_window": { "$ref": "#/$defs/non_empty_string" },
+        "date_confidence": { "enum": ["high", "medium", "low"] },
+        "success_outcome": { "$ref": "#/$defs/non_empty_string" },
+        "delay_outcome": { "$ref": "#/$defs/non_empty_string" },
+        "partial_success_outcome": { "$ref": "#/$defs/non_empty_string" },
+        "failure_outcome": { "$ref": "#/$defs/non_empty_string" }
+      }
+    },
+    "biotech_payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "contract_version", "mechanism_plausibility",
+        "preclinical_evidence_quality", "clinical_evidence_quality",
+        "trial_design_assessment", "endpoint_relevance",
+        "regulatory_credibility", "claims_exceed_evidence", "limitations"
+      ],
+      "properties": {
+        "contract_version": { "const": "biotech_grader_payload.v1" },
+        "mechanism_plausibility": { "enum": ["credible", "mixed", "not_supported", "indeterminate"] },
+        "preclinical_evidence_quality": { "enum": ["strong", "moderate", "weak", "absent"] },
+        "clinical_evidence_quality": { "enum": ["strong", "moderate", "weak", "absent"] },
+        "trial_design_assessment": { "$ref": "#/$defs/non_empty_string" },
+        "endpoint_relevance": { "enum": ["clinically_meaningful", "surrogate", "weak", "indeterminate"] },
+        "regulatory_credibility": { "enum": ["credible", "mixed", "weak", "indeterminate"] },
+        "claims_exceed_evidence": { "type": "boolean" },
+        "limitations": { "$ref": "#/$defs/string_array" }
+      }
+    },
+    "risk_dilution_payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "contract_version", "cash_runway", "burn_rate", "going_concern_risk",
+        "dilution_mechanisms", "financing_required_before_catalyst",
+        "downside_mechanisms", "permanent_capital_loss_mechanisms"
+      ],
+      "properties": {
+        "contract_version": { "const": "risk_dilution_grader_payload.v1" },
+        "cash_runway": { "$ref": "#/$defs/numeric_value" },
+        "burn_rate": { "$ref": "#/$defs/numeric_value" },
+        "going_concern_risk": { "enum": ["low", "moderate", "high", "indeterminate"] },
+        "dilution_mechanisms": { "$ref": "#/$defs/string_array" },
+        "financing_required_before_catalyst": { "enum": ["no", "possible", "yes", "indeterminate"] },
+        "downside_mechanisms": { "$ref": "#/$defs/string_array" },
+        "permanent_capital_loss_mechanisms": { "$ref": "#/$defs/string_array" }
+      }
+    },
+    "valuation_scenario": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "scenario_id", "case", "probability", "equity_value",
+        "implied_value_per_diluted_share", "assumptions"
+      ],
+      "properties": {
+        "scenario_id": { "$ref": "#/$defs/non_empty_string" },
+        "case": { "enum": ["conservative", "base", "bull", "failure"] },
+        "probability": { "$ref": "#/$defs/numeric_value" },
+        "equity_value": { "$ref": "#/$defs/numeric_value" },
+        "implied_value_per_diluted_share": { "$ref": "#/$defs/numeric_value" },
+        "assumptions": { "$ref": "#/$defs/string_array" }
+      }
+    },
+    "valuation_payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "contract_version", "valuation_method", "current_market_value",
+        "fully_diluted_shares", "scenarios", "sensitivities"
+      ],
+      "properties": {
+        "contract_version": { "const": "valuation_grader_payload.v1" },
+        "valuation_method": { "$ref": "#/$defs/non_empty_string" },
+        "current_market_value": { "$ref": "#/$defs/numeric_value" },
+        "fully_diluted_shares": { "$ref": "#/$defs/numeric_value" },
+        "scenarios": {
+          "type": "array",
+          "minItems": 4,
+          "maxItems": 4,
+          "items": { "$ref": "#/$defs/valuation_scenario" }
+        },
+        "sensitivities": { "$ref": "#/$defs/string_array" }
+      }
+    },
+    "abstention": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "reason_code", "reason", "missing_or_inadequate_evidence",
+        "evidence_required", "confidence"
+      ],
+      "properties": {
+        "reason_code": { "$ref": "#/$defs/non_empty_string" },
+        "reason": { "$ref": "#/$defs/non_empty_string" },
+        "missing_or_inadequate_evidence": {
+          "$ref": "#/$defs/non_empty_string_array"
+        },
+        "evidence_required": { "$ref": "#/$defs/non_empty_string_array" },
+        "confidence": { "enum": ["high", "medium", "low"] }
+      }
+    },
+    "opinion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "opinion_id", "execution_id", "grader_id", "grader_version",
+        "execution_state", "owned_decision_question", "stance", "confidence",
+        "summary", "material_claims", "assumptions", "contradicting_evidence",
+        "evidence_gaps", "invalidation_signals", "proposition",
+        "abstention", "created_at"
+      ],
+      "properties": {
+        "opinion_id": { "$ref": "#/$defs/uuid" },
+        "execution_id": { "$ref": "#/$defs/uuid" },
+        "grader_id": {
+          "enum": ["moonshot", "catalyst", "biotech", "risk_dilution", "valuation"]
+        },
+        "grader_version": { "$ref": "#/$defs/non_empty_string" },
+        "execution_state": { "enum": ["accepted", "abstained"] },
+        "owned_decision_question": { "$ref": "#/$defs/non_empty_string" },
+        "stance": { "enum": ["supports", "mixed", "challenges", null] },
+        "confidence": { "enum": ["high", "medium", "low"] },
+        "summary": { "$ref": "#/$defs/non_empty_string" },
+        "material_claims": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/material_claim" }
+        },
+        "assumptions": { "$ref": "#/$defs/string_array" },
+        "contradicting_evidence": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/contradicting_evidence" }
+        },
+        "evidence_gaps": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/evidence_gap" }
+        },
+        "invalidation_signals": { "$ref": "#/$defs/string_array" },
+        "proposition": { "$ref": "#/$defs/proposition" },
+        "moonshot_payload": { "$ref": "#/$defs/moonshot_payload" },
+        "catalyst_payload": { "$ref": "#/$defs/catalyst_payload" },
+        "biotech_payload": { "$ref": "#/$defs/biotech_payload" },
+        "risk_dilution_payload": { "$ref": "#/$defs/risk_dilution_payload" },
+        "valuation_payload": { "$ref": "#/$defs/valuation_payload" },
+        "abstention": {
+          "anyOf": [{ "$ref": "#/$defs/abstention" }, { "type": "null" }]
+        },
+        "created_at": { "$ref": "#/$defs/timestamp" }
+      },
+      "oneOf": [
+        { "required": ["moonshot_payload"], "properties": { "grader_id": { "const": "moonshot" } }, "not": { "anyOf": [{"required": ["catalyst_payload"]}, {"required": ["biotech_payload"]}, {"required": ["risk_dilution_payload"]}, {"required": ["valuation_payload"]}] } },
+        { "required": ["catalyst_payload"], "properties": { "grader_id": { "const": "catalyst" } }, "not": { "anyOf": [{"required": ["moonshot_payload"]}, {"required": ["biotech_payload"]}, {"required": ["risk_dilution_payload"]}, {"required": ["valuation_payload"]}] } },
+        { "required": ["biotech_payload"], "properties": { "grader_id": { "const": "biotech" } }, "not": { "anyOf": [{"required": ["moonshot_payload"]}, {"required": ["catalyst_payload"]}, {"required": ["risk_dilution_payload"]}, {"required": ["valuation_payload"]}] } },
+        { "required": ["risk_dilution_payload"], "properties": { "grader_id": { "const": "risk_dilution" } }, "not": { "anyOf": [{"required": ["moonshot_payload"]}, {"required": ["catalyst_payload"]}, {"required": ["biotech_payload"]}, {"required": ["valuation_payload"]}] } },
+        { "required": ["valuation_payload"], "properties": { "grader_id": { "const": "valuation" } }, "not": { "anyOf": [{"required": ["moonshot_payload"]}, {"required": ["catalyst_payload"]}, {"required": ["biotech_payload"]}, {"required": ["risk_dilution_payload"]}] } }
+      ]
+    },
+    "not_executed": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "reason_code", "reason", "gate_policy_version", "failed_gate_checks"
+      ],
+      "properties": {
+        "reason_code": { "$ref": "#/$defs/non_empty_string" },
+        "reason": { "$ref": "#/$defs/non_empty_string" },
+        "gate_policy_version": { "$ref": "#/$defs/non_empty_string" },
+        "failed_gate_checks": { "$ref": "#/$defs/non_empty_string_array" }
+      }
+    },
+    "failure": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "category", "attempt_count", "validation_errors", "final_reason",
+        "retry_policy_version"
+      ],
+      "properties": {
+        "category": {
+          "enum": [
+            "execution_failure", "timeout", "schema_validation",
+            "citation_validation", "contract_violation", "unsupported_output"
+          ]
+        },
+        "attempt_count": { "type": "integer", "minimum": 1, "maximum": 2 },
+        "validation_errors": { "$ref": "#/$defs/string_array" },
+        "final_reason": { "$ref": "#/$defs/non_empty_string" },
+        "retry_policy_version": { "$ref": "#/$defs/non_empty_string" }
+      }
+    }
+  }
+}

@@ -1,6 +1,7 @@
 {
   "compilerOptions": {
     "allowJs": false,
+    "allowImportingTsExtensions": true,
     "baseUrl": ".",
     "esModuleInterop": true,
     "forceConsistentCasingInFileNames": true,
@@ -16,6 +17,9 @@
     "moduleResolution": "bundler",
     "noEmit": true,
     "paths": {
+      "@/*": [
+        "./*"
+      ],
       "@iros/types": [
         "../../packages/types/index.ts"
       ]
@@ -39,6 +43,7 @@
     ".next/dev/types/**/*.ts"
   ],
   "exclude": [
-    "node_modules"
+    "node_modules",
+    "../../packages/types/**/*.test.ts"
   ]
 }

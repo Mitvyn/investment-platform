@@ -1,0 +1,61 @@
+{
+  "fixture_contract": "offline_biotech_fixture.v1",
+  "case_id": "rxrx-platform",
+  "security": {
+    "id": "56ed2444-fb42-5e40-97b6-000163c5a019",
+    "cik": "0001601830",
+    "issuer_name": "Recursion Pharmaceuticals, Inc.",
+    "symbol": "RXRX",
+    "exchange": "NASDAQ"
+  },
+  "cutoff": "2026-05-06T23:59:59+00:00",
+  "program": "REC-4881",
+  "catalyst": "REC-4881 regulatory update",
+  "catalyst_basis": "regulatory",
+  "evidence_seed": "rxrx-platform-primary-evidence",
+  "valuation": {
+    "price": "6.25",
+    "basic_shares": "286000000",
+    "fully_diluted_shares": "318000000",
+    "cash": "474300000",
+    "debt": "128000000"
+  },
+  "analysis": {
+    "stance": "supports",
+    "confidence": "medium",
+    "claim": "Platform breadth and a defined regulatory catalyst support continued research.",
+    "stance_rationale": "Platform evidence and a defined catalyst support the shared proposition.",
+    "moonshot": {
+      "mission_relevance": "material",
+      "asymmetry_assessment": "credible",
+      "evidence_maturity": "clinical",
+      "strategic_or_societal_value": "material",
+      "asymmetry_drivers": ["Platform reuse across programmes"],
+      "limiting_factors": ["Clinical translation remains uncertain"]
+    },
+    "catalyst": {
+      "probability": "0.55",
+      "timing_window": "2026-H2",
+      "date_confidence": "medium"
+    },
+    "biotech": {
+      "mechanism_plausibility": "credible",
+      "preclinical_evidence_quality": "moderate",
+      "clinical_evidence_quality": "moderate",
+      "endpoint_relevance": "clinically_meaningful",
+      "regulatory_credibility": "credible",
+      "claims_exceed_evidence": false
+    },
+    "risk_dilution": {
+      "runway_months": "24",
+      "burn_rate": "75",
+      "going_concern_risk": "moderate",
+      "financing_required_before_catalyst": "possible"
+    },
+    "valuation": {
+      "method": "probability_weighted_scenarios",
+      "sensitivities": ["Catalyst probability"]
+    }
+  },
+  "requested_disposition": "deep_research"
+}

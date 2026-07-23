@@ -1,0 +1,36 @@
+{
+  "grader_id": "risk_dilution",
+  "grader_version": "risk-dilution-grader-v1",
+  "grader_contract_version": "risk-dilution-grader-contract-v1",
+  "eligibility_rule_version": "risk-dilution-eligibility-v1",
+  "rubric_version": "risk-dilution-rubric-v1",
+  "output_schema_version": "risk_dilution_grader_payload.v1",
+  "abstention_rules_version": "risk-dilution-abstention-v1",
+  "prompt_version": "risk_dilution_grader_v1",
+  "owned_decision_question": "Can shareholders survive financially until the thesis resolves?",
+  "payload_key": "risk_dilution_payload",
+  "payload": {
+    "contract_version": "risk_dilution_grader_payload.v1",
+    "cash_runway": {
+      "value": "24",
+      "unit": "months",
+      "calculation_method": "cash_runway_v1",
+      "assumptions": ["Quarterly burn remains stable."],
+      "evidence_ids": ["8d80b1a6-0742-5b0c-bf48-4e0d32cb8200"],
+      "calculation_ids": []
+    },
+    "burn_rate": {
+      "value": "85",
+      "unit": "USD_millions_per_quarter",
+      "calculation_method": "quarterly_cash_burn_v1",
+      "assumptions": ["Excludes non-cash charges."],
+      "evidence_ids": ["8d80b1a6-0742-5b0c-bf48-4e0d32cb8200"],
+      "calculation_ids": []
+    },
+    "going_concern_risk": "low",
+    "dilution_mechanisms": ["ATM programme"],
+    "financing_required_before_catalyst": "possible",
+    "downside_mechanisms": ["Catalyst delay could force financing."],
+    "permanent_capital_loss_mechanisms": ["Repeated dilution before clinical validation."]
+  }
+}
