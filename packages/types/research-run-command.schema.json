@@ -1,0 +1,235 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://investment-research-os.local/contracts/research-run-command.schema.json",
+  "title": "Research Run Command Receipt v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "contract_version",
+    "command_id",
+    "operator_id",
+    "security_id",
+    "question_type_version",
+    "workflow_config_version",
+    "as_of_cutoff",
+    "operator_focus_normalized",
+    "idempotency_key",
+    "state",
+    "blocking_reason_codes",
+    "error_code",
+    "research_run_id",
+    "created_at",
+    "updated_at",
+    "started_at",
+    "finished_at"
+  ],
+  "properties": {
+    "contract_version": {
+      "const": "research_run_command_receipt.v1"
+    },
+    "command_id": {
+      "$ref": "#/$defs/uuid"
+    },
+    "operator_id": {
+      "$ref": "#/$defs/uuid"
+    },
+    "security_id": {
+      "$ref": "#/$defs/uuid"
+    },
+    "question_type_version": {
+      "const": "biotech_moonshot_catalyst_assessment.v1"
+    },
+    "workflow_config_version": {
+      "const": "biotech-moonshot-catalyst-v1"
+    },
+    "as_of_cutoff": {
+      "$ref": "#/$defs/timestamp"
+    },
+    "operator_focus_normalized": {
+      "type": ["string", "null"],
+      "minLength": 1,
+      "maxLength": 2000,
+      "pattern": "^[^\\s]+(?: [^\\s]+)*$"
+    },
+    "idempotency_key": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "state": {
+      "enum": ["queued", "running", "blocked", "failed", "completed"]
+    },
+    "blocking_reason_codes": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/reason_code"
+      }
+    },
+    "error_code": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/reason_code"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "research_run_id": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/uuid"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "created_at": {
+      "$ref": "#/$defs/timestamp"
+    },
+    "updated_at": {
+      "$ref": "#/$defs/timestamp"
+    },
+    "started_at": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/timestamp"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "finished_at": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/timestamp"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "$defs": {
+    "uuid": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "reason_code": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]{0,127}$"
+    }
+  },
+  "oneOf": [
+    {
+      "properties": {
+        "state": {
+          "const": "queued"
+        },
+        "blocking_reason_codes": {
+          "maxItems": 0
+        },
+        "error_code": {
+          "type": "null"
+        },
+        "research_run_id": {
+          "type": "null"
+        },
+        "started_at": {
+          "type": "null"
+        },
+        "finished_at": {
+          "type": "null"
+        }
+      }
+    },
+    {
+      "properties": {
+        "state": {
+          "const": "running"
+        },
+        "blocking_reason_codes": {
+          "maxItems": 0
+        },
+        "error_code": {
+          "type": "null"
+        },
+        "research_run_id": {
+          "type": "null"
+        },
+        "started_at": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "finished_at": {
+          "type": "null"
+        }
+      }
+    },
+    {
+      "properties": {
+        "state": {
+          "const": "blocked"
+        },
+        "blocking_reason_codes": {
+          "minItems": 1
+        },
+        "error_code": {
+          "type": "null"
+        },
+        "research_run_id": {
+          "type": "null"
+        },
+        "started_at": {
+          "type": "null"
+        },
+        "finished_at": {
+          "$ref": "#/$defs/timestamp"
+        }
+      }
+    },
+    {
+      "properties": {
+        "state": {
+          "const": "failed"
+        },
+        "blocking_reason_codes": {
+          "maxItems": 0
+        },
+        "error_code": {
+          "$ref": "#/$defs/reason_code"
+        },
+        "research_run_id": {
+          "type": "null"
+        },
+        "finished_at": {
+          "$ref": "#/$defs/timestamp"
+        }
+      }
+    },
+    {
+      "properties": {
+        "state": {
+          "const": "completed"
+        },
+        "blocking_reason_codes": {
+          "maxItems": 0
+        },
+        "error_code": {
+          "type": "null"
+        },
+        "research_run_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "finished_at": {
+          "$ref": "#/$defs/timestamp"
+        }
+      }
+    }
+  ]
+}

@@ -130,6 +130,11 @@ export {
   type ResearchRun,
   type SecurityIdentity,
 } from "./research-run";
+export {
+  parseResearchRunCommandReceipt,
+  type ResearchRunCommandReceipt,
+  type ResearchRunCommandState,
+} from "./research-run-command";
 export type {
   CatalystContext,
   FinancialMetric,

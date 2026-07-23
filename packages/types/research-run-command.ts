@@ -1,0 +1,171 @@
+export type ResearchRunCommandState =
+  | "queued"
+  | "running"
+  | "blocked"
+  | "failed"
+  | "completed";
+
+export type ResearchRunCommandReceipt = {
+  contract_version: "research_run_command_receipt.v1";
+  command_id: string;
+  operator_id: string;
+  security_id: string;
+  question_type_version: "biotech_moonshot_catalyst_assessment.v1";
+  workflow_config_version: "biotech-moonshot-catalyst-v1";
+  as_of_cutoff: string;
+  operator_focus_normalized: string | null;
+  idempotency_key: string;
+  state: ResearchRunCommandState;
+  blocking_reason_codes: string[];
+  error_code: string | null;
+  research_run_id: string | null;
+  created_at: string;
+  updated_at: string;
+  started_at: string | null;
+  finished_at: string | null;
+};
+
+const RECEIPT_KEYS = [
+  "contract_version",
+  "command_id",
+  "operator_id",
+  "security_id",
+  "question_type_version",
+  "workflow_config_version",
+  "as_of_cutoff",
+  "operator_focus_normalized",
+  "idempotency_key",
+  "state",
+  "blocking_reason_codes",
+  "error_code",
+  "research_run_id",
+  "created_at",
+  "updated_at",
+  "started_at",
+  "finished_at",
+] as const;
+
+const UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const REASON_CODE_PATTERN = /^[a-z][a-z0-9_]{0,127}$/;
+
+function isTimestamp(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    /(?:z|[+-]\d{2}:\d{2})$/i.test(value) &&
+    !Number.isNaN(Date.parse(value))
+  );
+}
+
+export function parseResearchRunCommandReceipt(
+  value: unknown,
+): ResearchRunCommandReceipt {
+  if (
+    value === null ||
+    typeof value !== "object" ||
+    Array.isArray(value) ||
+    (value as Record<string, unknown>).contract_version !==
+      "research_run_command_receipt.v1"
+  ) {
+    throw new TypeError("invalid Research Run command receipt");
+  }
+  const receipt = value as Record<string, unknown>;
+  const actualKeys = Object.keys(receipt).sort();
+  const expectedKeys = [...RECEIPT_KEYS].sort();
+  if (
+    actualKeys.length !== expectedKeys.length ||
+    actualKeys.some((key, index) => key !== expectedKeys[index])
+  ) {
+    throw new TypeError("invalid Research Run command receipt fields");
+  }
+  for (const field of ["command_id", "operator_id", "security_id"] as const) {
+    if (
+      typeof receipt[field] !== "string" ||
+      !UUID_PATTERN.test(receipt[field])
+    ) {
+      throw new TypeError(`invalid Research Run command ${field}`);
+    }
+  }
+  if (
+    receipt.question_type_version !==
+      "biotech_moonshot_catalyst_assessment.v1" ||
+    receipt.workflow_config_version !== "biotech-moonshot-catalyst-v1" ||
+    !isTimestamp(receipt.as_of_cutoff) ||
+    !isTimestamp(receipt.created_at) ||
+    !isTimestamp(receipt.updated_at) ||
+    typeof receipt.idempotency_key !== "string" ||
+    !/^[0-9a-f]{64}$/.test(receipt.idempotency_key)
+  ) {
+    throw new TypeError("invalid Research Run command contract identity");
+  }
+  if (
+    receipt.operator_focus_normalized !== null &&
+    (typeof receipt.operator_focus_normalized !== "string" ||
+      receipt.operator_focus_normalized.length === 0 ||
+      receipt.operator_focus_normalized.length > 2_000 ||
+      receipt.operator_focus_normalized.replace(/\s+/g, " ").trim() !==
+        receipt.operator_focus_normalized)
+  ) {
+    throw new TypeError("invalid Research Run command focus");
+  }
+  if (
+    !["queued", "running", "blocked", "failed", "completed"].includes(
+      String(receipt.state),
+    ) ||
+    !Array.isArray(receipt.blocking_reason_codes) ||
+    !receipt.blocking_reason_codes.every(
+      (reason) =>
+        typeof reason === "string" && REASON_CODE_PATTERN.test(reason),
+    ) ||
+    new Set(receipt.blocking_reason_codes).size !==
+      receipt.blocking_reason_codes.length ||
+    (receipt.error_code !== null &&
+      (typeof receipt.error_code !== "string" ||
+        !REASON_CODE_PATTERN.test(receipt.error_code))) ||
+    (receipt.research_run_id !== null &&
+      (typeof receipt.research_run_id !== "string" ||
+        !UUID_PATTERN.test(receipt.research_run_id))) ||
+    (receipt.started_at !== null && !isTimestamp(receipt.started_at)) ||
+    (receipt.finished_at !== null && !isTimestamp(receipt.finished_at))
+  ) {
+    throw new TypeError("invalid Research Run command state");
+  }
+  const blocked = receipt.state === "blocked";
+  const failed = receipt.state === "failed";
+  const completed = receipt.state === "completed";
+  const queued = receipt.state === "queued";
+  const running = receipt.state === "running";
+  if (
+    (blocked &&
+      (receipt.blocking_reason_codes.length === 0 ||
+        receipt.error_code !== null ||
+        receipt.research_run_id !== null ||
+        receipt.started_at !== null ||
+        receipt.finished_at === null)) ||
+    (failed &&
+      (receipt.error_code === null ||
+        receipt.blocking_reason_codes.length !== 0 ||
+        receipt.research_run_id !== null ||
+        receipt.finished_at === null)) ||
+    (completed &&
+      (receipt.research_run_id === null ||
+        receipt.blocking_reason_codes.length !== 0 ||
+        receipt.error_code !== null ||
+        receipt.finished_at === null)) ||
+    (queued &&
+      (receipt.blocking_reason_codes.length !== 0 ||
+        receipt.error_code !== null ||
+        receipt.research_run_id !== null ||
+        receipt.started_at !== null ||
+        receipt.finished_at !== null)) ||
+    (running &&
+      (receipt.blocking_reason_codes.length !== 0 ||
+        receipt.error_code !== null ||
+        receipt.research_run_id !== null ||
+        receipt.started_at === null ||
+        receipt.finished_at !== null))
+  ) {
+    throw new TypeError("contradictory Research Run command state");
+  }
+  return receipt as ResearchRunCommandReceipt;
+}

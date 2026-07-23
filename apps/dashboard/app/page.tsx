@@ -39,11 +39,13 @@ import { summarizeHoldings } from "@/lib/holdings-summary";
 import { loadMarketSeries, loadTickerContext } from "../lib/context";
 import { loadEvidenceTrace } from "../lib/evidence";
 import { loadLatestHoldings } from "../lib/holdings";
+import { loadResearchRunCommand } from "../lib/research-run-commands";
 import { loadSecurityDirectory } from "../lib/securities";
 import { loadSecurityJob } from "../lib/security-jobs";
 import { createClient } from "../lib/supabase/server";
 import { loadWatchlist } from "../lib/watchlist";
 import { signOut, toggleWatchlist } from "./actions";
+import { launchResearchRun } from "./research-actions";
 import { registerSecurity } from "./security-actions";
 
 export const dynamic = "force-dynamic";
@@ -182,6 +184,8 @@ export default async function TickerWorkspace({
   searchParams: Promise<{
     registration?: string;
     registration_error?: string;
+    research_command?: string;
+    research_error?: string;
     security?: string;
   }>;
 }) {
@@ -204,6 +208,14 @@ export default async function TickerWorkspace({
     securities.find((security) => security.securityId === requestedSecurityId) ??
     securities[0] ??
     null;
+  const researchCommand = params.research_command
+    ? await loadResearchRunCommand(operatorId, params.research_command)
+    : null;
+  const visibleResearchCommand =
+    researchCommand?.security_id === selectedSecurity?.securityId
+      ? researchCommand
+      : null;
+  const defaultCutoff = new Date().toISOString().slice(0, 16);
   const ticker = selectedSecurity?.ticker ?? "";
   const displayTicker = ticker || "SELECT";
   const [{ trace }, context, marketSeriesResult] = await Promise.all([
@@ -436,6 +448,154 @@ export default async function TickerWorkspace({
                   securityId={registrationJob.security_id}
                   state={registrationJob.state}
                 />
+              </CardContent>
+            </Card>
+          ) : null}
+          {selectedSecurity ? (
+            <Card className="mt-5">
+              <CardHeader>
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <SectionLabel>Research Run preflight</SectionLabel>
+                    <CardTitle className="mt-2">
+                      Launch the fixed biotech committee contract
+                    </CardTitle>
+                  </div>
+                  <Badge variant="outline">
+                    biotech_moonshot_catalyst_assessment
+                  </Badge>
+                </div>
+                <CardDescription>
+                  This early tracer persists and validates a command only. Current
+                  production gates block evidence, market, and model execution.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <form
+                  action={launchResearchRun}
+                  className="grid gap-4 lg:grid-cols-[minmax(0,240px)_minmax(0,1fr)_auto] lg:items-end"
+                >
+                  <input
+                    name="securityId"
+                    type="hidden"
+                    value={selectedSecurity.securityId}
+                  />
+                  <div className="grid gap-2">
+                    <label
+                      className="text-xs font-medium text-muted-foreground"
+                      htmlFor="asOfCutoff"
+                    >
+                      Evidence cutoff (UTC)
+                    </label>
+                    <Input
+                      defaultValue={defaultCutoff}
+                      id="asOfCutoff"
+                      max={defaultCutoff}
+                      name="asOfCutoff"
+                      required
+                      type="datetime-local"
+                    />
+                  </div>
+                  <div className="grid gap-2">
+                    <label
+                      className="text-xs font-medium text-muted-foreground"
+                      htmlFor="operatorFocus"
+                    >
+                      Optional research emphasis
+                    </label>
+                    <textarea
+                      className="min-h-20 w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-xs outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/40"
+                      id="operatorFocus"
+                      maxLength={2000}
+                      name="operatorFocus"
+                      placeholder="Focus on financing through the next catalyst."
+                    />
+                  </div>
+                  <Button type="submit">Run preflight</Button>
+                </form>
+                <div className="mt-4 flex flex-wrap gap-x-6 gap-y-1 border-t border-border pt-4 font-mono text-[10px] text-muted-foreground">
+                  <span>question v1</span>
+                  <span>workflow biotech-moonshot-catalyst-v1</span>
+                  <span>security {selectedSecurity.securityId}</span>
+                </div>
+              </CardContent>
+            </Card>
+          ) : null}
+          {params.research_error ? (
+            <Card className="mt-5 border-challenge/35 bg-challenge-muted">
+              <CardContent className="py-4 text-sm text-challenge-muted-foreground">
+                {params.research_error === "invalid_request"
+                  ? "Research Run request is invalid. Check the UTC cutoff and bounded research emphasis."
+                  : "Research Run preflight could not be persisted. Retry after checking service status."}
+              </CardContent>
+            </Card>
+          ) : null}
+          {visibleResearchCommand ? (
+            <Card className="mt-5" aria-live="polite">
+              <CardHeader>
+                <div className="flex flex-wrap items-center gap-2">
+                  <CardTitle>
+                    {visibleResearchCommand.state === "blocked"
+                      ? "Launch blocked"
+                      : `Research command ${visibleResearchCommand.state}`}
+                  </CardTitle>
+                  <Badge
+                    variant={
+                      visibleResearchCommand.state === "completed"
+                        ? "verified"
+                        : visibleResearchCommand.state === "failed"
+                          ? "destructive"
+                          : "attention"
+                    }
+                  >
+                    {visibleResearchCommand.state}
+                  </Badge>
+                </div>
+                <CardDescription>
+                  {visibleResearchCommand.state === "blocked"
+                    ? "No evidence, market, or model execution was started."
+                    : "Command state is persisted in the authenticated research ledger."}
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                {visibleResearchCommand.blocking_reason_codes.length ? (
+                  <ul className="grid gap-2 sm:grid-cols-2">
+                    {visibleResearchCommand.blocking_reason_codes.map((reason) => (
+                      <li
+                        className="rounded-md border border-border bg-muted/35 px-3 py-2 font-mono text-xs"
+                        key={reason}
+                      >
+                        {reason}
+                      </li>
+                    ))}
+                  </ul>
+                ) : null}
+                <DataList
+                  items={[
+                    {
+                      label: "Command",
+                      value: visibleResearchCommand.command_id,
+                    },
+                    {
+                      label: "Cutoff",
+                      value: visibleResearchCommand.as_of_cutoff,
+                    },
+                    {
+                      label: "Updated",
+                      value: visibleResearchCommand.updated_at,
+                    },
+                  ]}
+                />
+                {visibleResearchCommand.state === "completed" &&
+                visibleResearchCommand.research_run_id ? (
+                  <Button asChild className="mt-5">
+                    <a
+                      href={`/research-runs/${visibleResearchCommand.research_run_id}`}
+                    >
+                      Open Research Run audit
+                    </a>
+                  </Button>
+                ) : null}
               </CardContent>
             </Card>
           ) : null}
