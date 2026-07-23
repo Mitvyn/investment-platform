@@ -1,0 +1,32 @@
+{
+  "cik": "0001900001",
+  "name": "Single Asset Therapeutics, Inc.",
+  "filings": {
+    "recent": {
+      "accessionNumber": [
+        "0001900001-26-000010",
+        "0001900001-26-000011"
+      ],
+      "acceptanceDateTime": [
+        "2026-05-04T21:10:00-04:00",
+        "2026-05-07T00:00:00Z"
+      ],
+      "filingDate": [
+        "2026-05-04",
+        "2026-05-07"
+      ],
+      "reportDate": [
+        "2026-03-31",
+        "2026-05-07"
+      ],
+      "form": [
+        "10-Q",
+        "8-K"
+      ],
+      "primaryDocument": [
+        "sabx-20260331.htm",
+        "sabx-20260507.htm"
+      ]
+    }
+  }
+}

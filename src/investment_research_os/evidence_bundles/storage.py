@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import date, datetime
+import hashlib
 from typing import Any, Mapping
 from urllib.parse import urlencode
 
@@ -112,11 +114,91 @@ class SupabaseEvidenceBundleRepository:
             raise EvidenceStorageError(
                 "evidence bundle view returned invalid contract"
             ) from error
+        bundle = self._hydrate_passages(bundle)
         if bundle.as_dict() != payload:
             raise EvidenceStorageError(
                 "evidence bundle view returned non-canonical contract"
             )
         return bundle
+
+    def _hydrate_passages(self, bundle: EvidenceBundle) -> EvidenceBundle:
+        query = urlencode(
+            {
+                "operator_id": f"eq.{bundle.operator_id}",
+                "bundle_id": f"eq.{bundle.id}",
+                "item_kind": "eq.passage",
+                "select": (
+                    "ordinal,item_id,item_version_id,item_kind,"
+                    "canonical_payload"
+                ),
+                "order": "ordinal.asc",
+            }
+        )
+        response = self.transport.request_json(
+            "GET",
+            (
+                f"{self.settings.url.rstrip('/')}/rest/v1/"
+                f"iros_v_evidence_bundle_manifest?{query}"
+            ),
+            headers={"apikey": self.settings.secret_key},
+        )
+        if response.status != 200 or not isinstance(response.payload, list):
+            raise EvidenceStorageError(
+                "evidence passage store returned invalid payload"
+            )
+        payload_by_version: dict[str, Mapping[str, Any]] = {}
+        for row in response.payload:
+            if not isinstance(row, dict):
+                raise EvidenceStorageError(
+                    "evidence passage store returned invalid payload"
+                )
+            version_id = row.get("item_version_id")
+            canonical_payload = row.get("canonical_payload")
+            if (
+                not isinstance(version_id, str)
+                or not isinstance(canonical_payload, dict)
+                or version_id in payload_by_version
+            ):
+                raise EvidenceStorageError(
+                    "evidence passage store returned invalid payload"
+                )
+            payload_by_version[version_id] = canonical_payload
+
+        hydrated: list[EvidenceItem] = []
+        for item in bundle.manifest:
+            if item.item_kind != "passage":
+                hydrated.append(item)
+                continue
+            passage = payload_by_version.get(item.evidence_version_id, {})
+            if not passage:
+                hydrated.append(item)
+                continue
+            passage_id = passage.get("passage_id")
+            passage_text = passage.get("passage_text")
+            passage_hash = passage.get("passage_sha256")
+            if (
+                passage.get("contract_version") != "evidence_passage.v1"
+                or passage.get("evidence_id") != item.evidence_id
+                or not isinstance(passage_id, str)
+                or not isinstance(passage_text, str)
+                or not passage_text
+                or not isinstance(passage_hash, str)
+                or hashlib.sha256(passage_text.encode()).hexdigest()
+                != passage_hash
+                or passage_hash != item.content_hash
+            ):
+                raise EvidenceStorageError(
+                    "evidence passage payload failed integrity validation"
+                )
+            hydrated.append(
+                replace(
+                    item,
+                    passage_id=passage_id,
+                    passage_hash=passage_hash,
+                    passage_text=passage_text,
+                )
+            )
+        return replace(bundle, manifest=tuple(hydrated))
 
     def _insert(
         self,
@@ -169,7 +251,23 @@ class SupabaseEvidenceBundleRepository:
         persisted: EvidenceBundle,
         requested: EvidenceBundle,
     ) -> EvidenceBundle:
-        if persisted.as_dict() != requested.as_dict():
+        def passage_signature(bundle: EvidenceBundle):
+            return tuple(
+                (
+                    item.evidence_id,
+                    item.evidence_version_id,
+                    item.passage_id,
+                    item.passage_hash,
+                    item.passage_text,
+                )
+                for item in bundle.manifest
+                if item.item_kind == "passage"
+            )
+
+        if (
+            persisted.as_dict() != requested.as_dict()
+            or passage_signature(persisted) != passage_signature(requested)
+        ):
             raise EvidenceStorageError(
                 "persisted evidence bundle does not match requested contract"
             )
@@ -187,6 +285,15 @@ class SupabaseEvidenceBundleRepository:
         }
         records: list[tuple[str, str, Mapping[str, Any]]] = []
         for item, manifest in zip(bundle.manifest, wire["manifest"], strict=True):
+            canonical_payload = snapshots.get(item.evidence_id, {})
+            if item.item_kind == "passage":
+                canonical_payload = {
+                    "contract_version": "evidence_passage.v1",
+                    "evidence_id": item.evidence_id,
+                    "passage_id": item.passage_id,
+                    "passage_text": item.passage_text,
+                    "passage_sha256": item.passage_hash,
+                }
             records.append(
                 (
                     "iros_evidence_versions",
@@ -215,7 +322,7 @@ class SupabaseEvidenceBundleRepository:
                         "freshness_policy_version": manifest[
                             "freshness_policy_version"
                         ],
-                        "canonical_payload": snapshots.get(item.evidence_id, {}),
+                        "canonical_payload": canonical_payload,
                         "created_at": bundle.created_at.isoformat(),
                     },
                 )

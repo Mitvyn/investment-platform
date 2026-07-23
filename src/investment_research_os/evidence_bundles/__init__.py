@@ -96,6 +96,7 @@ class EvidenceItem:
     passage_id: str | None
     passage_hash: str | None
     freshness: str
+    passage_text: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -180,6 +181,7 @@ class EvidenceBundle:
 class EvidenceBundleSource(Protocol):
     def load(
         self,
+        operator_id: str,
         security_id: str,
         as_of_cutoff: datetime,
     ) -> EvidenceBundleCandidate: ...
@@ -487,6 +489,24 @@ def _prepare_candidate(
             raise EvidenceBundleError(
                 f"unsupported evidence item kind: {item.item_kind}"
             )
+        if item.item_kind == "passage":
+            passage_text = item.passage_text
+            if (
+                item.passage_id is None
+                or item.passage_hash is None
+                or not passage_text
+            ):
+                raise EvidenceBundleError(
+                    "evidence passage content is required"
+                )
+            _require_uuid(item.passage_id, "evidence passage identity")
+            if (
+                hashlib.sha256(passage_text.encode()).hexdigest()
+                != item.passage_hash
+            ):
+                raise EvidenceBundleError(
+                    "evidence passage content hash mismatch"
+                )
         if urlparse(item.canonical_url).scheme != "https":
             raise EvidenceBundleError("source URL must use HTTPS")
     manifest = tuple(
@@ -638,7 +658,11 @@ class EvidenceBundleWorkflow:
         if not run.eligibility.eligible:
             raise EvidenceBundleError("evidence bundle requires eligible research run")
 
-        candidate = self._evidence_source.load(run.security_id, run.as_of_cutoff)
+        candidate = self._evidence_source.load(
+            operator.id,
+            run.security_id,
+            run.as_of_cutoff,
+        )
         prepared = _prepare_candidate(
             run,
             candidate,
@@ -661,6 +685,7 @@ class EvidenceBundleWorkflow:
         if previous_run is None:
             raise ResearchRunNotFound("research run not found")
         candidate = self._evidence_source.load(
+            operator.id,
             previous_run.security_id,
             previous_run.as_of_cutoff,
         )

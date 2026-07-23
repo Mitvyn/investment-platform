@@ -82,10 +82,15 @@ def eligible_snapshot() -> SecurityEligibilitySnapshot:
 
 class EligibleSecuritySource:
     def __init__(self) -> None:
-        self.requests: list[tuple[str, datetime]] = []
+        self.requests: list[tuple[str, str, datetime]] = []
 
-    def load(self, security_id: str, as_of_cutoff: datetime):
-        self.last_request = (security_id, as_of_cutoff)
+    def load(
+        self,
+        operator_id: str,
+        security_id: str,
+        as_of_cutoff: datetime,
+    ):
+        self.last_request = (operator_id, security_id, as_of_cutoff)
         self.requests.append(self.last_request)
         return eligible_snapshot()
 
@@ -95,8 +100,13 @@ class SnapshotSecuritySource(EligibleSecuritySource):
         super().__init__()
         self.snapshot = snapshot
 
-    def load(self, security_id: str, as_of_cutoff: datetime):
-        super().load(security_id, as_of_cutoff)
+    def load(
+        self,
+        operator_id: str,
+        security_id: str,
+        as_of_cutoff: datetime,
+    ):
+        super().load(operator_id, security_id, as_of_cutoff)
         return self.snapshot
 
 
@@ -133,7 +143,10 @@ class ResearchRunWorkflowTests(unittest.TestCase):
             retrieved.workflow_config_version,
             "biotech-moonshot-catalyst-v1",
         )
-        self.assertEqual(source.last_request, (SECURITY_ID, CUTOFF))
+        self.assertEqual(
+            source.last_request,
+            (OPERATOR_ID, SECURITY_ID, CUTOFF),
+        )
 
     def test_identical_request_reuses_run_without_reloading_evidence(self) -> None:
         source = EligibleSecuritySource()
@@ -154,7 +167,7 @@ class ResearchRunWorkflowTests(unittest.TestCase):
         second = workflow.create(AuthenticatedOperator(OPERATOR_ID), request)
 
         self.assertEqual(second, first)
-        self.assertEqual(source.requests, [(SECURITY_ID, CUTOFF)])
+        self.assertEqual(source.requests, [(OPERATOR_ID, SECURITY_ID, CUTOFF)])
 
     def test_equivalent_cutoff_offsets_reuse_same_run(self) -> None:
         source = EligibleSecuritySource()
@@ -179,7 +192,7 @@ class ResearchRunWorkflowTests(unittest.TestCase):
         )
 
         self.assertEqual(second.id, first.id)
-        self.assertEqual(source.requests, [(SECURITY_ID, CUTOFF)])
+        self.assertEqual(source.requests, [(OPERATOR_ID, SECURITY_ID, CUTOFF)])
 
     def test_equivalent_uuid_spellings_reuse_canonical_run_identity(self) -> None:
         source = EligibleSecuritySource()
@@ -204,7 +217,7 @@ class ResearchRunWorkflowTests(unittest.TestCase):
         self.assertEqual(second.id, first.id)
         self.assertEqual(second.operator_id, OPERATOR_ID)
         self.assertEqual(second.security_id, SECURITY_ID)
-        self.assertEqual(source.requests, [(SECURITY_ID, CUTOFF)])
+        self.assertEqual(source.requests, [(OPERATOR_ID, SECURITY_ID, CUTOFF)])
 
     def test_operator_cannot_retrieve_another_operators_run(self) -> None:
         repository = InMemoryResearchRunRepository()

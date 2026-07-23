@@ -236,6 +236,7 @@ def _wire_value(value: object):
 class SecurityEligibilitySource(Protocol):
     def load(
         self,
+        operator_id: str,
         security_id: str,
         as_of_cutoff: datetime,
     ) -> SecurityEligibilitySnapshot: ...
@@ -598,7 +599,7 @@ class ResearchRunWorkflow:
             raise RuntimeError("workflow clock must return a timezone-aware timestamp")
         if cutoff > evaluated_at:
             raise ResearchRunRequestError("as_of_cutoff cannot be in the future")
-        snapshot = self._eligibility_source.load(security_id, cutoff)
+        snapshot = self._eligibility_source.load(operator.id, security_id, cutoff)
         if snapshot.security_id != security_id:
             raise ResearchRunRequestError("security evidence identity mismatch")
         if snapshot.as_of_cutoff != cutoff:

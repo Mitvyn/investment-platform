@@ -257,6 +257,140 @@ def assert_typescript_contract(test, execution, bundle) -> None:
 
 
 class GraderExecutionWorkflowTests(unittest.TestCase):
+    def test_grader_receives_exact_frozen_passages_in_manifest_order(
+        self,
+    ) -> None:
+        bundle = materialized_bundle()
+        bundle_repository = InMemoryEvidenceBundleRepository()
+        bundle_repository.save(bundle)
+        provider = FakeProvider(
+            (
+                ProviderResponse(
+                    provider_request_id="fake-passage-input",
+                    raw_output=accepted_output(
+                        bundle.manifest[0].evidence_id
+                    ),
+                    usage=ProviderUsage(1000, 200, 300, 100, 1300),
+                    resolved_model="gpt-5.6-sol",
+                    system_fingerprint="offline-fingerprint-v1",
+                ),
+            )
+        )
+        workflow = GraderExecutionWorkflow(
+            evidence_bundle_repository=bundle_repository,
+            execution_repository=InMemoryGraderExecutionRepository(),
+            budget_ledger=InMemoryBudgetLedger(
+                hard_limit_usd=Decimal("5.00")
+            ),
+            provider=provider,
+            clock=lambda: datetime(2026, 7, 22, 3, 0, tzinfo=UTC),
+        )
+
+        workflow.execute(
+            AuthenticatedOperator(bundle.operator_id),
+            approved_request(bundle.id),
+        )
+
+        passages = provider.requests[0].logical_input[
+            "evidence_passages"
+        ]
+        self.assertEqual(
+            [passage["evidence_id"] for passage in passages],
+            [
+                item.evidence_id
+                for item in bundle.manifest
+                if item.item_kind == "passage"
+            ],
+        )
+        self.assertEqual(
+            passages[0]["passage_text"],
+            "exact liquidity passage",
+        )
+        self.assertEqual(
+            passages[0]["passage_sha256"],
+            bundle.manifest[0].passage_hash,
+        )
+
+    def test_missing_frozen_passage_content_blocks_provider_call(self) -> None:
+        bundle = materialized_bundle()
+        bundle = replace(
+            bundle,
+            manifest=tuple(
+                replace(item, passage_text=None)
+                if item.item_kind == "passage"
+                else item
+                for item in bundle.manifest
+            ),
+        )
+        bundle_repository = InMemoryEvidenceBundleRepository()
+        bundle_repository.save(bundle)
+        provider = FakeProvider(
+            (
+                ProviderResponse(
+                    provider_request_id="must-not-run",
+                    raw_output=accepted_output(
+                        bundle.manifest[0].evidence_id
+                    ),
+                    usage=ProviderUsage(1000, 200, 300, 100, 1300),
+                    resolved_model="gpt-5.6-sol",
+                    system_fingerprint="offline-fingerprint-v1",
+                ),
+            )
+        )
+
+        execution = GraderExecutionWorkflow(
+            evidence_bundle_repository=bundle_repository,
+            execution_repository=InMemoryGraderExecutionRepository(),
+            budget_ledger=InMemoryBudgetLedger(
+                hard_limit_usd=Decimal("5.00")
+            ),
+            provider=provider,
+            clock=lambda: datetime(2026, 7, 22, 3, 0, tzinfo=UTC),
+        ).execute(
+            AuthenticatedOperator(bundle.operator_id),
+            approved_request(bundle.id),
+        )
+
+        self.assertEqual(execution.execution_state, "not_executed")
+        self.assertIn(
+            "evidence_passage_content_unavailable",
+            execution.blocking_reasons,
+        )
+        self.assertEqual(provider.requests, [])
+
+    def test_mismatched_frozen_passage_hash_blocks_provider_call(self) -> None:
+        bundle = materialized_bundle()
+        bundle = replace(
+            bundle,
+            manifest=(
+                replace(bundle.manifest[0], passage_text="tampered passage"),
+                *bundle.manifest[1:],
+            ),
+        )
+        bundle_repository = InMemoryEvidenceBundleRepository()
+        bundle_repository.save(bundle)
+        provider = FakeProvider(())
+
+        execution = GraderExecutionWorkflow(
+            evidence_bundle_repository=bundle_repository,
+            execution_repository=InMemoryGraderExecutionRepository(),
+            budget_ledger=InMemoryBudgetLedger(
+                hard_limit_usd=Decimal("5.00")
+            ),
+            provider=provider,
+            clock=lambda: datetime(2026, 7, 22, 3, 0, tzinfo=UTC),
+        ).execute(
+            AuthenticatedOperator(bundle.operator_id),
+            approved_request(bundle.id),
+        )
+
+        self.assertEqual(execution.execution_state, "not_executed")
+        self.assertIn(
+            "evidence_passage_hash_mismatch",
+            execution.blocking_reasons,
+        )
+        self.assertEqual(provider.requests, [])
+
     def test_frozen_valuation_snapshot_is_part_of_every_grader_logical_input(
         self,
     ) -> None:
@@ -1019,6 +1153,48 @@ class GraderExecutionWorkflowTests(unittest.TestCase):
 
         first = workflow.execute(operator, original)
         second = workflow.execute(operator, drifted)
+
+        self.assertNotEqual(
+            first.execution_identity,
+            second.execution_identity,
+        )
+        self.assertEqual(len(provider.requests), 2)
+
+    def test_input_schema_change_creates_new_execution_identity(self) -> None:
+        bundle = materialized_bundle()
+        bundle_repository = InMemoryEvidenceBundleRepository()
+        bundle_repository.save(bundle)
+        response = ProviderResponse(
+            provider_request_id="fake-input-schema-identity",
+            raw_output=accepted_output(bundle.manifest[0].evidence_id),
+            usage=ProviderUsage(1000, 200, 300, 100, 1300),
+            resolved_model="gpt-5.6-sol",
+            system_fingerprint="offline-fingerprint-v1",
+        )
+        provider = FakeProvider((response, response))
+        workflow = GraderExecutionWorkflow(
+            evidence_bundle_repository=bundle_repository,
+            execution_repository=InMemoryGraderExecutionRepository(),
+            budget_ledger=InMemoryBudgetLedger(
+                hard_limit_usd=Decimal("1.00")
+            ),
+            provider=provider,
+            clock=lambda: datetime(2026, 7, 22, 1, 0, tzinfo=UTC),
+        )
+        operator = AuthenticatedOperator(bundle.operator_id)
+        request = approved_request(bundle.id)
+
+        first = workflow.execute(operator, request)
+        second = workflow.execute(
+            operator,
+            replace(
+                request,
+                prompt=replace(
+                    request.prompt,
+                    input_schema_version="grader-input-v2",
+                ),
+            ),
+        )
 
         self.assertNotEqual(
             first.execution_identity,

@@ -638,6 +638,8 @@ def _gate_contract(execution: GraderExecution) -> dict[str, object]:
             "output_schema_mismatch",
             "retry_policy_invalid",
             "evidence_bundle_not_grader_ready",
+            "evidence_passage_content_unavailable",
+            "evidence_passage_hash_mismatch",
             "grader_not_eligible",
         },
         "retention_policy_approved": {
@@ -901,6 +903,9 @@ class GraderExecutionWorkflow:
             "rubric_version": request.grader.rubric_version,
             "schema_version": request.grader.output_schema_version,
             "prompt_version": request.prompt.prompt_version,
+            "prompt_input_schema_version": (
+                request.prompt.input_schema_version
+            ),
             "prompt_content_sha256": request.prompt.content_sha256,
             "evaluation_corpus_sha256": (
                 request.prompt.evaluation_corpus_sha256
@@ -936,6 +941,14 @@ class GraderExecutionWorkflow:
             request,
             gate_time,
         )
+        blocking_reasons = tuple(
+            dict.fromkeys(
+                (
+                    *blocking_reasons,
+                    *_evidence_passage_blocking_reasons(bundle),
+                )
+            )
+        )
         if blocking_reasons:
             return self._execution_repository.save(
                 _not_executed_execution(
@@ -950,6 +963,18 @@ class GraderExecutionWorkflow:
 
         logical_input = {
             "bundle": bundle.as_dict(),
+            "evidence_passages": [
+                {
+                    "evidence_id": item.evidence_id,
+                    "evidence_version_id": item.evidence_version_id,
+                    "passage_id": item.passage_id,
+                    "source_locator": item.source_locator,
+                    "passage_sha256": item.passage_hash,
+                    "passage_text": item.passage_text,
+                }
+                for item in bundle.manifest
+                if item.item_kind == "passage"
+            ],
             "valuation_snapshot": (
                 None
                 if valuation_snapshot is None
@@ -1906,6 +1931,28 @@ def _pre_call_blocking_reasons(
     if request.policy.max_attempts != 2:
         reasons.append("retry_policy_invalid")
     return tuple(reasons)
+
+
+def _evidence_passage_blocking_reasons(
+    bundle: EvidenceBundle,
+) -> tuple[str, ...]:
+    reasons: list[str] = []
+    for item in bundle.manifest:
+        if item.item_kind != "passage":
+            continue
+        if (
+            not item.passage_id
+            or not item.passage_hash
+            or not item.passage_text
+        ):
+            reasons.append("evidence_passage_content_unavailable")
+            continue
+        if (
+            hashlib.sha256(item.passage_text.encode()).hexdigest()
+            != item.passage_hash
+        ):
+            reasons.append("evidence_passage_hash_mismatch")
+    return tuple(dict.fromkeys(reasons))
 
 
 def _maximum_cost(

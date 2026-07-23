@@ -109,6 +109,7 @@ def sec_item() -> EvidenceItem:
         passage_id="61a33483-692e-5080-9b58-f3f994c5326f",
         passage_hash=sha256("exact liquidity passage"),
         freshness="current",
+        passage_text="exact liquidity passage",
     )
 
 
@@ -146,8 +147,9 @@ def required_source_items() -> tuple[EvidenceItem, ...]:
                 source_locator=f"{source_class} primary record",
                 canonical_url=f"https://example.com/{source_class}/record",
                 content_hash=sha256(f"{source_class} document"),
-                passage_id=None,
-                passage_hash=None,
+                passage_id=evidence_id,
+                passage_hash=sha256(f"{source_class} primary passage"),
+                passage_text=f"{source_class} primary passage",
             )
             for source_class, evidence_id, version_id in source_data
         ),
@@ -157,14 +159,15 @@ def required_source_items() -> tuple[EvidenceItem, ...]:
 class FixedBundleSource:
     def __init__(self, candidate: EvidenceBundleCandidate) -> None:
         self.candidate = candidate
-        self.requests: list[tuple[str, datetime]] = []
+        self.requests: list[tuple[str, str, datetime]] = []
 
     def load(
         self,
+        operator_id: str,
         security_id: str,
         as_of_cutoff: datetime,
     ) -> EvidenceBundleCandidate:
-        self.requests.append((security_id, as_of_cutoff))
+        self.requests.append((operator_id, security_id, as_of_cutoff))
         return self.candidate
 
 
@@ -204,7 +207,10 @@ class EvidenceBundleWorkflowTests(unittest.TestCase):
         self.assertEqual(materialized.security_id, SECURITY_ID)
         self.assertEqual(len(materialized.content_hash), 64)
         self.assertEqual(materialized.manifest[0].evidence_id, sec_item().evidence_id)
-        self.assertEqual(source.requests, [(SECURITY_ID, CUTOFF)])
+        self.assertEqual(
+            source.requests,
+            [(OPERATOR_ID, SECURITY_ID, CUTOFF)],
+        )
 
     def test_retrieval_order_does_not_change_manifest_order_or_hash(self) -> None:
         issuer = replace(
@@ -217,6 +223,7 @@ class EvidenceBundleWorkflowTests(unittest.TestCase):
             content_hash=sha256("issuer release"),
             passage_id="296ff9e0-a779-5948-9897-038197bfce44",
             passage_hash=sha256("exact pipeline passage"),
+            passage_text="exact pipeline passage",
         )
         run_repository = InMemoryResearchRunRepository()
         run_repository.save(eligible_run())
@@ -272,7 +279,10 @@ class EvidenceBundleWorkflowTests(unittest.TestCase):
         second = workflow.materialize(operator, RUN_ID)
 
         self.assertEqual(second, first)
-        self.assertEqual(source.requests, [(SECURITY_ID, CUTOFF)])
+        self.assertEqual(
+            source.requests,
+            [(OPERATOR_ID, SECURITY_ID, CUTOFF)],
+        )
 
     def test_post_cutoff_evidence_is_excluded_but_later_retrieval_is_retained(
         self,
@@ -484,6 +494,34 @@ class EvidenceBundleWorkflowTests(unittest.TestCase):
         with self.assertRaisesRegex(
             ValueError,
             "duplicate evidence manifest identity",
+        ):
+            workflow.materialize(AuthenticatedOperator(OPERATOR_ID), RUN_ID)
+
+    def test_passage_text_must_match_its_frozen_hash(self) -> None:
+        items = required_source_items()
+        run_repository = InMemoryResearchRunRepository()
+        run_repository.save(eligible_run())
+        workflow = EvidenceBundleWorkflow(
+            research_run_repository=run_repository,
+            bundle_repository=InMemoryEvidenceBundleRepository(),
+            evidence_source=FixedBundleSource(
+                EvidenceBundleCandidate(
+                    security_id=SECURITY_ID,
+                    as_of_cutoff=CUTOFF,
+                    evidence_policy_version="biotech-primary-evidence-v1",
+                    freshness_policy_version="biotech-evidence-freshness-v1",
+                    items=(
+                        replace(items[0], passage_text="tampered passage"),
+                        *items[1:],
+                    ),
+                )
+            ),
+            clock=lambda: CREATED_AT,
+        )
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "evidence passage content hash mismatch",
         ):
             workflow.materialize(AuthenticatedOperator(OPERATOR_ID), RUN_ID)
 
@@ -747,6 +785,7 @@ class EvidenceBundleWorkflowTests(unittest.TestCase):
             evidence_version_id="9b596d13-290d-5fe5-801f-e5e143517a74",
             content_hash=sha256("corrected filing document"),
             passage_hash=sha256("corrected exact liquidity passage"),
+            passage_text="corrected exact liquidity passage",
         )
         source.candidate = replace(
             source.candidate,

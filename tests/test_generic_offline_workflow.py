@@ -101,7 +101,12 @@ class FixtureEligibilitySource:
     def __init__(self, value: Mapping[str, object]) -> None:
         self.value = value
 
-    def load(self, security_id: str, as_of_cutoff: datetime):
+    def load(
+        self,
+        operator_id: str,
+        security_id: str,
+        as_of_cutoff: datetime,
+    ):
         security = self.value["security"]
         case_id = str(self.value["case_id"])
         evidence = {
@@ -173,6 +178,7 @@ def _evidence_items(value: Mapping[str, object]) -> tuple[EvidenceItem, ...]:
             passage_id=_stable_uuid(case_id, f"passage:{source_class}"),
             passage_hash=_sha256(f"{seed}:{source_class}:passage"),
             freshness="current",
+            passage_text=f"{seed}:{source_class}:passage",
         )
         for source_class in SOURCE_CLASSES
     )
@@ -182,7 +188,12 @@ class FixtureEvidenceSource:
     def __init__(self, value: Mapping[str, object]) -> None:
         self.value = value
 
-    def load(self, security_id: str, as_of_cutoff: datetime):
+    def load(
+        self,
+        operator_id: str,
+        security_id: str,
+        as_of_cutoff: datetime,
+    ):
         return EvidenceBundleCandidate(
             security_id=security_id,
             as_of_cutoff=as_of_cutoff,
