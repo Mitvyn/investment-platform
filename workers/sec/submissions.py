@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime
 import hashlib
 import json
+import re
 from typing import Callable, Mapping
 
 from workers.primary_sources.models import PrimarySourceRequest
@@ -52,6 +53,14 @@ class SecSubmissionFiling:
 
 
 @dataclass(frozen=True, slots=True)
+class SecSubmissionHistoryFile:
+    name: str
+    filing_count: int
+    filing_from: date
+    filing_to: date
+
+
+@dataclass(frozen=True, slots=True)
 class SecSubmissionsSnapshot:
     operator_id: str
     security_id: str
@@ -64,6 +73,8 @@ class SecSubmissionsSnapshot:
     content_sha256: str
     included_filings: tuple[SecSubmissionFiling, ...]
     excluded_filings: tuple[SecSubmissionFiling, ...]
+    history_files: tuple[SecSubmissionHistoryFile, ...]
+    submission_history_complete: bool
 
 
 class SecSubmissionsCollector:
@@ -114,6 +125,7 @@ class SecSubmissionsCollector:
         if not isinstance(sec_issuer_name, str) or not sec_issuer_name.strip():
             raise SecSubmissionsError("SEC submissions issuer name is invalid")
         recent = self._recent(payload)
+        history_files, history_complete = self._history(payload)
         filings = tuple(
             self._filing(
                 request=request,
@@ -140,6 +152,8 @@ class SecSubmissionsCollector:
             excluded_filings=tuple(
                 filing for filing in filings if not filing.valid_at_cutoff
             ),
+            history_files=history_files,
+            submission_history_complete=history_complete,
         )
 
     @staticmethod
@@ -168,6 +182,62 @@ class SecSubmissionsCollector:
         if len(lengths) != 1:
             raise SecSubmissionsError("SEC submissions invalid recent filings")
         return columns
+
+    @staticmethod
+    def _history(
+        payload: Mapping[str, object],
+    ) -> tuple[tuple[SecSubmissionHistoryFile, ...], bool]:
+        filings = payload.get("filings")
+        files = filings.get("files") if isinstance(filings, dict) else None
+        if files is None:
+            return (), False
+        if not isinstance(files, list):
+            raise SecSubmissionsError(
+                "SEC submissions history files are invalid"
+            )
+        history: list[SecSubmissionHistoryFile] = []
+        for value in files:
+            if not isinstance(value, dict):
+                raise SecSubmissionsError(
+                    "SEC submissions history files are invalid"
+                )
+            name = value.get("name")
+            filing_count = value.get("filingCount")
+            if (
+                not isinstance(name, str)
+                or re.fullmatch(
+                    r"CIK\d{10}-submissions-\d{3}\.json",
+                    name,
+                )
+                is None
+                or not isinstance(filing_count, int)
+                or isinstance(filing_count, bool)
+                or filing_count < 0
+            ):
+                raise SecSubmissionsError(
+                    "SEC submissions history files are invalid"
+                )
+            filing_from = SecSubmissionsCollector._date(
+                value.get("filingFrom"),
+                required=True,
+            )
+            filing_to = SecSubmissionsCollector._date(
+                value.get("filingTo"),
+                required=True,
+            )
+            if filing_from > filing_to:
+                raise SecSubmissionsError(
+                    "SEC submissions history files are invalid"
+                )
+            history.append(
+                SecSubmissionHistoryFile(
+                    name=name,
+                    filing_count=filing_count,
+                    filing_from=filing_from,
+                    filing_to=filing_to,
+                )
+            )
+        return tuple(history), not history
 
     @staticmethod
     def _filing(
@@ -247,6 +317,7 @@ class SecSubmissionsCollector:
 
 __all__ = [
     "SecSubmissionFiling",
+    "SecSubmissionHistoryFile",
     "SecSubmissionsCollector",
     "SecSubmissionsError",
     "SecSubmissionsSnapshot",

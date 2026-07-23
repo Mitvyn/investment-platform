@@ -8,6 +8,7 @@ import unittest
 PRODUCTION_FILES = (
     Path("workers/primary_sources/models.py"),
     Path("workers/primary_sources/temporal.py"),
+    Path("workers/sec/selection.py"),
     Path("workers/sec/submissions.py"),
 )
 FORBIDDEN_FIXTURE_TERMS = (

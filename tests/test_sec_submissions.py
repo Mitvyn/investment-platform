@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 import hashlib
+import json
 from pathlib import Path
 import unittest
 
@@ -92,7 +93,11 @@ class SecSubmissionsCollectorTests(unittest.TestCase):
         self.assertEqual(snapshot.content_sha256, hashlib.sha256(body).hexdigest())
         self.assertEqual(
             [item.accession_number for item in snapshot.included_filings],
-            ["0001601830-26-000040", "0001601830-26-000041"],
+            [
+                "0001601830-26-000040",
+                "0001601830-26-000041",
+                "0001601830-26-000030",
+            ],
         )
         self.assertEqual(
             [item.reason_code for item in snapshot.excluded_filings],
@@ -110,6 +115,8 @@ class SecSubmissionsCollectorTests(unittest.TestCase):
                 )
             ],
         )
+        self.assertTrue(snapshot.submission_history_complete)
+        self.assertEqual(snapshot.history_files, ())
 
     def test_same_collector_handles_materially_different_cik_without_symbol(
         self,
@@ -223,6 +230,44 @@ class SecSubmissionsCollectorTests(unittest.TestCase):
                     issuer_name="Single Asset Therapeutics, Inc.",
                 )
             )
+
+    def test_discovery_exposes_unfetched_submission_history_chunks(self) -> None:
+        payload = json.loads(
+            (FIXTURE_ROOT / "rxrx-submissions.json").read_text()
+        )
+        payload["filings"]["files"] = [
+            {
+                "name": "CIK0001601830-submissions-001.json",
+                "filingCount": 42,
+                "filingFrom": "2022-01-01",
+                "filingTo": "2024-12-31",
+            }
+        ]
+        body = json.dumps(payload).encode()
+        url = "https://data.sec.gov/submissions/CIK0001601830.json"
+        collector = SecSubmissionsCollector(
+            SecSettings(
+                user_agent="Investment Research OS operator@example.com",
+                base_url="https://data.sec.gov",
+            ),
+            transport=FixtureTransport({url: body}),
+            clock=lambda: datetime(2026, 5, 7, 1, 0, tzinfo=UTC),
+        )
+
+        result = collector.discover(
+            request(
+                security_id="f594edb2-7fff-4e40-9c26-2c06bcbecb91",
+                cik="0001601830",
+                issuer_name="Recursion Pharmaceuticals, Inc.",
+            )
+        )
+
+        self.assertFalse(result.submission_history_complete)
+        self.assertEqual(len(result.history_files), 1)
+        self.assertEqual(
+            result.history_files[0].name,
+            "CIK0001601830-submissions-001.json",
+        )
 
 
 if __name__ == "__main__":
