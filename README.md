@@ -1,23 +1,29 @@
 # Investment Research OS
 
-Private, evidence-first investment discussion organizer. Early prototype exists to support a Reddit Data API access request; it is not a trading bot, public product, or investment-advice service.
+Private, evidence-first research workflow for auditable security analysis. It is
+not a trading bot, public product, or investment-advice service.
 
 ## Status
 
-**Phase 1 complete; Phase 2 implementation in progress.** Reddit remains
-disabled unless its operator receives explicit approval and configures OAuth
-credentials. The RXRX workspace now has SEC evidence plus local issuer,
-financial, catalyst, risk, Watchlist, source-health, and gated market-context
-paths. No model is called.
+**Phase 1 complete; Phase 2 implementation in progress.** The RXRX workspace
+has SEC evidence plus local issuer, financial, catalyst, risk, Watchlist,
+source-health, and gated market-context paths. Model execution remains
+policy-gated.
 
-Reddit's current policies require approval for API access and direct developers to Devvit first. This external app needs a private off-Reddit interface that combines selected discussions with SEC filings, issuer disclosures, and market data. Copy-ready application answers and data controls are maintained in the local canonical project documentation.
+The Reddit Data API request was rejected on 2026-07-25. Reddit collection is
+retired from the active product and runtime. General operator-initiated web
+search may incidentally surface a Reddit lead, but the system does not ingest,
+store, score, summarize, or cite Reddit content. A useful lead must be resolved
+to its original primary source and independently collected before it can enter
+an evidence bundle.
 
 ## Purpose
 
-Investment Research OS aims to turn noisy public discussion into auditable research artifacts:
+Investment Research OS turns primary-source evidence into auditable research
+artifacts:
 
 ```text
-approved sources -> deterministic filters -> claims -> evidence -> private ticker workspace
+primary sources -> deterministic validation -> frozen evidence -> committee -> thesis
 ```
 
 Every conclusion must link to evidence and its original source. Model output is analysis, never source-of-truth data. The full product boundary lives at `docs/01-Product/PRD - Investment Research OS v1.md`.
@@ -47,14 +53,15 @@ Product name remains Investment Research OS. Target repository name is
 ```text
 apps/dashboard
 apps/api
-workers/{reddit,sec,news,market,llm,embeddings}
+workers/{sec,issuer,market,llm,embeddings}
 packages/{shared,prompts,models,types}
 database/{migrations,schema}
 docs
 ```
 
-Current `src/investment_research_os` remains narrow Reddit approval tracer.
-Target package tree appears only as implementation reaches each boundary.
+Current `src/investment_research_os` contains deterministic research workflow
+domains. Target package tree appears only as implementation reaches each
+boundary.
 
 V1 uses an existing shared personal Supabase project. Investment Research OS
 tables, views, functions, queues, Cron jobs, and types use `iros_`; Storage
@@ -88,17 +95,15 @@ Phase 2 ticker context:
   authenticated Supabase paths;
 - keeps provider and backend secret credentials out of the dashboard.
 
-Reddit approval tracer:
+Discovery boundary:
 
-- OAuth application-only authentication with a GET-only client
-- unique operator-supplied User-Agent
-- one bounded `/r/{subreddit}/new` request, maximum 100 items
-- no scraping, retries, polling loop, persistence, or write actions
-- body text omitted unless `--include-body` is supplied
-- author/account fields omitted from normalized output
-- rate-limit headers observed; collection stops when quota is exhausted
-- typed configuration and API failures without secret logging
-- injected HTTP transport for offline tests
+- operator-led web search is outside the automated research run;
+- Reddit results are untrusted discovery leads only;
+- no Reddit API, scraping, targeted automated search, persistence, signals, or
+  model input;
+- only independently retrieved SEC, FDA, ClinicalTrials.gov, issuer, or other
+  approved primary sources may enter a frozen evidence bundle;
+- an unverifiable lead remains an evidence gap.
 
 ## Local setup
 
@@ -111,25 +116,9 @@ python3 -m pip install -e .
 cp .env.example .env
 ```
 
-Edit `.env`, then load it into shell:
-
-```bash
-set -a
-source .env
-set +a
-iros fetch-new --subreddit stocks --limit 5
-```
-
-Keep `REDDIT_API_APPROVED=false` until Reddit grants explicit approval. Set it
-to `true` only after approved credentials and scope are confirmed.
-
-Include post body only when approved processing needs it:
-
-```bash
-iros fetch-new --subreddit stocks --limit 5 --include-body
-```
-
-Never commit `.env` or command output containing Reddit content.
+Edit `.env` only for active primary-source, market-data, database, and
+policy-approved model integrations. Never commit `.env` or captured source
+content.
 
 ### Phase 1 RXRX tracer
 
@@ -302,22 +291,22 @@ supabase/migrations/           `iros_` evidence, context, RLS, Watchlist
 workers/sec/                   injectable SEC collector and persistence
 workers/issuer/                official release, financial, catalyst, risk path
 workers/market/                personal-use Yahoo Finance/yfinance adapter
-src/investment_research_os/  read-only OAuth client and CLI
+src/investment_research_os/  deterministic research workflow domains
 tests/                         offline contract and migration tests
 ```
 
 ## Compliance boundary
 
-- No API access before explicit Reddit approval.
-- No automated posting, commenting, voting, messaging, or moderation.
-- No Reddit scraping or access-control circumvention.
-- No public redistribution or sale of Reddit data.
-- No model training on Reddit content.
-- No user profiling, sensitive-trait inference, or identity matching.
-- AI inference remains disabled until approved scope and provider controls are confirmed.
-- Removed/deleted content must be purged from local cache and derived records.
+- No Reddit API access, scraping, targeted automated search, collection, or
+  persistence under current scope.
+- Reddit text, metadata, links, snippets, scores, sentiment, and user identity
+  never enter evidence bundles or model inputs.
+- General operator-led web discovery may produce an untrusted lead only.
+- Only the independently retrieved original primary source may be validated and
+  cited.
 
-See Reddit's [Responsible Builder Policy](https://support.reddithelp.com/hc/en-us/articles/42728983564564-Responsible-Builder-Policy), [Developer Platform and Data API guidance](https://support.reddithelp.com/hc/en-us/articles/14945211791892-Developer-Platform-Accessing-Reddit-Data), and [Data API Terms](https://redditinc.com/policies/data-api-terms).
+The retired historical proposal remains documented under
+`docs/02-Engineering/reddit-api-integration.md`.
 
 ## Disclaimer
 

@@ -22,7 +22,6 @@ data/*.json
 # Concurrent local draft preserved outside public Investment Research OS repo.
 /src/signal_research/
 /tests/test_config.py
-/tests/test_reddit_client.py
 /tests/test_storage.py
 /tests/test_tickers.py
 

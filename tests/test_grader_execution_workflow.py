@@ -506,6 +506,46 @@ class GraderExecutionWorkflowTests(unittest.TestCase):
         self.assertEqual(budget.reserved_usd, Decimal("0"))
         assert_typescript_contract(self, execution, bundle)
 
+    def test_discovery_only_source_in_persisted_bundle_blocks_provider_call(
+        self,
+    ) -> None:
+        bundle = materialized_bundle()
+        malformed_item = replace(
+            bundle.manifest[0],
+            source_class="issuer",
+            canonical_url=(
+                "https://www.reddit.com/r/biotech/comments/example/"
+                "claimed_primary_document/"
+            ),
+        )
+        malformed_bundle = replace(
+            bundle,
+            manifest=(malformed_item, *bundle.manifest[1:]),
+        )
+        bundle_repository = InMemoryEvidenceBundleRepository()
+        bundle_repository.save(malformed_bundle)
+        provider = FakeProvider(())
+        budget = InMemoryBudgetLedger(hard_limit_usd=Decimal("1.00"))
+
+        execution = GraderExecutionWorkflow(
+            evidence_bundle_repository=bundle_repository,
+            execution_repository=InMemoryGraderExecutionRepository(),
+            budget_ledger=budget,
+            provider=provider,
+            clock=lambda: datetime(2026, 7, 22, 1, 0, tzinfo=UTC),
+        ).execute(
+            AuthenticatedOperator(malformed_bundle.operator_id),
+            approved_request(malformed_bundle.id),
+        )
+
+        self.assertEqual(execution.execution_state, "not_executed")
+        self.assertEqual(
+            execution.blocking_reasons,
+            ("unapproved_evidence_source",),
+        )
+        self.assertEqual(provider.requests, [])
+        self.assertEqual(budget.reserved_usd, Decimal("0"))
+
     def test_production_price_card_without_expiry_fails_closed(self) -> None:
         bundle = materialized_bundle()
         bundle_repository = InMemoryEvidenceBundleRepository()

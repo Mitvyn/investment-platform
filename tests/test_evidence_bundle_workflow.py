@@ -579,6 +579,40 @@ class EvidenceBundleWorkflowTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "source URL must use HTTPS"):
             workflow.materialize(AuthenticatedOperator(OPERATOR_ID), RUN_ID)
 
+    def test_discovery_only_reddit_url_cannot_masquerade_as_primary_evidence(
+        self,
+    ) -> None:
+        run_repository = InMemoryResearchRunRepository()
+        run_repository.save(eligible_run())
+        mislabeled_discussion = replace(
+            sec_item(),
+            source_class="issuer",
+            canonical_url=(
+                "https://www.reddit.com/r/biotech/comments/example/"
+                "claimed_approval_document/"
+            ),
+        )
+        workflow = EvidenceBundleWorkflow(
+            research_run_repository=run_repository,
+            bundle_repository=InMemoryEvidenceBundleRepository(),
+            evidence_source=FixedBundleSource(
+                EvidenceBundleCandidate(
+                    security_id=SECURITY_ID,
+                    as_of_cutoff=CUTOFF,
+                    evidence_policy_version="biotech-primary-evidence-v1",
+                    freshness_policy_version="biotech-evidence-freshness-v1",
+                    items=(mislabeled_discussion,),
+                )
+            ),
+            clock=lambda: CREATED_AT,
+        )
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "discovery-only source cannot enter evidence bundle",
+        ):
+            workflow.materialize(AuthenticatedOperator(OPERATOR_ID), RUN_ID)
+
     def test_versioned_evidence_policy_declares_blocking_source_requirements(
         self,
     ) -> None:

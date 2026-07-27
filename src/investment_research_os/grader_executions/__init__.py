@@ -10,7 +10,9 @@ from typing import Callable, Mapping, Protocol
 
 from investment_research_os.evidence_bundles import (
     EvidenceBundle,
+    EvidenceBundleError,
     EvidenceBundleRepository,
+    validate_evidence_source_url,
 )
 from investment_research_os.ids import stable_id
 from investment_research_os.production_execution import (
@@ -634,6 +636,7 @@ def _gate_contract(execution: GraderExecution) -> dict[str, object]:
         "config_approved": {
             "model_config_inactive",
             "source_processing_not_approved",
+            "unapproved_evidence_source",
             "prompt_inactive",
             "output_schema_mismatch",
             "retry_policy_invalid",
@@ -931,8 +934,15 @@ class GraderExecutionWorkflow:
             return existing
 
         gate_time = self._clock()
+        bundle_sources_approved = True
+        try:
+            for item in bundle.manifest:
+                validate_evidence_source_url(item.canonical_url)
+        except EvidenceBundleError:
+            bundle_sources_approved = False
         blocking_reasons = _pre_call_blocking_reasons(
             bundle.grader_ready,
+            bundle_sources_approved,
             request,
             gate_time,
         )
@@ -1795,12 +1805,15 @@ def _validation_error_code(error: GraderExecutionError) -> str:
 
 def _pre_call_blocking_reasons(
     bundle_grader_ready: bool,
+    bundle_sources_approved: bool,
     request: GraderExecutionRequest,
     checked_at: datetime,
 ) -> tuple[str, ...]:
     reasons: list[str] = []
     if not bundle_grader_ready:
         reasons.append("evidence_bundle_not_grader_ready")
+    if not bundle_sources_approved:
+        reasons.append("unapproved_evidence_source")
     if not request.grader.eligible:
         reasons.append("grader_not_eligible")
     if not request.model.active:
