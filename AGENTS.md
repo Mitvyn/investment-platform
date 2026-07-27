@@ -36,6 +36,16 @@
 - Use lowercase `snake_case` identifiers. Never issue schema-wide grants in shared `public`; grant explicit `iros_` objects only.
 - Enable RLS on exposed `iros_` tables with operator ownership predicates.
 
+## Git workflow
+
+- Use `/Users/mwong/Personal/investment-platform` and branch `development` for
+  normal active development.
+- Create a separate worktree only for parallel agent work or isolated
+  production/release preparation.
+- Remove temporary worktrees after their commits are integrated and validated.
+- Keep `main` as the production baseline. Never merge or push without explicit
+  operator instruction.
+
 ## Documentation
 
 - `docs` is an ignored local symlink to the canonical MeowingVault project root.
