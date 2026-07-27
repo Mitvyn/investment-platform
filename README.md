@@ -207,7 +207,8 @@ sizing, allocation, or execution logic.
 stores one year of unadjusted completed daily OHLCV as immutable series and
 bars. If market is open, current partial session is excluded.
 
-No live market request has been made. Yahoo Finance via yfinance is unofficial,
+Authorized live ingestion on 2026-07-23 finalized personal-use OHLCV series for
+FRVO, GANX, OTLK, RXRX, and SLS. Yahoo Finance via yfinance remains unofficial,
 personal-use data with no SLA. It supports the private Ticker Context only and
 does not satisfy the licensed, venue-official `valuation_snapshot.v1` readiness
 gate.
@@ -217,14 +218,14 @@ Phase 2 migrations:
 - `20260717021804_iros_phase2_ticker_context.sql` was applied on 2026-07-17;
 - operator reports `20260717023818_iros_phase2_watchlist_risks.sql` applied on
   2026-07-17; issuer verification confirms risk persistence.
-- `20260722024500_iros_yfinance_market_provider.sql` is prepared and unapplied.
-- `20260722050000_iros_market_series.sql` is prepared and unapplied. It adds
+- operator reports `20260722024500_iros_yfinance_market_provider.sql` applied.
+- operator reports `20260722050000_iros_market_series.sql` applied. It adds
   stable-security market series/bars, read view, and Watchlist identity bridge.
 - `20260722080603_iros_private_holdings.sql` was applied on 2026-07-22. It adds
   owner-scoped immutable holdings snapshots and authenticated latest view.
-- `20260722120000_iros_market_series_atomic_finalize.sql` is prepared and
-  unapplied. It adds owner-composite links plus draft/finalize OHLCV persistence.
-- `20260722204027_iros_stable_security_context.sql` is prepared and unapplied.
+- operator reports `20260722120000_iros_market_series_atomic_finalize.sql`
+  applied. It adds owner-composite links plus draft/finalize OHLCV persistence.
+- operator reports `20260722204027_iros_stable_security_context.sql` applied.
   It materializes stable research-run identity and security-keyed context views.
 
 The operator applies migrations. Agents must not push, query, ingest, run
