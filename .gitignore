@@ -2,6 +2,7 @@
 .env
 .env.local
 .env.*.local
+.venv
 .venv/
 __pycache__/
 *.egg-info/
@@ -16,6 +17,7 @@ supabase/.temp/
 *.tsbuildinfo
 build/
 dist/
+apps/dashboard/desktop/worker/
 data/*.json
 !data/.gitkeep
 

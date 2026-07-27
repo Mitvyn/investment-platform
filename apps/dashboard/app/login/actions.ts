@@ -10,10 +10,9 @@ import {
   sendOperatorOtp,
   verifyOperatorOtp,
 } from "./otp-auth";
+import { pendingOtpCookieOptions } from "./otp-cookie";
 
 const PENDING_EMAIL_COOKIE = "iros_pending_otp_email";
-const PENDING_EMAIL_MAX_AGE_SECONDS = 10 * 60;
-const COOKIE_PATH = "/login";
 
 function loginError(message: string, sent = false): never {
   const state = sent ? "sent=1&" : "";
@@ -27,23 +26,18 @@ async function pendingEmail(): Promise<string | null> {
 
 async function rememberPendingEmail(email: string): Promise<void> {
   const cookieStore = await cookies();
-  cookieStore.set(PENDING_EMAIL_COOKIE, email, {
-    httpOnly: true,
-    maxAge: PENDING_EMAIL_MAX_AGE_SECONDS,
-    path: COOKIE_PATH,
-    sameSite: "lax",
-    secure: process.env.NODE_ENV === "production",
-  });
+  cookieStore.set(
+    PENDING_EMAIL_COOKIE,
+    email,
+    pendingOtpCookieOptions(process.env),
+  );
 }
 
 async function clearPendingEmail(): Promise<void> {
   const cookieStore = await cookies();
   cookieStore.set(PENDING_EMAIL_COOKIE, "", {
-    httpOnly: true,
+    ...pendingOtpCookieOptions(process.env),
     maxAge: 0,
-    path: COOKIE_PATH,
-    sameSite: "lax",
-    secure: process.env.NODE_ENV === "production",
   });
 }
 
