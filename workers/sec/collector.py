@@ -38,6 +38,7 @@ class BytesResponse:
     body: bytes
     status: int
     headers: Mapping[str, str]
+    final_url: str | None = None
 
 
 class BytesTransport(Protocol):
@@ -71,6 +72,7 @@ class UrllibBytesTransport:
                     body=response.read(),
                     status=response.status,
                     headers=dict(response.headers.items()),
+                    final_url=response.geturl(),
                 )
         except HTTPError as error:
             raise SecCollectorError(

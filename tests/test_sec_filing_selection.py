@@ -28,6 +28,7 @@ class FixtureTransport:
             body=self.body,
             status=200,
             headers={"Content-Type": "application/json"},
+            final_url=url,
         )
 
 

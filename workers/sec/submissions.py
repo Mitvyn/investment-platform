@@ -26,6 +26,7 @@ _RECENT_FIELDS = (
     "form",
     "primaryDocument",
 )
+_MAX_HISTORY_FILES = 20
 
 
 class SecSubmissionsError(RuntimeError):
@@ -54,6 +55,17 @@ class SecSubmissionFiling:
 
 @dataclass(frozen=True, slots=True)
 class SecSubmissionHistoryFile:
+    name: str
+    filing_count: int
+    filing_from: date
+    filing_to: date
+    source_url: str
+    retrieved_at: datetime
+    content_sha256: str
+
+
+@dataclass(frozen=True, slots=True)
+class _SecSubmissionHistoryReference:
     name: str
     filing_count: int
     filing_from: date
@@ -110,6 +122,11 @@ class SecSubmissionsCollector:
             raise SecSubmissionsError(
                 f"SEC returned HTTP {response.status} for submissions request"
             )
+        if response.final_url != source_url:
+            raise SecSubmissionsError(
+                "SEC submissions response redirected"
+            )
+        retrieved_at = self._retrieved_at()
         try:
             payload = json.loads(response.body.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError) as error:
@@ -125,17 +142,100 @@ class SecSubmissionsCollector:
         if not isinstance(sec_issuer_name, str) or not sec_issuer_name.strip():
             raise SecSubmissionsError("SEC submissions issuer name is invalid")
         recent = self._recent(payload)
-        history_files, history_complete = self._history(payload)
-        filings = tuple(
+        history_files, history_metadata_complete = self._history(payload)
+        filings = [
             self._filing(
                 request=request,
                 row={field: recent[field][index] for field in _RECENT_FIELDS},
             )
             for index in range(len(recent[_RECENT_FIELDS[0]]))
-        )
-        retrieved_at = self.clock()
-        if retrieved_at.tzinfo is None or retrieved_at.utcoffset() is None:
-            raise RuntimeError("SEC submissions clock must include timezone")
+        ]
+        fetched_history_files: list[SecSubmissionHistoryFile] = []
+        for history_file in history_files:
+            if not history_file.name.startswith(f"CIK{request.cik}-"):
+                raise SecSubmissionsError(
+                    "SEC submissions history file CIK mismatch"
+                )
+            history_source_url = (
+                f"{self.settings.base_url.rstrip('/')}/submissions/"
+                f"{history_file.name}"
+            )
+            history_response = self.transport.request(
+                history_source_url,
+                headers={
+                    "Accept": "application/json",
+                    "User-Agent": self.settings.user_agent,
+                },
+            )
+            if not 200 <= history_response.status < 300:
+                raise SecSubmissionsError(
+                    "SEC returned HTTP "
+                    f"{history_response.status} for submissions history request"
+                )
+            if history_response.final_url != history_source_url:
+                raise SecSubmissionsError(
+                    "SEC submissions history response redirected"
+                )
+            try:
+                history_payload = json.loads(
+                    history_response.body.decode("utf-8")
+                )
+            except (UnicodeDecodeError, json.JSONDecodeError) as error:
+                raise SecSubmissionsError(
+                    "SEC submissions history response is invalid JSON"
+                ) from error
+            if not isinstance(history_payload, dict):
+                raise SecSubmissionsError(
+                    "SEC submissions history response is invalid"
+                )
+            history_columns = self._filing_columns(history_payload)
+            if (
+                len(history_columns[_RECENT_FIELDS[0]])
+                != history_file.filing_count
+            ):
+                raise SecSubmissionsError(
+                    "SEC submissions history filing count mismatch"
+                )
+            history_filings = tuple(
+                self._filing(
+                    request=request,
+                    row={
+                        field: history_columns[field][index]
+                        for field in _RECENT_FIELDS
+                    },
+                )
+                for index in range(
+                    len(history_columns[_RECENT_FIELDS[0]])
+                )
+            )
+            if any(
+                not (
+                    history_file.filing_from
+                    <= filing.filing_date
+                    <= history_file.filing_to
+                )
+                for filing in history_filings
+            ):
+                raise SecSubmissionsError(
+                    "SEC submissions history filing date is outside "
+                    "advertised window"
+                )
+            filings.extend(history_filings)
+            history_retrieved_at = self._retrieved_at()
+            fetched_history_files.append(
+                SecSubmissionHistoryFile(
+                    name=history_file.name,
+                    filing_count=history_file.filing_count,
+                    filing_from=history_file.filing_from,
+                    filing_to=history_file.filing_to,
+                    source_url=history_source_url,
+                    retrieved_at=history_retrieved_at,
+                    content_sha256=hashlib.sha256(
+                        history_response.body
+                    ).hexdigest(),
+                )
+            )
+        filings = list(self._deduplicate_filings(filings))
         return SecSubmissionsSnapshot(
             operator_id=request.operator_id,
             security_id=request.security_id,
@@ -152,8 +252,10 @@ class SecSubmissionsCollector:
             excluded_filings=tuple(
                 filing for filing in filings if not filing.valid_at_cutoff
             ),
-            history_files=history_files,
-            submission_history_complete=history_complete,
+            history_files=tuple(fetched_history_files),
+            submission_history_complete=(
+                history_metadata_complete or bool(fetched_history_files)
+            ),
         )
 
     @staticmethod
@@ -170,9 +272,15 @@ class SecSubmissionsCollector:
         recent = filings.get("recent") if isinstance(filings, dict) else None
         if not isinstance(recent, dict):
             raise SecSubmissionsError("SEC submissions recent filings are invalid")
+        return SecSubmissionsCollector._filing_columns(recent)
+
+    @staticmethod
+    def _filing_columns(
+        payload: Mapping[str, object],
+    ) -> dict[str, list[object]]:
         columns: dict[str, list[object]] = {}
         for field in _RECENT_FIELDS:
-            value = recent.get(field)
+            value = payload.get(field)
             if not isinstance(value, list):
                 raise SecSubmissionsError(
                     "SEC submissions invalid recent filings"
@@ -183,10 +291,34 @@ class SecSubmissionsCollector:
             raise SecSubmissionsError("SEC submissions invalid recent filings")
         return columns
 
+    def _retrieved_at(self) -> datetime:
+        retrieved_at = self.clock()
+        if retrieved_at.tzinfo is None or retrieved_at.utcoffset() is None:
+            raise RuntimeError("SEC submissions clock must include timezone")
+        return retrieved_at.astimezone(UTC)
+
+    @staticmethod
+    def _deduplicate_filings(
+        filings: list[SecSubmissionFiling],
+    ) -> tuple[SecSubmissionFiling, ...]:
+        by_accession: dict[str, SecSubmissionFiling] = {}
+        ordered: list[SecSubmissionFiling] = []
+        for filing in filings:
+            existing = by_accession.get(filing.accession_number)
+            if existing is not None:
+                if existing != filing:
+                    raise SecSubmissionsError(
+                        "SEC submissions filing identity conflict"
+                    )
+                continue
+            by_accession[filing.accession_number] = filing
+            ordered.append(filing)
+        return tuple(ordered)
+
     @staticmethod
     def _history(
         payload: Mapping[str, object],
-    ) -> tuple[tuple[SecSubmissionHistoryFile, ...], bool]:
+    ) -> tuple[tuple[_SecSubmissionHistoryReference, ...], bool]:
         filings = payload.get("filings")
         files = filings.get("files") if isinstance(filings, dict) else None
         if files is None:
@@ -195,7 +327,12 @@ class SecSubmissionsCollector:
             raise SecSubmissionsError(
                 "SEC submissions history files are invalid"
             )
-        history: list[SecSubmissionHistoryFile] = []
+        if len(files) > _MAX_HISTORY_FILES:
+            raise SecSubmissionsError(
+                "SEC submissions has too many history files"
+            )
+        history: list[_SecSubmissionHistoryReference] = []
+        names: set[str] = set()
         for value in files:
             if not isinstance(value, dict):
                 raise SecSubmissionsError(
@@ -217,6 +354,11 @@ class SecSubmissionsCollector:
                 raise SecSubmissionsError(
                     "SEC submissions history files are invalid"
                 )
+            if name in names:
+                raise SecSubmissionsError(
+                    "SEC submissions duplicate history file"
+                )
+            names.add(name)
             filing_from = SecSubmissionsCollector._date(
                 value.get("filingFrom"),
                 required=True,
@@ -230,7 +372,7 @@ class SecSubmissionsCollector:
                     "SEC submissions history files are invalid"
                 )
             history.append(
-                SecSubmissionHistoryFile(
+                _SecSubmissionHistoryReference(
                     name=name,
                     filing_count=filing_count,
                     filing_from=filing_from,
