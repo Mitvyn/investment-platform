@@ -4,6 +4,7 @@ import {
   ArrowUpRight,
   BookOpenCheck,
   ChevronDown,
+  Cpu,
   Database,
   FileText,
   FlaskConical,
@@ -31,6 +32,7 @@ import {
   dashboardSections,
   isDashboardSectionAvailable,
 } from "@/lib/dashboard-shell";
+import { readDesktopRuntimeStatus } from "@/lib/desktop-runtime";
 import { summarizeMarketSeries } from "@/lib/market-series";
 import { summarizeHoldings } from "@/lib/holdings-summary";
 
@@ -230,6 +232,7 @@ export default async function TickerWorkspace({
   const isWatched = watchlist.some(
     (item) => item.securityId === selectedSecurity?.securityId,
   );
+  const desktopRuntime = readDesktopRuntimeStatus();
 
   return (
     <div className="min-h-screen bg-background lg:grid lg:grid-cols-[264px_minmax(0,1fr)]">
@@ -457,7 +460,7 @@ export default async function TickerWorkspace({
               </Card>
 
               <Card aria-label="Source health">
-                <div className="grid divide-y divide-border lg:grid-cols-3 lg:divide-x lg:divide-y-0">
+                <div className="grid divide-y divide-border lg:grid-cols-4 lg:divide-x lg:divide-y-0">
                   <SourceHealth
                     available={Boolean(trace)}
                     detail={trace ? `Retrieved ${ageLabel(trace.retrievedAt)}` : "Missing"}
@@ -487,6 +490,13 @@ export default async function TickerWorkspace({
                     gated={!marketSeries && !context.market}
                     icon={<Activity aria-hidden="true" className="size-5" />}
                     label="Market OHLCV"
+                  />
+                  <SourceHealth
+                    available={desktopRuntime.state === "ready"}
+                    detail={desktopRuntime.detail}
+                    gated={desktopRuntime.state === "unavailable"}
+                    icon={<Cpu aria-hidden="true" className="size-5" />}
+                    label="Desktop runtime"
                   />
                 </div>
               </Card>

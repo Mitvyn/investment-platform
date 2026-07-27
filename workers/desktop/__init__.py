@@ -1,0 +1,1 @@
+"""Desktop-hosted worker lifecycle."""

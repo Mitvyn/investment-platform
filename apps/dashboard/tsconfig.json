@@ -43,6 +43,7 @@
     ".next/dev/types/**/*.ts"
   ],
   "exclude": [
+    "desktop",
     "node_modules",
     "../../packages/types/**/*.test.ts"
   ]

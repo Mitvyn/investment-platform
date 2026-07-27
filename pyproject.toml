@@ -22,6 +22,11 @@ dependencies = [
   "yfinance==1.5.1",
 ]
 
+[project.optional-dependencies]
+desktop-build = [
+  "pyinstaller==6.21.0",
+]
+
 [project.scripts]
 iros = "investment_research_os.cli:main"
 

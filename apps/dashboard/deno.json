@@ -1,0 +1,12 @@
+{
+  "desktop": {
+    "app": {
+      "name": "Investment Research OS",
+      "identifier": "com.meowing.investment-research-os"
+    },
+    "backend": "webview",
+    "output": {
+      "macos": "../../dist/Investment Research OS Preview.app"
+    }
+  }
+}
