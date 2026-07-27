@@ -19,6 +19,13 @@ from investment_research_os.research_runs import (
     SecurityIdentity,
 )
 
+DISCOVERY_ONLY_HOST_SUFFIXES = (
+    "reddit.com",
+    "redd.it",
+    "redditmedia.com",
+    "redditstatic.com",
+)
+
 
 class EvidenceBundleError(ValueError):
     """Raised when evidence cannot produce a valid immutable bundle."""
@@ -420,6 +427,23 @@ def _valid_at_cutoff(item: EvidenceItem, cutoff: datetime) -> bool:
     )
 
 
+def is_discovery_only_source_url(value: str) -> bool:
+    hostname = (urlparse(value).hostname or "").lower().rstrip(".")
+    return any(
+        hostname == suffix or hostname.endswith(f".{suffix}")
+        for suffix in DISCOVERY_ONLY_HOST_SUFFIXES
+    )
+
+
+def validate_evidence_source_url(value: str) -> None:
+    if urlparse(value).scheme != "https":
+        raise EvidenceBundleError("source URL must use HTTPS")
+    if is_discovery_only_source_url(value):
+        raise EvidenceBundleError(
+            "discovery-only source cannot enter evidence bundle"
+        )
+
+
 def _blocking_gaps(
     manifest: tuple[EvidenceItem, ...],
     policy: EvidencePolicyDefinition,
@@ -507,8 +531,7 @@ def _prepare_candidate(
                 raise EvidenceBundleError(
                     "evidence passage content hash mismatch"
                 )
-        if urlparse(item.canonical_url).scheme != "https":
-            raise EvidenceBundleError("source URL must use HTTPS")
+        validate_evidence_source_url(item.canonical_url)
     manifest = tuple(
         sorted(
             (

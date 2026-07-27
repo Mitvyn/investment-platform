@@ -2,14 +2,18 @@
 
 ## Product boundary
 
-- Keep Reddit integration read-only. Never add posting, commenting, voting, messaging, moderation, or user-interaction actions without an explicit scope change and Reddit approval.
-- Do not call Reddit before API approval. Tests must use local fakes.
-- Do not scrape Reddit or bypass access controls, rate limits, labels, removals, or OAuth.
-- Do not train models on Reddit content or build Reddit-user profiles. Never infer sensitive user traits.
-- Keep model inference disabled until Reddit approves the disclosed processing scope and the selected provider's retention/training terms are verified.
-- Preserve source attribution and original Reddit permalinks in every derived research artifact.
-- Do not retain Reddit usernames or account IDs in V1 normalized records.
-- Keep any future raw Reddit text cache at or below 48 hours unless Reddit explicitly approves another period.
+- Reddit Data API request was rejected on 2026-07-25. Keep Reddit integration
+  retired from runtime and active roadmap.
+- Do not call Reddit APIs, scrape Reddit, automate Reddit-targeted web search,
+  or use search providers as an access workaround.
+- Do not ingest, store, score, summarize, cite, or send Reddit content,
+  metadata, snippets, links, sentiment, or identities to models.
+- General operator-initiated web search may incidentally surface an untrusted
+  discovery lead. Only its independently retrieved original primary source may
+  enter the evidence workflow.
+- Reject Reddit and other discovery-only URLs at evidence-bundle boundaries.
+- Reopening Reddit access requires separately approved product, policy, legal,
+  privacy, and implementation scope.
 
 ## Engineering
 
