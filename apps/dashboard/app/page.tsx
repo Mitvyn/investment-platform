@@ -20,6 +20,9 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { MarketPriceChart } from "@/components/market-price-chart";
 import { HoldingsTable } from "@/components/holdings-table";
+import { ResearchRunHistoryPanel } from "@/components/research-run-history-panel";
+import { ResearchRunCommandPoller } from "@/components/research-run-command-poller";
+import { ResearchRunCommandProgressPanel } from "@/components/research-run-command-progress-panel";
 import { WorkflowJobPoller } from "@/components/workflow-job-poller";
 import {
   Card,
@@ -41,7 +44,11 @@ import { summarizeHoldings } from "@/lib/holdings-summary";
 import { loadMarketSeries, loadTickerContext } from "../lib/context";
 import { loadEvidenceTrace } from "../lib/evidence";
 import { loadLatestHoldings } from "../lib/holdings";
+import { loadResearchRunCommandProgress } from "../lib/research-run-command-progress";
+import { presentResearchRunCommandProgress } from "../lib/research-run-command-progress-workspace";
 import { loadResearchRunCommand } from "../lib/research-run-commands";
+import { loadResearchRunHistory } from "../lib/research-run-history";
+import { presentResearchRunHistory } from "../lib/research-run-history-workspace";
 import { loadSecurityDirectory } from "../lib/securities";
 import { loadSecurityJob } from "../lib/security-jobs";
 import { createClient } from "../lib/supabase/server";
@@ -217,10 +224,20 @@ export default async function TickerWorkspace({
     researchCommand?.security_id === selectedSecurity?.securityId
       ? researchCommand
       : null;
+  const researchCommandProgress = visibleResearchCommand
+    ? await loadResearchRunCommandProgress(
+        operatorId,
+        visibleResearchCommand.command_id,
+      ).catch(() => null)
+    : null;
+  const researchCommandProgressPresentation = researchCommandProgress
+    ? presentResearchRunCommandProgress(researchCommandProgress, new Date())
+    : null;
   const defaultCutoff = new Date().toISOString().slice(0, 16);
   const ticker = selectedSecurity?.ticker ?? "";
   const displayTicker = ticker || "SELECT";
-  const [{ trace }, context, marketSeriesResult] = await Promise.all([
+  const [{ trace }, context, marketSeriesResult, researchHistory] =
+    await Promise.all([
     selectedSecurity
       ? loadEvidenceTrace(selectedSecurity.securityId)
       : Promise.resolve({ trace: null }),
@@ -236,8 +253,16 @@ export default async function TickerWorkspace({
     selectedSecurity
       ? loadMarketSeries(selectedSecurity.securityId)
       : Promise.resolve({ series: null, unavailableReason: null }),
-  ]);
+    selectedSecurity
+      ? loadResearchRunHistory(
+          operatorId,
+          selectedSecurity.securityId,
+        )
+      : Promise.resolve({ latest: null, items: [] }),
+    ]);
   const marketSeries = marketSeriesResult.series;
+  const researchHistoryPresentation =
+    presentResearchRunHistory(researchHistory);
   const holdingsSummary = holdingsResult.snapshot
     ? summarizeHoldings(holdingsResult.snapshot)
     : null;
@@ -455,34 +480,56 @@ export default async function TickerWorkspace({
             </Card>
           ) : null}
           {selectedSecurity ? (
+            <ResearchRunHistoryPanel presentation={researchHistoryPresentation} />
+          ) : null}
+          {selectedSecurity ? (
             <Card className="mt-5">
               <CardHeader>
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <div>
                     <SectionLabel>Research Run preflight</SectionLabel>
                     <CardTitle className="mt-2">
-                      Launch the fixed biotech committee contract
+                      Launch biotech Research Committee
                     </CardTitle>
                   </div>
-                  <Badge variant="outline">
-                    biotech_moonshot_catalyst_assessment
-                  </Badge>
+                  <Badge variant="outline">Two assurance contracts</Badge>
                 </div>
                 <CardDescription>
-                  This early tracer persists and validates a command only. Current
-                  production gates block evidence, market, and model execution.
+                  Choose personal consolidated EOD research or licensed official-close
+                  research. Both preserve separate immutable thesis chains.
                 </CardDescription>
               </CardHeader>
               <CardContent>
                 <form
                   action={launchResearchRun}
-                  className="grid gap-4 lg:grid-cols-[minmax(0,240px)_minmax(0,1fr)_auto] lg:items-end"
+                  className="grid gap-4 lg:grid-cols-[minmax(0,260px)_minmax(0,220px)_minmax(0,1fr)_auto] lg:items-end"
                 >
                   <input
                     name="securityId"
                     type="hidden"
                     value={selectedSecurity.securityId}
                   />
+                  <div className="grid gap-2">
+                    <label
+                      className="text-xs font-medium text-muted-foreground"
+                      htmlFor="researchContract"
+                    >
+                      Valuation assurance
+                    </label>
+                    <select
+                      className="h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/40"
+                      defaultValue="personal_research"
+                      id="researchContract"
+                      name="researchContract"
+                    >
+                      <option value="personal_research">
+                        Personal research · consolidated EOD
+                      </option>
+                      <option value="licensed_official">
+                        Licensed official close
+                      </option>
+                    </select>
+                  </div>
                   <div className="grid gap-2">
                     <label
                       className="text-xs font-medium text-muted-foreground"
@@ -516,9 +563,13 @@ export default async function TickerWorkspace({
                   </div>
                   <Button type="submit">Run preflight</Button>
                 </form>
+                <p className="mt-3 text-xs text-warning">
+                  Personal research uses lower-assurance consolidated EOD data. Not
+                  institutional-grade or for trade execution.
+                </p>
                 <div className="mt-4 flex flex-wrap gap-x-6 gap-y-1 border-t border-border pt-4 font-mono text-[10px] text-muted-foreground">
-                  <span>question v1</span>
-                  <span>workflow biotech-moonshot-catalyst-v1</span>
+                  <span>question contract selected above</span>
+                  <span>workflow exact-pair validated</span>
                   <span>security {selectedSecurity.securityId}</span>
                 </div>
               </CardContent>
@@ -599,8 +650,20 @@ export default async function TickerWorkspace({
                     </a>
                   </Button>
                 ) : null}
+                <ResearchRunCommandPoller
+                  key={visibleResearchCommand.command_id}
+                  researchRunId={visibleResearchCommand.research_run_id}
+                  state={visibleResearchCommand.state}
+                />
               </CardContent>
             </Card>
+          ) : null}
+          {researchCommandProgressPresentation ? (
+            <div className="mt-5">
+              <ResearchRunCommandProgressPanel
+                presentation={researchCommandProgressPresentation}
+              />
+            </div>
           ) : null}
           {holdingsResult.snapshot && holdingsSummary ? (
             <HoldingsTable
@@ -1031,7 +1094,13 @@ export default async function TickerWorkspace({
                   <CardContent>
                     {marketSeries ? (
                       <>
-                        <MarketPriceChart bars={marketSeries.bars} />
+                        <MarketPriceChart
+                          bars={marketSeries.bars}
+                          currency={marketSeries.currency}
+                          recencyCheckedAt={new Date().toISOString()}
+                          retrievedAt={marketSeries.retrievedAt}
+                          sessionEnd={marketSeries.sessionEnd}
+                        />
                         <div className="mt-5 flex flex-col gap-2 border-t border-border pt-4 text-xs text-muted-foreground sm:flex-row sm:items-center sm:justify-between">
                           <span>
                             {marketSeries.bars.length} stored sessions · gaps

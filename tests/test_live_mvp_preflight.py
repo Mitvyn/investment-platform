@@ -243,6 +243,81 @@ class LiveMvpPreflightTests(unittest.TestCase):
             all(not callable(item) for item in decision.permitted_interactions)
         )
 
+    def test_personal_research_requires_own_market_contract_not_licensed_rights(
+        self,
+    ) -> None:
+        inputs = replace(
+            passing_inputs(),
+            thesis_contract_id=("biotech_moonshot_catalyst_personal_research_v1"),
+            valuation_contract_version="valuation_snapshot.personal_research.v1",
+            licensed_official_close_rights=False,
+            licensed_authenticated_display_rights=False,
+            personal_research_valuation_pipeline_verified=True,
+            nasdaq_trader_live_contract_verified=True,
+        )
+        manifest = authorized_manifest(
+            interactions=(
+                "hosted_database",
+                "live_primary_sources",
+                "personal_market_data",
+                "model_provider",
+            )
+        )
+
+        decision = evaluate_live_mvp_preflight(
+            manifest=manifest,
+            inputs=inputs,
+        )
+
+        self.assertTrue(decision.allowed)
+        self.assertEqual(decision.blocking_reason_codes, ())
+        self.assertEqual(
+            decision.permitted_interactions,
+            (
+                "hosted_database",
+                "live_primary_sources",
+                "personal_market_data",
+                "model_provider",
+            ),
+        )
+
+    def test_personal_research_fails_closed_on_own_proof_or_contract_drift(
+        self,
+    ) -> None:
+        inputs = replace(
+            passing_inputs(),
+            thesis_contract_id=("biotech_moonshot_catalyst_personal_research_v1"),
+            valuation_contract_version="valuation_snapshot.v1",
+            licensed_official_close_rights=True,
+            licensed_authenticated_display_rights=True,
+            personal_research_valuation_pipeline_verified=False,
+            nasdaq_trader_live_contract_verified=False,
+        )
+        manifest = authorized_manifest(
+            interactions=(
+                "hosted_database",
+                "live_primary_sources",
+                "personal_market_data",
+                "model_provider",
+            )
+        )
+
+        decision = evaluate_live_mvp_preflight(
+            manifest=manifest,
+            inputs=inputs,
+        )
+
+        self.assertFalse(decision.allowed)
+        self.assertEqual(
+            decision.blocking_reason_codes,
+            (
+                "personal_research_valuation_contract_mismatch",
+                "personal_research_valuation_pipeline_unverified",
+                "nasdaq_trader_live_contract_unverified",
+            ),
+        )
+        self.assertEqual(decision.permitted_interactions, ())
+
     def test_two_security_proof_requires_distinct_securities_and_exact_fingerprint(
         self,
     ) -> None:

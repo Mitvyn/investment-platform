@@ -62,7 +62,7 @@
   },
   "cash": {
     "input_id": "included_cash",
-    "value": "665200000",
+    "value": "660200000",
     "unit": "USD",
     "effective_at": "2026-03-31T23:59:59+00:00",
     "calculation_method": "reported",
@@ -74,11 +74,56 @@
     "freshness_reason_code": "latest_required_filing_at_cutoff",
     "freshness_policy_version": "biotech-valuation-freshness-v1"
   },
+  "cash_treatment": {
+    "reported_cash": {
+      "input_id": "reported_cash",
+      "value": "665200000",
+      "unit": "USD",
+      "effective_at": "2026-03-31T23:59:59+00:00",
+      "calculation_method": "reported",
+      "formula": null,
+      "calculation_id": null,
+      "input_ids": [],
+      "supporting_evidence_ids": ["55555555-5555-4555-8555-555555555555"],
+      "freshness_state": "current",
+      "freshness_reason_code": "latest_required_filing_at_cutoff",
+      "freshness_policy_version": "biotech-valuation-freshness-v1"
+    },
+    "restricted_cash": {
+      "input_id": "restricted_cash",
+      "value": "5000000",
+      "unit": "USD",
+      "effective_at": "2026-03-31T23:59:59+00:00",
+      "calculation_method": "reported",
+      "formula": null,
+      "calculation_id": null,
+      "input_ids": [],
+      "supporting_evidence_ids": ["55555555-5555-4555-8555-555555555555"],
+      "freshness_state": "current",
+      "freshness_reason_code": "latest_required_filing_at_cutoff",
+      "freshness_policy_version": "biotech-valuation-freshness-v1"
+    },
+    "restricted_cash_treatment": "excluded"
+  },
   "debt": {
     "input_id": "included_debt",
     "value": "5100000",
     "unit": "USD",
     "effective_at": "2026-03-31T23:59:59+00:00",
+    "calculation_method": "reported",
+    "formula": null,
+    "calculation_id": null,
+    "input_ids": [],
+    "supporting_evidence_ids": ["55555555-5555-4555-8555-555555555555"],
+    "freshness_state": "current",
+    "freshness_reason_code": "latest_required_filing_at_cutoff",
+    "freshness_policy_version": "biotech-valuation-freshness-v1"
+  },
+  "other_included_claims": {
+    "input_id": "other_included_claims",
+    "value": "12000000",
+    "unit": "USD",
+    "effective_at": "2026-02-28T23:59:59+00:00",
     "calculation_method": "reported",
     "formula": null,
     "calculation_id": null,
@@ -98,11 +143,16 @@
     "supporting_evidence_ids": ["55555555-5555-4555-8555-555555555555"]
   },
   "enterprise_value": {
-    "value": "1714500000",
+    "value": "1731500000",
     "unit": "USD",
-    "formula": "market capitalization + debt - cash",
+    "formula": "market capitalization + debt + other included claims - included cash",
     "formula_version": "enterprise-value-v1",
-    "input_ids": ["market-capitalization-result", "included_debt", "included_cash"],
+    "input_ids": [
+      "market-capitalization-result",
+      "included_debt",
+      "other_included_claims",
+      "included_cash"
+    ],
     "calculation_id": "enterprise-value-result",
     "supporting_evidence_ids": ["55555555-5555-4555-8555-555555555555"]
   },

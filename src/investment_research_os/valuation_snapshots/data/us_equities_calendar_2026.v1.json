@@ -1,0 +1,41 @@
+{
+  "calendar_version": "us-equities-calendar-2026.v1",
+  "coverage_start": "2026-01-01",
+  "coverage_end": "2026-12-31",
+  "timezone": "America/New_York",
+  "supported_exchanges": [
+    "NASDAQ",
+    "NYSE",
+    "NYSE AMERICAN"
+  ],
+  "regular_session": {
+    "opens_at": "09:30:00",
+    "closes_at": "16:00:00"
+  },
+  "closed_weekdays": [
+    5,
+    6
+  ],
+  "holiday_dates": [
+    "2026-01-01",
+    "2026-01-19",
+    "2026-02-16",
+    "2026-04-03",
+    "2026-05-25",
+    "2026-06-19",
+    "2026-07-03",
+    "2026-09-07",
+    "2026-11-26",
+    "2026-12-25"
+  ],
+  "early_closes": [
+    {
+      "session_date": "2026-11-27",
+      "closes_at": "13:00:00"
+    },
+    {
+      "session_date": "2026-12-24",
+      "closes_at": "13:00:00"
+    }
+  ]
+}

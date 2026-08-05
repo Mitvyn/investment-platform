@@ -1,0 +1,114 @@
+{
+  "studies": [
+    {
+      "protocolSection": {
+        "identificationModule": {
+          "nctId": "NCT06000002",
+          "briefTitle": "A Phase 2 Study of Asset Beta"
+        },
+        "statusModule": {
+          "overallStatus": "RECRUITING",
+          "startDateStruct": {
+            "date": "2025-11-01",
+            "type": "ACTUAL"
+          },
+          "primaryCompletionDateStruct": {
+            "date": "2027-06",
+            "type": "ESTIMATED"
+          },
+          "completionDateStruct": {
+            "date": "2027-12",
+            "type": "ESTIMATED"
+          },
+          "studyFirstPostDateStruct": {
+            "date": "2025-10-15",
+            "type": "ACTUAL"
+          },
+          "studyFirstPostDateType": "ACTUAL",
+          "lastUpdatePostDateStruct": {
+            "date": "2026-04-12",
+            "type": "ACTUAL"
+          },
+          "lastUpdatePostDateType": "ACTUAL"
+        },
+        "designModule": {
+          "phases": [
+            "PHASE2"
+          ]
+        },
+        "armsInterventionsModule": {
+          "interventions": [
+            {
+              "type": "DRUG",
+              "name": "Asset Beta"
+            }
+          ]
+        },
+        "sponsorCollaboratorsModule": {
+          "leadSponsor": {
+            "name": "Example Therapeutics",
+            "class": "INDUSTRY"
+          }
+        }
+      }
+    },
+    {
+      "protocolSection": {
+        "identificationModule": {
+          "nctId": "NCT06000001",
+          "briefTitle": "A Phase 1 Study of Asset Alpha",
+          "officialTitle": "A First-in-Human Study of Asset Alpha"
+        },
+        "statusModule": {
+          "overallStatus": "ACTIVE_NOT_RECRUITING",
+          "startDateStruct": {
+            "date": "2024-08-09",
+            "type": "ACTUAL"
+          },
+          "primaryCompletionDateStruct": {
+            "date": "2026-09",
+            "type": "ESTIMATED"
+          },
+          "completionDateStruct": {
+            "date": "2026-12",
+            "type": "ESTIMATED"
+          },
+          "studyFirstPostDateStruct": {
+            "date": "2024-07-15",
+            "type": "ACTUAL"
+          },
+          "studyFirstPostDateType": "ACTUAL",
+          "lastUpdatePostDateStruct": {
+            "date": "2026-03-20",
+            "type": "ACTUAL"
+          },
+          "lastUpdatePostDateType": "ACTUAL"
+        },
+        "designModule": {
+          "phases": [
+            "PHASE1"
+          ]
+        },
+        "armsInterventionsModule": {
+          "interventions": [
+            {
+              "type": "BIOLOGICAL",
+              "name": "Asset Alpha"
+            },
+            {
+              "type": "DRUG",
+              "name": "Standard of Care"
+            }
+          ]
+        },
+        "sponsorCollaboratorsModule": {
+          "leadSponsor": {
+            "name": "Example Therapeutics",
+            "class": "INDUSTRY"
+          }
+        }
+      }
+    }
+  ],
+  "totalCount": 2
+}

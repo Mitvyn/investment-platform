@@ -38,11 +38,68 @@ test("accepts one blocked Research Run command without execution output", () => 
   );
 });
 
+test("accepts personal research command only with exact paired identity", () => {
+  const personal = {
+    ...blockedReceipt,
+    question_type_version:
+      "biotech_moonshot_catalyst_personal_research_assessment.v1",
+    workflow_config_version:
+      "biotech-moonshot-catalyst-personal-research-v1",
+    blocking_reason_codes: [
+      "generic_primary_source_pipeline_unavailable",
+      "persistent_committee_worker_unavailable",
+      "model_execution_inactive",
+      "personal_research_valuation_pipeline_unavailable",
+      "hosted_isolation_unverified",
+    ],
+  };
+
+  assert.deepEqual(parseResearchRunCommandReceipt(personal), personal);
+  assert.throws(
+    () =>
+      parseResearchRunCommandReceipt({
+        ...personal,
+        workflow_config_version: "biotech-moonshot-catalyst-v1",
+      }),
+    /contract identity/,
+  );
+  assert.throws(
+    () =>
+      parseResearchRunCommandReceipt({
+        ...personal,
+        blocking_reason_codes: blockedReceipt.blocking_reason_codes,
+      }),
+    /contradictory/,
+  );
+});
+
+test("accepts failed command with checkpointed Research Run audit link", () => {
+  const failedReceipt = {
+    ...blockedReceipt,
+    state: "failed",
+    blocking_reason_codes: [],
+    error_code: "grader_committee_failed",
+    research_run_id: "33333333-3333-4333-8333-333333333333",
+    started_at: "2026-07-23T05:02:00+00:00",
+    finished_at: "2026-07-23T05:03:00+00:00",
+    updated_at: "2026-07-23T05:03:00+00:00",
+  };
+
+  assert.deepEqual(
+    parseResearchRunCommandReceipt(failedReceipt),
+    failedReceipt,
+  );
+});
+
 test("rejects malformed or contradictory Research Run command receipts", () => {
   const invalid = [
     { ...blockedReceipt, unexpected: true },
     { ...blockedReceipt, command_id: "not-a-uuid" },
     { ...blockedReceipt, state: "blocked", blocking_reason_codes: [] },
+    {
+      ...blockedReceipt,
+      blocking_reason_codes: ["arbitrary_blocker"],
+    },
     {
       ...blockedReceipt,
       state: "blocked",
@@ -54,8 +111,36 @@ test("rejects malformed or contradictory Research Run command receipts", () => {
       blocking_reason_codes: [],
       research_run_id: null,
     },
+    {
+      ...blockedReceipt,
+      state: "completed",
+      blocking_reason_codes: [],
+      research_run_id: "33333333-3333-4333-8333-333333333333",
+      error_code: null,
+      started_at: null,
+    },
+    {
+      ...blockedReceipt,
+      state: "failed",
+      blocking_reason_codes: [],
+      error_code: "worker_stage_failed",
+      research_run_id: null,
+      started_at: null,
+    },
     { ...blockedReceipt, as_of_cutoff: "2026-07-23" },
     { ...blockedReceipt, operator_focus_normalized: "  focus  " },
+    {
+      ...blockedReceipt,
+      updated_at: "2026-07-23T04:59:00+00:00",
+    },
+    {
+      ...blockedReceipt,
+      state: "failed",
+      blocking_reason_codes: [],
+      error_code: "worker_stage_failed",
+      started_at: "2026-07-23T05:04:00+00:00",
+      finished_at: "2026-07-23T05:03:00+00:00",
+    },
   ];
 
   for (const candidate of invalid) {

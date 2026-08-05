@@ -1,18 +1,18 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 import hashlib
 import json
 import re
 from typing import Callable, Mapping
+import unicodedata
 
 from workers.primary_sources.models import PrimarySourceRequest
 from workers.primary_sources.temporal import assess_publication_time
 
 from .collector import (
     ACCESSION_PATTERN,
-    DOCUMENT_PATTERN,
     BytesTransport,
     SecSettings,
 )
@@ -27,6 +27,8 @@ _RECENT_FIELDS = (
     "primaryDocument",
 )
 _MAX_HISTORY_FILES = 20
+_SUBMISSION_DOCUMENT_PATTERN = re.compile(r"^[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)*$")
+SEC_ISSUER_IDENTITY_POLICY_VERSION = "sec-issuer-identity-v1"
 
 
 class SecSubmissionsError(RuntimeError):
@@ -65,6 +67,29 @@ class SecSubmissionHistoryFile:
 
 
 @dataclass(frozen=True, slots=True)
+class SecIssuerFormerName:
+    name: str
+    normalized_name: str
+    from_date: date
+    to_date: date
+
+
+@dataclass(frozen=True, slots=True)
+class SecIssuerIdentityEvidence:
+    policy_version: str
+    state: str
+    reason_code: str
+    request_name: str
+    normalized_request_name: str
+    sec_current_name: str
+    normalized_sec_current_name: str
+    match_type: str | None
+    matched_name: str | None
+    normalized_matched_name: str | None
+    former_names: tuple[SecIssuerFormerName, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class _SecSubmissionHistoryReference:
     name: str
     filing_count: int
@@ -79,6 +104,7 @@ class SecSubmissionsSnapshot:
     cik: str
     issuer_name: str
     sec_issuer_name: str
+    identity_evidence: SecIssuerIdentityEvidence
     as_of_cutoff: datetime
     source_url: str
     retrieved_at: datetime
@@ -108,8 +134,7 @@ class SecSubmissionsCollector:
         request: PrimarySourceRequest,
     ) -> SecSubmissionsSnapshot:
         source_url = (
-            f"{self.settings.base_url.rstrip('/')}/submissions/"
-            f"CIK{request.cik}.json"
+            f"{self.settings.base_url.rstrip('/')}/submissions/CIK{request.cik}.json"
         )
         response = self.transport.request(
             source_url,
@@ -123,9 +148,7 @@ class SecSubmissionsCollector:
                 f"SEC returned HTTP {response.status} for submissions request"
             )
         if response.final_url != source_url:
-            raise SecSubmissionsError(
-                "SEC submissions response redirected"
-            )
+            raise SecSubmissionsError("SEC submissions response redirected")
         retrieved_at = self._retrieved_at()
         try:
             payload = json.loads(response.body.decode("utf-8"))
@@ -141,6 +164,11 @@ class SecSubmissionsCollector:
         sec_issuer_name = payload.get("name")
         if not isinstance(sec_issuer_name, str) or not sec_issuer_name.strip():
             raise SecSubmissionsError("SEC submissions issuer name is invalid")
+        identity_evidence = self._issuer_identity(
+            request.issuer_name,
+            sec_issuer_name.strip(),
+            payload.get("formerNames", []),
+        )
         recent = self._recent(payload)
         history_files, history_metadata_complete = self._history(payload)
         filings = [
@@ -153,12 +181,9 @@ class SecSubmissionsCollector:
         fetched_history_files: list[SecSubmissionHistoryFile] = []
         for history_file in history_files:
             if not history_file.name.startswith(f"CIK{request.cik}-"):
-                raise SecSubmissionsError(
-                    "SEC submissions history file CIK mismatch"
-                )
+                raise SecSubmissionsError("SEC submissions history file CIK mismatch")
             history_source_url = (
-                f"{self.settings.base_url.rstrip('/')}/submissions/"
-                f"{history_file.name}"
+                f"{self.settings.base_url.rstrip('/')}/submissions/{history_file.name}"
             )
             history_response = self.transport.request(
                 history_source_url,
@@ -173,26 +198,17 @@ class SecSubmissionsCollector:
                     f"{history_response.status} for submissions history request"
                 )
             if history_response.final_url != history_source_url:
-                raise SecSubmissionsError(
-                    "SEC submissions history response redirected"
-                )
+                raise SecSubmissionsError("SEC submissions history response redirected")
             try:
-                history_payload = json.loads(
-                    history_response.body.decode("utf-8")
-                )
+                history_payload = json.loads(history_response.body.decode("utf-8"))
             except (UnicodeDecodeError, json.JSONDecodeError) as error:
                 raise SecSubmissionsError(
                     "SEC submissions history response is invalid JSON"
                 ) from error
             if not isinstance(history_payload, dict):
-                raise SecSubmissionsError(
-                    "SEC submissions history response is invalid"
-                )
+                raise SecSubmissionsError("SEC submissions history response is invalid")
             history_columns = self._filing_columns(history_payload)
-            if (
-                len(history_columns[_RECENT_FIELDS[0]])
-                != history_file.filing_count
-            ):
+            if len(history_columns[_RECENT_FIELDS[0]]) != history_file.filing_count:
                 raise SecSubmissionsError(
                     "SEC submissions history filing count mismatch"
                 )
@@ -200,25 +216,21 @@ class SecSubmissionsCollector:
                 self._filing(
                     request=request,
                     row={
-                        field: history_columns[field][index]
-                        for field in _RECENT_FIELDS
+                        field: history_columns[field][index] for field in _RECENT_FIELDS
                     },
                 )
-                for index in range(
-                    len(history_columns[_RECENT_FIELDS[0]])
-                )
+                for index in range(len(history_columns[_RECENT_FIELDS[0]]))
             )
             if any(
                 not (
-                    history_file.filing_from
+                    history_file.filing_from - timedelta(days=1)
                     <= filing.filing_date
-                    <= history_file.filing_to
+                    <= history_file.filing_to + timedelta(days=1)
                 )
                 for filing in history_filings
             ):
                 raise SecSubmissionsError(
-                    "SEC submissions history filing date is outside "
-                    "advertised window"
+                    "SEC submissions history filing date is outside advertised window"
                 )
             filings.extend(history_filings)
             history_retrieved_at = self._retrieved_at()
@@ -230,9 +242,7 @@ class SecSubmissionsCollector:
                     filing_to=history_file.filing_to,
                     source_url=history_source_url,
                     retrieved_at=history_retrieved_at,
-                    content_sha256=hashlib.sha256(
-                        history_response.body
-                    ).hexdigest(),
+                    content_sha256=hashlib.sha256(history_response.body).hexdigest(),
                 )
             )
         filings = list(self._deduplicate_filings(filings))
@@ -242,6 +252,7 @@ class SecSubmissionsCollector:
             cik=request.cik,
             issuer_name=request.issuer_name,
             sec_issuer_name=sec_issuer_name.strip(),
+            identity_evidence=identity_evidence,
             as_of_cutoff=request.as_of_cutoff,
             source_url=source_url,
             retrieved_at=retrieved_at.astimezone(UTC),
@@ -257,6 +268,110 @@ class SecSubmissionsCollector:
                 history_metadata_complete or bool(fetched_history_files)
             ),
         )
+
+    @classmethod
+    def _issuer_identity(
+        cls,
+        request_name: str,
+        sec_current_name: str,
+        former_names_value: object,
+    ) -> SecIssuerIdentityEvidence:
+        if not isinstance(former_names_value, list):
+            raise SecSubmissionsError("SEC submissions former names are invalid")
+        former_names: list[SecIssuerFormerName] = []
+        for value in former_names_value:
+            if not isinstance(value, dict):
+                raise SecSubmissionsError("SEC submissions former name is invalid")
+            name = value.get("name")
+            from_value = value.get("from")
+            to_value = value.get("to")
+            if (
+                not isinstance(name, str)
+                or not name.strip()
+                or not isinstance(from_value, str)
+                or not isinstance(to_value, str)
+            ):
+                raise SecSubmissionsError("SEC submissions former name is invalid")
+            try:
+                from_date = cls._former_name_date(from_value)
+                to_date = cls._former_name_date(to_value)
+            except ValueError as error:
+                raise SecSubmissionsError(
+                    "SEC submissions former name dates are invalid"
+                ) from error
+            if from_date > to_date:
+                raise SecSubmissionsError(
+                    "SEC submissions former name dates are invalid"
+                )
+            former_names.append(
+                SecIssuerFormerName(
+                    name=name.strip(),
+                    normalized_name=cls._normalize_issuer_name(name),
+                    from_date=from_date,
+                    to_date=to_date,
+                )
+            )
+        former_names.sort(
+            key=lambda item: (
+                item.from_date,
+                item.to_date,
+                item.normalized_name,
+                item.name,
+            )
+        )
+        normalized_request = cls._normalize_issuer_name(request_name)
+        normalized_current = cls._normalize_issuer_name(sec_current_name)
+        match_type: str | None = None
+        matched_name: str | None = None
+        normalized_matched_name: str | None = None
+        if normalized_request == normalized_current:
+            match_type = "current_name"
+            matched_name = sec_current_name
+            normalized_matched_name = normalized_current
+        else:
+            matching_former_names = tuple(
+                former_name
+                for former_name in former_names
+                if former_name.normalized_name == normalized_request
+            )
+            if matching_former_names:
+                matched = matching_former_names[-1]
+                match_type = "former_name"
+                matched_name = matched.name
+                normalized_matched_name = matched.normalized_name
+        verified = match_type is not None
+        return SecIssuerIdentityEvidence(
+            policy_version=SEC_ISSUER_IDENTITY_POLICY_VERSION,
+            state="verified" if verified else "mismatch",
+            reason_code=(
+                "sec_issuer_name_verified"
+                if verified
+                else "sec_issuer_name_not_in_verified_history"
+            ),
+            request_name=request_name,
+            normalized_request_name=normalized_request,
+            sec_current_name=sec_current_name,
+            normalized_sec_current_name=normalized_current,
+            match_type=match_type,
+            matched_name=matched_name,
+            normalized_matched_name=normalized_matched_name,
+            former_names=tuple(former_names),
+        )
+
+    @staticmethod
+    def _former_name_date(value: str) -> date:
+        if re.fullmatch(r"\d{4}-\d{2}-\d{2}", value):
+            return date.fromisoformat(value)
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        if parsed.tzinfo is None or parsed.utcoffset() is None:
+            raise ValueError("former name timestamp needs timezone")
+        return parsed.astimezone(UTC).date()
+
+    @staticmethod
+    def _normalize_issuer_name(value: str) -> str:
+        normalized = unicodedata.normalize("NFKC", value).casefold()
+        normalized = normalized.replace("&", " and ")
+        return " ".join(re.sub(r"[^\w]+", " ", normalized).split())
 
     @staticmethod
     def _canonical_cik(value: object) -> str:
@@ -282,9 +397,7 @@ class SecSubmissionsCollector:
         for field in _RECENT_FIELDS:
             value = payload.get(field)
             if not isinstance(value, list):
-                raise SecSubmissionsError(
-                    "SEC submissions invalid recent filings"
-                )
+                raise SecSubmissionsError("SEC submissions invalid recent filings")
             columns[field] = value
         lengths = {len(column) for column in columns.values()}
         if len(lengths) != 1:
@@ -324,20 +437,14 @@ class SecSubmissionsCollector:
         if files is None:
             return (), False
         if not isinstance(files, list):
-            raise SecSubmissionsError(
-                "SEC submissions history files are invalid"
-            )
+            raise SecSubmissionsError("SEC submissions history files are invalid")
         if len(files) > _MAX_HISTORY_FILES:
-            raise SecSubmissionsError(
-                "SEC submissions has too many history files"
-            )
+            raise SecSubmissionsError("SEC submissions has too many history files")
         history: list[_SecSubmissionHistoryReference] = []
         names: set[str] = set()
         for value in files:
             if not isinstance(value, dict):
-                raise SecSubmissionsError(
-                    "SEC submissions history files are invalid"
-                )
+                raise SecSubmissionsError("SEC submissions history files are invalid")
             name = value.get("name")
             filing_count = value.get("filingCount")
             if (
@@ -351,13 +458,9 @@ class SecSubmissionsCollector:
                 or isinstance(filing_count, bool)
                 or filing_count < 0
             ):
-                raise SecSubmissionsError(
-                    "SEC submissions history files are invalid"
-                )
+                raise SecSubmissionsError("SEC submissions history files are invalid")
             if name in names:
-                raise SecSubmissionsError(
-                    "SEC submissions duplicate history file"
-                )
+                raise SecSubmissionsError("SEC submissions duplicate history file")
             names.add(name)
             filing_from = SecSubmissionsCollector._date(
                 value.get("filingFrom"),
@@ -368,9 +471,7 @@ class SecSubmissionsCollector:
                 required=True,
             )
             if filing_from > filing_to:
-                raise SecSubmissionsError(
-                    "SEC submissions history files are invalid"
-                )
+                raise SecSubmissionsError("SEC submissions history files are invalid")
             history.append(
                 _SecSubmissionHistoryReference(
                     name=name,
@@ -396,11 +497,12 @@ class SecSubmissionsCollector:
             or not isinstance(form, str)
             or not form.strip()
             or not isinstance(primary_document, str)
-            or DOCUMENT_PATTERN.fullmatch(primary_document) is None
+            or _SUBMISSION_DOCUMENT_PATTERN.fullmatch(primary_document) is None
+            or any(
+                segment in {"", ".", ".."} for segment in primary_document.split("/")
+            )
         ):
             raise SecSubmissionsError("SEC submissions filing identity is invalid")
-        if accession[:10] != request.cik:
-            raise SecSubmissionsError("SEC submissions filing CIK mismatch")
         filing_date = SecSubmissionsCollector._date(
             row["filingDate"],
             required=True,
@@ -411,9 +513,7 @@ class SecSubmissionsCollector:
         )
         acceptance = row["acceptanceDateTime"]
         if acceptance is not None and not isinstance(acceptance, str):
-            raise SecSubmissionsError(
-                "SEC submissions acceptance time is invalid"
-            )
+            raise SecSubmissionsError("SEC submissions acceptance time is invalid")
         try:
             temporal = assess_publication_time(
                 acceptance,
@@ -457,10 +557,33 @@ class SecSubmissionsCollector:
             ) from error
 
 
+def evaluate_sec_issuer_identity(
+    request_name: str,
+    sec_current_name: str,
+    former_names: tuple[SecIssuerFormerName, ...],
+) -> SecIssuerIdentityEvidence:
+    return SecSubmissionsCollector._issuer_identity(
+        request_name,
+        sec_current_name,
+        [
+            {
+                "name": former_name.name,
+                "from": former_name.from_date.isoformat(),
+                "to": former_name.to_date.isoformat(),
+            }
+            for former_name in former_names
+        ],
+    )
+
+
 __all__ = [
+    "SEC_ISSUER_IDENTITY_POLICY_VERSION",
+    "SecIssuerFormerName",
+    "SecIssuerIdentityEvidence",
     "SecSubmissionFiling",
     "SecSubmissionHistoryFile",
     "SecSubmissionsCollector",
     "SecSubmissionsError",
     "SecSubmissionsSnapshot",
+    "evaluate_sec_issuer_identity",
 ]

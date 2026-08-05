@@ -1,18 +1,43 @@
+export const RESEARCH_CONTRACTS = Object.freeze({
+  "biotech_moonshot_catalyst_assessment::biotech-moonshot-catalyst-v1": {
+    question_type: "biotech_moonshot_catalyst_assessment",
+    question_type_version: "biotech_moonshot_catalyst_assessment.v1",
+    workflow_config_version: "biotech-moonshot-catalyst-v1",
+    thesis_contract_id: "biotech_moonshot_catalyst_assessment",
+  },
+  "biotech_moonshot_catalyst_personal_research_assessment::biotech-moonshot-catalyst-personal-research-v1": {
+    question_type:
+      "biotech_moonshot_catalyst_personal_research_assessment",
+    question_type_version:
+      "biotech_moonshot_catalyst_personal_research_assessment.v1",
+    workflow_config_version:
+      "biotech-moonshot-catalyst-personal-research-v1",
+    thesis_contract_id:
+      "biotech_moonshot_catalyst_personal_research_v1",
+  },
+} as const);
+
+type ResearchContract = (typeof RESEARCH_CONTRACTS)[keyof typeof RESEARCH_CONTRACTS];
+export type ResearchQuestionType = ResearchContract["question_type"];
+export type ResearchQuestionTypeVersion = ResearchContract["question_type_version"];
+export type ResearchWorkflowConfigVersion = ResearchContract["workflow_config_version"];
+export type ThesisContractId = ResearchContract["thesis_contract_id"];
+
 export type ResearchQuestionRequest = {
-  question_type: "biotech_moonshot_catalyst_assessment";
+  question_type: ResearchQuestionType;
   security_id: string;
   as_of_cutoff: string;
-  workflow_config_version: "biotech-moonshot-catalyst-v1";
+  workflow_config_version: ResearchWorkflowConfigVersion;
   operator_focus?: string | null;
 };
 
 export type NormalizedResearchQuestionRequest = {
-  question_type: "biotech_moonshot_catalyst_assessment";
-  question_type_version: "biotech_moonshot_catalyst_assessment.v1";
+  question_type: ResearchQuestionType;
+  question_type_version: ResearchQuestionTypeVersion;
   security_id: string;
   as_of_cutoff: string;
-  workflow_config_version: "biotech-moonshot-catalyst-v1";
-  thesis_contract_id: "biotech_moonshot_catalyst_assessment";
+  workflow_config_version: ResearchWorkflowConfigVersion;
+  thesis_contract_id: ThesisContractId;
   operator_focus_original: string | null;
   operator_focus_normalized: string | null;
 };
@@ -48,10 +73,10 @@ export type ResearchRun = {
   operator_id: string;
   security_id: string;
   security_identity: SecurityIdentity;
-  question_type: "biotech_moonshot_catalyst_assessment";
-  question_type_version: "biotech_moonshot_catalyst_assessment.v1";
-  workflow_config_version: "biotech-moonshot-catalyst-v1";
-  thesis_contract_id: "biotech_moonshot_catalyst_assessment";
+  question_type: ResearchQuestionType;
+  question_type_version: ResearchQuestionTypeVersion;
+  workflow_config_version: ResearchWorkflowConfigVersion;
+  thesis_contract_id: ThesisContractId;
   as_of_cutoff: string;
   operator_focus_original: string | null;
   operator_focus_normalized: string | null;
@@ -178,6 +203,17 @@ const REQUEST_REQUIRED_KEYS = [
   "workflow_config_version",
 ] as const;
 
+function resolveResearchContract(
+  questionType: unknown,
+  workflowConfigVersion: unknown,
+): ResearchContract | null {
+  if (typeof questionType !== "string" || typeof workflowConfigVersion !== "string") {
+    return null;
+  }
+  const key = `${questionType}::${workflowConfigVersion}` as keyof typeof RESEARCH_CONTRACTS;
+  return RESEARCH_CONTRACTS[key] ?? null;
+}
+
 export function parseResearchQuestionRequest(
   value: unknown,
 ): ResearchQuestionRequest {
@@ -189,10 +225,11 @@ export function parseResearchQuestionRequest(
   ) {
     throw new TypeError("invalid research question request fields");
   }
-  if (
-    request.question_type !== "biotech_moonshot_catalyst_assessment" ||
-    request.workflow_config_version !== "biotech-moonshot-catalyst-v1"
-  ) {
+  const contract = resolveResearchContract(
+    request.question_type,
+    request.workflow_config_version,
+  );
+  if (contract === null) {
     throw new TypeError("unsupported research question contract");
   }
   assertUuid(request.security_id, "request security id");
@@ -205,10 +242,10 @@ export function parseResearchQuestionRequest(
     throw new TypeError("invalid operator focus");
   }
   return {
-    question_type: request.question_type,
+    question_type: contract.question_type,
     security_id: String(request.security_id).toLowerCase(),
     as_of_cutoff: canonicalUtcTimestamp(String(request.as_of_cutoff)),
-    workflow_config_version: request.workflow_config_version,
+    workflow_config_version: contract.workflow_config_version,
     operator_focus:
       request.operator_focus === undefined ? null : request.operator_focus,
   } as ResearchQuestionRequest;
@@ -233,13 +270,20 @@ function normalizeOperatorFocus(value: string | null | undefined): string | null
 export function normalizeResearchQuestionRequest(
   request: ResearchQuestionRequest,
 ): NormalizedResearchQuestionRequest {
+  const contract = resolveResearchContract(
+    request.question_type,
+    request.workflow_config_version,
+  );
+  if (contract === null) {
+    throw new TypeError("unsupported research question contract");
+  }
   return {
-    question_type: request.question_type,
-    question_type_version: "biotech_moonshot_catalyst_assessment.v1",
+    question_type: contract.question_type,
+    question_type_version: contract.question_type_version,
     security_id: request.security_id.toLowerCase(),
     as_of_cutoff: canonicalUtcTimestamp(request.as_of_cutoff),
-    workflow_config_version: request.workflow_config_version,
-    thesis_contract_id: "biotech_moonshot_catalyst_assessment",
+    workflow_config_version: contract.workflow_config_version,
+    thesis_contract_id: contract.thesis_contract_id,
     operator_focus_original: request.operator_focus ?? null,
     operator_focus_normalized: normalizeOperatorFocus(request.operator_focus),
   };
@@ -318,11 +362,14 @@ export function parseResearchRun(value: unknown): ResearchRun {
   if (run.contract_version !== "research_run.v1") {
     throw new TypeError("invalid Research Run contract version");
   }
+  const contract = resolveResearchContract(
+    run.question_type,
+    run.workflow_config_version,
+  );
   if (
-    run.question_type !== "biotech_moonshot_catalyst_assessment" ||
-    run.question_type_version !== "biotech_moonshot_catalyst_assessment.v1" ||
-    run.workflow_config_version !== "biotech-moonshot-catalyst-v1" ||
-    run.thesis_contract_id !== "biotech_moonshot_catalyst_assessment" ||
+    contract === null ||
+    run.question_type_version !== contract.question_type_version ||
+    run.thesis_contract_id !== contract.thesis_contract_id ||
     run.status !== "eligibility_evaluated"
   ) {
     throw new TypeError("incompatible Research Run versions or state");

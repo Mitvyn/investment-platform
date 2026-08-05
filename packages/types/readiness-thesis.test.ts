@@ -54,6 +54,69 @@ test("accepts deterministic readiness only when every required condition passes"
   assert.deepEqual(parseReadinessGateResult(readiness, upstream), readiness);
 });
 
+test("personal research readiness and thesis use separate contract identity", () => {
+  const personalReadiness = structuredClone(readiness) as Record<string, any>;
+  personalReadiness.thesis_contract_id =
+    "biotech_moonshot_catalyst_personal_research_v1";
+  personalReadiness.gate_policy_version = "biotech-personal-readiness.v1";
+  personalReadiness.passed_checks = personalReadiness.passed_checks.map(
+    (check: Record<string, any>) => ({
+      ...check,
+      check_version: "biotech-personal-readiness.v1",
+    }),
+  );
+  const personalContext = {
+    ...upstream,
+    thesisContractId:
+      "biotech_moonshot_catalyst_personal_research_v1",
+  } as const;
+  const parsedReadiness = parseReadinessGateResult(
+    personalReadiness,
+    personalContext,
+  );
+  const personalThesis = structuredClone(canonicalThesis) as Record<string, any>;
+  personalThesis.thesis_contract_id = personalContext.thesisContractId;
+  personalThesis.question_type_version =
+    "biotech_moonshot_catalyst_personal_research_assessment.v1";
+  personalThesis.workflow_config_version =
+    "biotech-moonshot-catalyst-personal-research-v1";
+  personalThesis.readiness_gate_policy_version =
+    "biotech-personal-readiness.v1";
+
+  const parsedThesis = parseThesisVersion(personalThesis, {
+    readinessResult: parsedReadiness,
+    questionTypeVersion:
+      "biotech_moonshot_catalyst_personal_research_assessment.v1",
+    workflowConfigVersion:
+      "biotech-moonshot-catalyst-personal-research-v1",
+    propositionId: "biotech_moonshot_catalyst_case",
+    propositionVersion: "biotech_moonshot_catalyst_case.v1",
+    memoStatementIds: [
+      "statement-common-ground",
+      "statement-invalidation",
+      "statement-gap",
+      "statement-review-trigger",
+    ],
+    memoDisagreementIds: ["disagreement-financing-asymmetry"],
+  });
+
+  assert.equal(
+    parsedThesis.thesis_contract_id,
+    "biotech_moonshot_catalyst_personal_research_v1",
+  );
+  assert.throws(
+    () =>
+      parseReadinessGateResult(
+        {
+          ...personalReadiness,
+          gate_policy_version: "biotech-readiness.v1",
+        },
+        personalContext,
+      ),
+    /gate policy identity mismatch/,
+  );
+});
+
 function blockedDecisionReady(): Record<string, any> {
   const blocked = structuredClone(readiness) as Record<string, any>;
   const failed = blocked.passed_checks.pop();
@@ -79,7 +142,7 @@ function parseCanonicalThesis() {
   return parseThesisVersion(canonicalThesis, {
     readinessResult: parseReadinessGateResult(readiness, upstream),
     questionTypeVersion: "biotech_moonshot_catalyst_assessment.v1",
-    workflowConfigVersion: "biotech_moonshot_catalyst_workflow.v1",
+    workflowConfigVersion: "biotech-moonshot-catalyst-v1",
     propositionId: "biotech_moonshot_catalyst_case",
     propositionVersion: "biotech_moonshot_catalyst_case.v1",
     memoStatementIds: [
@@ -167,7 +230,7 @@ test("creates a non-superseding provisional thesis from a committee with abstent
     parseThesisVersion(provisional, {
       readinessResult: parsedReadiness,
       questionTypeVersion: "biotech_moonshot_catalyst_assessment.v1",
-      workflowConfigVersion: "biotech_moonshot_catalyst_workflow.v1",
+      workflowConfigVersion: "biotech-moonshot-catalyst-v1",
       propositionId: "biotech_moonshot_catalyst_case",
       propositionVersion: "biotech_moonshot_catalyst_case.v1",
       memoStatementIds: [
@@ -367,7 +430,7 @@ test("records one deterministic canonical creation outcome for the run", () => {
   const parsedThesis = parseThesisVersion(canonicalThesis, {
     readinessResult: parsedReadiness,
     questionTypeVersion: "biotech_moonshot_catalyst_assessment.v1",
-    workflowConfigVersion: "biotech_moonshot_catalyst_workflow.v1",
+    workflowConfigVersion: "biotech-moonshot-catalyst-v1",
     propositionId: "biotech_moonshot_catalyst_case",
     propositionVersion: "biotech_moonshot_catalyst_case.v1",
     memoStatementIds: [

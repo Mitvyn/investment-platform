@@ -6,7 +6,7 @@ from decimal import Decimal
 import hashlib
 import json
 import re
-from typing import Callable, Mapping, Protocol
+from typing import Callable, Mapping, Protocol, runtime_checkable
 
 from investment_research_os.evidence_bundles import (
     EvidenceBundle,
@@ -27,11 +27,19 @@ class GraderExecutionError(ValueError):
 
 
 class ProviderTransportError(RuntimeError):
-    """Raised by provider boundary for retryable transport failure."""
+    """Raised by provider boundary with explicit retry and category policy."""
 
-    def __init__(self, code: str) -> None:
+    def __init__(
+        self,
+        code: str,
+        *,
+        retryable: bool = True,
+        category: str = "transport",
+    ) -> None:
         super().__init__(code)
         self.code = code
+        self.retryable = retryable
+        self.category = category
 
 
 PRODUCTION_PRICE_CARD_MAX_AGE = timedelta(days=30)
@@ -144,6 +152,7 @@ class ProviderResponse:
     usage: ProviderUsage
     resolved_model: str
     system_fingerprint: str | None
+    raw_provider_response: Mapping[str, object] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -158,11 +167,41 @@ class ProviderRequest:
     temperature: str
     input_token_cap: int
     output_token_cap: int
+    execution_role: str
+    prompt_id: str
+    prompt_version: str
+    prompt_content_sha256: str
+    input_schema_version: str
+    output_schema_version: str
     attempt_number: int
     validation_errors: tuple[str, ...]
 
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "execution_identity": self.execution_identity,
+            "request_hash": self.request_hash,
+            "provider": self.provider,
+            "model": self.model,
+            "logical_input": dict(self.logical_input),
+            "reasoning_effort": self.reasoning_effort,
+            "thinking_enabled": self.thinking_enabled,
+            "temperature": self.temperature,
+            "input_token_cap": self.input_token_cap,
+            "output_token_cap": self.output_token_cap,
+            "execution_role": self.execution_role,
+            "prompt_id": self.prompt_id,
+            "prompt_version": self.prompt_version,
+            "prompt_content_sha256": self.prompt_content_sha256,
+            "input_schema_version": self.input_schema_version,
+            "output_schema_version": self.output_schema_version,
+            "attempt_number": self.attempt_number,
+            "validation_errors": list(self.validation_errors),
+        }
+
 
 class GraderProvider(Protocol):
+    def audit_request(self, request: ProviderRequest) -> Mapping[str, object]: ...
+
     def execute(self, request: ProviderRequest) -> ProviderResponse: ...
 
 
@@ -186,9 +225,7 @@ class AbstentionResult:
         return {
             "reason_code": self.reason_code,
             "reason": self.reason,
-            "missing_or_inadequate_evidence": list(
-                self.missing_or_inadequate_evidence
-            ),
+            "missing_or_inadequate_evidence": list(self.missing_or_inadequate_evidence),
             "evidence_required": list(self.evidence_required),
             "confidence": self.confidence,
         }
@@ -269,9 +306,7 @@ class GraderOpinion:
                 for item in self.evidence_gaps
             ],
             "invalidation_signals": list(self.invalidation_signals),
-            "abstention": (
-                self.abstention.as_dict() if self.abstention else None
-            ),
+            "abstention": (self.abstention.as_dict() if self.abstention else None),
             "domain_payload": dict(self.domain_payload),
         }
 
@@ -371,16 +406,12 @@ class GraderExecution:
         if self.request is None:
             raise GraderExecutionError("execution contract metadata missing")
         request = self.request
-        started_at = (
-            self.attempts[0].started_at if self.attempts else self.created_at
-        )
+        started_at = self.attempts[0].started_at if self.attempts else self.created_at
         serialized_attempts = [
             _attempt_contract(self, attempt) for attempt in self.attempts
         ]
         total_usage = _sum_usage(self.attempts)
-        reserved_cost = format(
-            _maximum_cost(request.model, request.price_card), "f"
-        )
+        reserved_cost = format(_maximum_cost(request.model, request.price_card), "f")
         estimated_total = sum(
             (Decimal(attempt.estimated_cost_usd) for attempt in self.attempts),
             Decimal("0"),
@@ -408,17 +439,12 @@ class GraderExecution:
             if self.execution_state == "not_executed"
             else (
                 "reconciled"
-                if any(
-                    attempt.usage.usage_complete
-                    for attempt in self.attempts
-                )
+                if any(attempt.usage.usage_complete for attempt in self.attempts)
                 else "released"
             )
         )
         opinion = (
-            _opinion_contract(self, self.opinion)
-            if self.opinion is not None
-            else None
+            _opinion_contract(self, self.opinion) if self.opinion is not None else None
         )
         return {
             "contract_version": "grader_execution.v1",
@@ -434,37 +460,25 @@ class GraderExecution:
             "thesis_contract_id": self.question_type_id,
             "grader_id": self.grader_id,
             "grader_version": self.grader_version,
-            "grader_contract_version": (
-                request.grader.grader_contract_version
-            ),
-            "eligibility_rule_version": (
-                request.grader.eligibility_rule_version
-            ),
+            "grader_contract_version": (request.grader.grader_contract_version),
+            "eligibility_rule_version": (request.grader.eligibility_rule_version),
             "rubric_version": request.grader.rubric_version,
             "output_schema_version": request.grader.output_schema_version,
-            "abstention_rules_version": (
-                request.grader.abstention_rule_version
-            ),
+            "abstention_rules_version": (request.grader.abstention_rule_version),
             "prompt_version": self.prompt_version,
             "model_config_id": request.model.config_id,
             "provider": request.model.provider,
             "model": request.model.model,
-            "inference_parameter_hash": _inference_parameter_hash(
-                request.model
-            ),
+            "inference_parameter_hash": _inference_parameter_hash(request.model),
             "retry_policy_version": self.retry_policy_version,
             "required": request.grader.required,
             "execution_state": self.execution_state,
             "pre_call_gate": gate,
             "budget": {
                 "reservation_id": reservation_id,
-                "budget_policy_version": (
-                    request.policy.budget_policy_version
-                ),
+                "budget_policy_version": (request.policy.budget_policy_version),
                 "currency": "USD",
-                "reserved_cost_usd": (
-                    "0" if reservation_id is None else reserved_cost
-                ),
+                "reserved_cost_usd": ("0" if reservation_id is None else reserved_cost),
                 "reconciled_cost_usd": (
                     billed_total if budget_status == "reconciled" else None
                 ),
@@ -473,9 +487,7 @@ class GraderExecution:
             "attempts": serialized_attempts,
             "total_usage": _usage_contract(total_usage),
             "total_cost": {
-                "reserved_cost_usd": (
-                    "0" if reservation_id is None else reserved_cost
-                ),
+                "reserved_cost_usd": ("0" if reservation_id is None else reserved_cost),
                 "estimated_cost_usd": format(estimated_total, "f"),
                 "billed_cost_usd": billed_total,
                 "currency": "USD",
@@ -496,9 +508,7 @@ class GraderExecution:
                 else None
             ),
             "failure": (
-                _failure_contract(self.failure)
-                if self.failure is not None
-                else None
+                _failure_contract(self.failure) if self.failure is not None else None
             ),
             "opinion": opinion,
             "started_at": started_at.isoformat(),
@@ -511,9 +521,7 @@ def _usage_contract(usage: ProviderUsage) -> dict[str, object]:
         "input_tokens": usage.input_tokens,
         "cached_input_tokens": usage.cached_input_tokens,
         "cache_write_tokens": usage.cache_write_tokens,
-        "uncached_input_tokens": (
-            usage.input_tokens - usage.cached_input_tokens
-        ),
+        "uncached_input_tokens": (usage.input_tokens - usage.cached_input_tokens),
         "output_tokens": usage.output_tokens,
         "reasoning_tokens": usage.reasoning_tokens,
         "total_tokens": usage.total_tokens,
@@ -525,23 +533,13 @@ def _usage_contract(usage: ProviderUsage) -> dict[str, object]:
 def _sum_usage(attempts: tuple[GraderAttempt, ...]) -> ProviderUsage:
     return ProviderUsage(
         input_tokens=sum(item.usage.input_tokens for item in attempts),
-        cached_input_tokens=sum(
-            item.usage.cached_input_tokens for item in attempts
-        ),
+        cached_input_tokens=sum(item.usage.cached_input_tokens for item in attempts),
         output_tokens=sum(item.usage.output_tokens for item in attempts),
-        reasoning_tokens=sum(
-            item.usage.reasoning_tokens for item in attempts
-        ),
+        reasoning_tokens=sum(item.usage.reasoning_tokens for item in attempts),
         total_tokens=sum(item.usage.total_tokens for item in attempts),
-        tool_call_count=sum(
-            item.usage.tool_call_count for item in attempts
-        ),
-        usage_complete=all(
-            item.usage.usage_complete for item in attempts
-        ),
-        cache_write_tokens=sum(
-            item.usage.cache_write_tokens for item in attempts
-        ),
+        tool_call_count=sum(item.usage.tool_call_count for item in attempts),
+        usage_complete=all(item.usage.usage_complete for item in attempts),
+        cache_write_tokens=sum(item.usage.cache_write_tokens for item in attempts),
     )
 
 
@@ -561,9 +559,7 @@ def _attempt_contract(
         }
     elif attempt.validation_state == "rejected":
         result = "validation_error"
-        citation_error = "invalid_opinion_citation" in (
-            attempt.validation_errors
-        )
+        citation_error = "invalid_opinion_citation" in (attempt.validation_errors)
         validation = {
             "status": "failed",
             "schema_valid": citation_error,
@@ -571,11 +567,7 @@ def _attempt_contract(
             "errors": list(attempt.validation_errors),
         }
     else:
-        result = (
-            "abstained"
-            if execution.execution_state == "abstained"
-            else "accepted"
-        )
+        result = "abstained" if execution.execution_state == "abstained" else "accepted"
         validation = {
             "status": "passed",
             "schema_valid": True,
@@ -589,11 +581,7 @@ def _attempt_contract(
         ),
         "f",
     )
-    billed_cost = (
-        attempt.estimated_cost_usd
-        if attempt.usage.usage_complete
-        else None
-    )
+    billed_cost = attempt.estimated_cost_usd if attempt.usage.usage_complete else None
     return {
         "attempt_id": attempt.attempt_id,
         "attempt_number": attempt.attempt_number,
@@ -606,10 +594,7 @@ def _attempt_contract(
         "finished_at": attempt.finished_at.isoformat(),
         "duration_ms": max(
             0,
-            int(
-                (attempt.finished_at - attempt.started_at).total_seconds()
-                * 1000
-            ),
+            int((attempt.finished_at - attempt.started_at).total_seconds() * 1000),
         ),
         "result": result,
         "provider_request_id": attempt.provider_request_id,
@@ -621,9 +606,7 @@ def _attempt_contract(
             "estimated_cost_usd": attempt.estimated_cost_usd,
             "billed_cost_usd": billed_cost,
             "currency": "USD",
-            "price_card_version": (
-                execution.request.price_card.price_card_id
-            ),
+            "price_card_version": (execution.request.price_card.price_card_id),
         },
         "validation": validation,
         "retry_reason": attempt.retry_reason,
@@ -645,9 +628,7 @@ def _gate_contract(execution: GraderExecution) -> dict[str, object]:
             "evidence_passage_hash_mismatch",
             "grader_not_eligible",
         },
-        "retention_policy_approved": {
-            "provider_retention_not_approved"
-        },
+        "retention_policy_approved": {"provider_retention_not_approved"},
         "evaluation_release_approved": {
             "model_evaluation_missing",
             "prompt_evaluation_missing",
@@ -655,9 +636,7 @@ def _gate_contract(execution: GraderExecution) -> dict[str, object]:
         "price_card_available": {"price_card_invalid"},
         "budget_available": {"hard_budget_unavailable"},
         "token_caps_valid": {"token_cap_invalid"},
-        "operator_environment_allowed": {
-            "execution_environment_mismatch"
-        },
+        "operator_environment_allowed": {"execution_environment_mismatch"},
     }
     checks = []
     for check_id, reasons in reason_by_check.items():
@@ -725,9 +704,7 @@ def _opinion_contract(
         "proposition": {
             "proposition_id": opinion.proposition_id,
             "proposition_version": opinion.proposition_version,
-            "rendered_proposition_text": (
-                opinion.rendered_proposition_text
-            ),
+            "rendered_proposition_text": (opinion.rendered_proposition_text),
             "grader_stance": opinion.grader_stance,
             "stance_rationale": (
                 opinion.stance_rationale
@@ -736,9 +713,7 @@ def _opinion_contract(
             ),
         },
         payload_key: dict(opinion.domain_payload),
-        "abstention": (
-            opinion.abstention.as_dict() if opinion.abstention else None
-        ),
+        "abstention": (opinion.abstention.as_dict() if opinion.abstention else None),
         "created_at": execution.created_at.isoformat(),
     }
 
@@ -772,30 +747,94 @@ def _inference_parameter_hash(model: ModelConfiguration) -> str:
     return hashlib.sha256(_canonical_json(payload).encode()).hexdigest()
 
 
+def _raw_attempt_identity(
+    operator_id: str,
+    attempt_id: str,
+    audit: Mapping[str, object],
+) -> tuple[str, str]:
+    return (
+        stable_id(operator_id, "grader-raw-payload", attempt_id),
+        hashlib.sha256(_canonical_json(audit).encode()).hexdigest(),
+    )
+
+
+@runtime_checkable
+class GraderExecutionRepository(Protocol):
+    def begin_raw_attempt(
+        self,
+        operator_id: str,
+        attempt_id: str,
+        request_payload: Mapping[str, object],
+    ) -> tuple[str, str]: ...
+
+    def finish_raw_attempt(
+        self,
+        operator_id: str,
+        attempt_id: str,
+        response_payload: Mapping[str, object],
+    ) -> tuple[str, str]: ...
+
+    def save(self, execution: GraderExecution) -> GraderExecution: ...
+
+    def get_for_identity(
+        self,
+        operator_id: str,
+        execution_identity: str,
+    ) -> GraderExecution | None: ...
+
+
+@runtime_checkable
+class BudgetLedger(Protocol):
+    def reserve(self, amount: Decimal) -> str: ...
+
+    def reconcile(self, reservation_id: str, actual: Decimal) -> None: ...
+
+    def release(self, reservation_id: str) -> None: ...
+
+
 class InMemoryGraderExecutionRepository:
     def __init__(self) -> None:
         self._executions: dict[tuple[str, str], GraderExecution] = {}
         self._raw_attempts: dict[tuple[str, str], Mapping[str, object]] = {}
 
-    def save_raw_attempt(
+    def begin_raw_attempt(
         self,
         operator_id: str,
         attempt_id: str,
-        raw_output: Mapping[str, object],
+        request_payload: Mapping[str, object],
     ) -> tuple[str, str]:
-        safe_output = _without_reasoning_content(raw_output)
+        safe_request = _without_reasoning_content(request_payload)
         key = (operator_id, attempt_id)
         existing = self._raw_attempts.get(key)
-        if existing is not None and existing != safe_output:
-            raise GraderExecutionError("conflicting immutable raw attempt")
-        self._raw_attempts[key] = safe_output
-        payload_hash = hashlib.sha256(
-            _canonical_json(safe_output).encode()
-        ).hexdigest()
-        return (
-            stable_id(operator_id, "grader-raw-payload", attempt_id),
-            payload_hash,
-        )
+        if existing is not None:
+            if existing.get("request") != safe_request:
+                raise GraderExecutionError("conflicting immutable raw attempt request")
+            return _raw_attempt_identity(operator_id, attempt_id, existing)
+        audit = {"request": safe_request, "response": None}
+        self._raw_attempts[key] = audit
+        return _raw_attempt_identity(operator_id, attempt_id, audit)
+
+    def finish_raw_attempt(
+        self,
+        operator_id: str,
+        attempt_id: str,
+        response_payload: Mapping[str, object],
+    ) -> tuple[str, str]:
+        safe_response = _without_reasoning_content(response_payload)
+        key = (operator_id, attempt_id)
+        existing = self._raw_attempts.get(key)
+        if existing is None:
+            raise GraderExecutionError("raw attempt request is unavailable")
+        current_response = existing.get("response")
+        if current_response is not None and current_response != safe_response:
+            raise GraderExecutionError("conflicting immutable raw attempt response")
+        if current_response is None:
+            existing = {
+                "request": existing["request"],
+                "response": safe_response,
+            }
+            self._raw_attempts[key] = existing
+        return _raw_attempt_identity(operator_id, attempt_id, existing)
 
     def save(self, execution: GraderExecution) -> GraderExecution:
         key = (execution.operator_id, execution.execution_identity)
@@ -833,7 +872,10 @@ class InMemoryBudgetLedger:
         self.reconciled_usd = Decimal("0")
 
     def reserve(self, amount: Decimal) -> str:
-        if amount <= 0 or self.reserved_usd + self.reconciled_usd + amount > self.hard_limit_usd:
+        if (
+            amount <= 0
+            or self.reserved_usd + self.reconciled_usd + amount > self.hard_limit_usd
+        ):
             raise GraderExecutionError("hard budget unavailable")
         self.reserved_usd += amount
         return "offline-budget-reservation"
@@ -855,8 +897,8 @@ class GraderExecutionWorkflow:
         self,
         *,
         evidence_bundle_repository: EvidenceBundleRepository,
-        execution_repository: InMemoryGraderExecutionRepository,
-        budget_ledger: InMemoryBudgetLedger,
+        execution_repository: GraderExecutionRepository,
+        budget_ledger: BudgetLedger,
         provider: GraderProvider,
         clock: Callable[[], datetime],
         valuation_snapshot_repository: ValuationSnapshotRepository | None = None,
@@ -906,20 +948,12 @@ class GraderExecutionWorkflow:
             "rubric_version": request.grader.rubric_version,
             "schema_version": request.grader.output_schema_version,
             "prompt_version": request.prompt.prompt_version,
-            "prompt_input_schema_version": (
-                request.prompt.input_schema_version
-            ),
+            "prompt_input_schema_version": (request.prompt.input_schema_version),
             "prompt_content_sha256": request.prompt.content_sha256,
-            "evaluation_corpus_sha256": (
-                request.prompt.evaluation_corpus_sha256
-            ),
+            "evaluation_corpus_sha256": (request.prompt.evaluation_corpus_sha256),
             "evaluation_corpus_id": request.prompt.evaluation_corpus_id,
-            "evaluation_corpus_version": (
-                request.prompt.evaluation_corpus_version
-            ),
-            "evaluation_identity_sha256": (
-                request.prompt.evaluation_identity_sha256
-            ),
+            "evaluation_corpus_version": (request.prompt.evaluation_corpus_version),
+            "evaluation_identity_sha256": (request.prompt.evaluation_identity_sha256),
             "model_config_version": request.model.config_version,
             "provider": request.model.provider,
             "model": request.model.model,
@@ -986,9 +1020,7 @@ class GraderExecutionWorkflow:
                 if item.item_kind == "passage"
             ],
             "valuation_snapshot": (
-                None
-                if valuation_snapshot is None
-                else valuation_snapshot.as_dict()
+                None if valuation_snapshot is None else valuation_snapshot.as_dict()
             ),
             "question_type_id": request.question_type_id,
             "question_type_version": request.question_type_version,
@@ -1005,12 +1037,8 @@ class GraderExecutionWorkflow:
         validation_errors: tuple[str, ...] = ()
         previous_retry_reason: str | None = None
         exhausted_reason = "validation_retry_exhausted"
-        allowed_evidence_ids = {
-            item.evidence_id for item in bundle.manifest
-        }
-        allowed_calculation_ids = {
-            item.snapshot_id for item in bundle.metrics
-        }
+        allowed_evidence_ids = {item.evidence_id for item in bundle.manifest}
+        allowed_calculation_ids = {item.snapshot_id for item in bundle.metrics}
         if valuation_snapshot is not None:
             allowed_calculation_ids.update(valuation_snapshot.calculation_ids)
         for attempt_number in range(1, request.policy.max_attempts + 1):
@@ -1055,6 +1083,12 @@ class GraderExecutionWorkflow:
                 temperature=request.model.temperature,
                 input_token_cap=request.model.input_token_cap,
                 output_token_cap=request.model.output_token_cap,
+                execution_role=f"grader:{request.grader.grader_id}",
+                prompt_id=request.prompt.prompt_id,
+                prompt_version=request.prompt.prompt_version,
+                prompt_content_sha256=request.prompt.content_sha256,
+                input_schema_version=request.prompt.input_schema_version,
+                output_schema_version=request.prompt.output_schema_version,
                 attempt_number=attempt_number,
                 validation_errors=validation_errors,
             )
@@ -1063,6 +1097,13 @@ class GraderExecutionWorkflow:
                 operator.id,
                 "grader-attempt",
                 f"{execution_identity}:{attempt_number}",
+            )
+            raw_payload_id, raw_payload_sha256 = (
+                self._execution_repository.begin_raw_attempt(
+                    operator.id,
+                    attempt_id,
+                    self._provider.audit_request(provider_request),
+                )
             )
             try:
                 response = self._provider.execute(provider_request)
@@ -1075,8 +1116,8 @@ class GraderExecutionWorkflow:
                         attempt_number=attempt_number,
                         request_hash=request_hash,
                         provider_request_id=None,
-                        raw_payload_id=None,
-                        raw_payload_sha256=None,
+                        raw_payload_id=raw_payload_id,
+                        raw_payload_sha256=raw_payload_sha256,
                         provider=request.model.provider,
                         requested_model=request.model.model,
                         resolved_model=request.model.model,
@@ -1092,13 +1133,27 @@ class GraderExecutionWorkflow:
                     )
                 )
                 previous_retry_reason = error.code
+                if not error.retryable:
+                    return self._execution_repository.save(
+                        _terminal_execution(
+                            operator.id,
+                            bundle,
+                            request,
+                            execution_identity,
+                            "failed",
+                            tuple(attempts),
+                            None,
+                            (error.code,),
+                            finished_at,
+                        )
+                    )
                 exhausted_reason = "transport_retry_exhausted"
                 continue
             raw_payload_id, raw_payload_sha256 = (
-                self._execution_repository.save_raw_attempt(
-                operator.id,
-                attempt_id,
-                response.raw_output,
+                self._execution_repository.finish_raw_attempt(
+                    operator.id,
+                    attempt_id,
+                    response.raw_provider_response or response.raw_output,
                 )
             )
             usage_error = _provider_usage_error(response.usage)
@@ -1214,9 +1269,7 @@ class GraderExecutionWorkflow:
                     system_fingerprint=response.system_fingerprint,
                     validation_state="accepted",
                     validation_errors=(),
-                    retry_reason=(
-                        previous_retry_reason
-                    ),
+                    retry_reason=(previous_retry_reason),
                     usage=response.usage,
                     estimated_cost_usd=format(actual_cost, "f"),
                     price_card_id=request.price_card.price_card_id,
@@ -1315,8 +1368,7 @@ def _validate_opinion(
     for item in raw_claims:
         if (
             not isinstance(item, dict)
-            or set(item)
-            != {"claim_id", "claim", "materiality", "evidence_ids"}
+            or set(item) != {"claim_id", "claim", "materiality", "evidence_ids"}
             or not _nonempty_text(item.get("claim_id"))
             or not _nonempty_text(item.get("claim"))
             or item.get("materiality") not in {"high", "medium", "low"}
@@ -1325,8 +1377,7 @@ def _validate_opinion(
             raise GraderExecutionError("invalid material claim")
         evidence_ids = tuple(str(value) for value in item["evidence_ids"])
         if not evidence_ids or any(
-            evidence_id not in allowed_evidence_ids
-            for evidence_id in evidence_ids
+            evidence_id not in allowed_evidence_ids for evidence_id in evidence_ids
         ):
             raise GraderExecutionError("invalid opinion citation")
         claims.append(
@@ -1348,10 +1399,8 @@ def _validate_opinion(
         raise GraderExecutionError("invalid proposition")
     if (
         proposition.get("proposition_id") != request.proposition_id
-        or proposition.get("proposition_version")
-        != request.proposition_version
-        or proposition.get("rendered_proposition_text")
-        != request.rendered_proposition
+        or proposition.get("proposition_version") != request.proposition_version
+        or proposition.get("rendered_proposition_text") != request.rendered_proposition
         or proposition.get("grader_stance") != stance
     ):
         raise GraderExecutionError("provider output identity mismatch")
@@ -1359,9 +1408,10 @@ def _validate_opinion(
         proposition.get("stance_rationale"), str
     ):
         raise GraderExecutionError("invalid grader stance")
-    if execution_state == "abstained" and proposition.get(
-        "stance_rationale"
-    ) is not None:
+    if (
+        execution_state == "abstained"
+        and proposition.get("stance_rationale") is not None
+    ):
         raise GraderExecutionError("abstention cannot include stance")
     domain_payload = raw_output.get(payload_key)
     if not isinstance(domain_payload, dict):
@@ -1413,9 +1463,7 @@ def _validate_opinion(
     if execution_state == "abstained":
         if not isinstance(abstention_payload, dict):
             raise GraderExecutionError("invalid abstention")
-        missing_evidence = abstention_payload.get(
-            "missing_or_inadequate_evidence"
-        )
+        missing_evidence = abstention_payload.get("missing_or_inadequate_evidence")
         evidence_required = abstention_payload.get("evidence_required")
         if not isinstance(missing_evidence, list) or not isinstance(
             evidence_required,
@@ -1428,9 +1476,7 @@ def _validate_opinion(
             missing_or_inadequate_evidence=tuple(
                 str(value) for value in missing_evidence
             ),
-            evidence_required=tuple(
-                str(value) for value in evidence_required
-            ),
+            evidence_required=tuple(str(value) for value in evidence_required),
             confidence=str(abstention_payload["confidence"]),
         )
     elif abstention_payload is not None:
@@ -1647,9 +1693,9 @@ def _valid_domain_payload(
                 )
             ):
                 return False
-            if not _nonempty_text(
-                scenario.get("scenario_id")
-            ) or not _text_list(scenario.get("assumptions")):
+            if not _nonempty_text(scenario.get("scenario_id")) or not _text_list(
+                scenario.get("assumptions")
+            ):
                 return False
         if cases != {"conservative", "base", "bull", "failure"}:
             return False
@@ -1703,9 +1749,7 @@ def _valid_numeric_value(
         return False
     if any(str(item) not in allowed_evidence_ids for item in evidence_ids):
         return False
-    if any(
-        str(item) not in allowed_calculation_ids for item in calculation_ids
-    ):
+    if any(str(item) not in allowed_calculation_ids for item in calculation_ids):
         return False
     return _text_list(assumptions)
 
@@ -1762,21 +1806,18 @@ def _terminal_execution(
     if execution_state == "failed":
         validation_errors = tuple(
             dict.fromkeys(
-                error
-                for attempt in attempts
-                for error in attempt.validation_errors
+                error for attempt in attempts for error in attempt.validation_errors
             )
         )
         final_reason = blocking_reasons[0]
         failure = ExecutionFailure(
             category=(
                 "transport_failure"
-                if final_reason == "transport_retry_exhausted"
-                else (
-                    "validation_failure"
-                    if validation_errors
-                    else "budget_failure"
+                if any(
+                    attempt.validation_state == "transport_error"
+                    for attempt in attempts
                 )
+                else ("validation_failure" if validation_errors else "budget_failure")
             ),
             attempt_count=len(attempts),
             validation_errors=validation_errors,
@@ -1866,12 +1907,8 @@ def _pre_call_blocking_reasons(
         and (
             not request.prompt.evaluation_corpus_id
             or not request.prompt.evaluation_corpus_version
-            or not SHA256_PATTERN.fullmatch(
-                request.prompt.evaluation_corpus_sha256
-            )
-            or not SHA256_PATTERN.fullmatch(
-                request.prompt.evaluation_identity_sha256
-            )
+            or not SHA256_PATTERN.fullmatch(request.prompt.evaluation_corpus_sha256)
+            or not SHA256_PATTERN.fullmatch(request.prompt.evaluation_identity_sha256)
         )
     ):
         reasons.append("prompt_evaluation_identity_invalid")
@@ -1880,30 +1917,21 @@ def _pre_call_blocking_reasons(
         and SHA256_PATTERN.fullmatch(request.prompt.content_sha256)
         and evaluation_execution_identity_sha256(
             execution_role=f"grader:{request.grader.grader_id}",
-            execution_contract_version=(
-                request.grader.grader_contract_version
-            ),
+            execution_contract_version=(request.grader.grader_contract_version),
             prompt_id=request.prompt.prompt_id,
             prompt_version=request.prompt.prompt_version,
             prompt_content_sha256=request.prompt.content_sha256,
             model_config_id=request.model.config_id,
             model_config_version=request.model.config_version,
-            inference_parameter_hash=_inference_parameter_hash(
-                request.model
-            ),
+            inference_parameter_hash=_inference_parameter_hash(request.model),
             corpus_id=request.prompt.evaluation_corpus_id,
             corpus_version=request.prompt.evaluation_corpus_version,
-            corpus_content_sha256=(
-                request.prompt.evaluation_corpus_sha256
-            ),
+            corpus_content_sha256=(request.prompt.evaluation_corpus_sha256),
         )
         != request.prompt.evaluation_identity_sha256
     ):
         reasons.append("prompt_evaluation_identity_mismatch")
-    if (
-        request.prompt.output_schema_version
-        != request.grader.output_schema_version
-    ):
+    if request.prompt.output_schema_version != request.grader.output_schema_version:
         reasons.append("output_schema_mismatch")
     if (
         request.price_card.provider != request.model.provider
@@ -1927,8 +1955,7 @@ def _pre_call_blocking_reasons(
         or (
             request.policy.required_environment == "production"
             and checked_at
-            >= request.price_card.verified_at
-            + PRODUCTION_PRICE_CARD_MAX_AGE
+            >= request.price_card.verified_at + PRODUCTION_PRICE_CARD_MAX_AGE
         )
         or (
             request.price_card.effective_to is not None
@@ -1936,10 +1963,7 @@ def _pre_call_blocking_reasons(
         )
     ):
         reasons.append("price_card_invalid")
-    if (
-        request.model.input_token_cap <= 0
-        or request.model.output_token_cap <= 0
-    ):
+    if request.model.input_token_cap <= 0 or request.model.output_token_cap <= 0:
         reasons.append("token_cap_invalid")
     if request.policy.max_attempts != 2:
         reasons.append("retry_policy_invalid")
@@ -1953,17 +1977,10 @@ def _evidence_passage_blocking_reasons(
     for item in bundle.manifest:
         if item.item_kind != "passage":
             continue
-        if (
-            not item.passage_id
-            or not item.passage_hash
-            or not item.passage_text
-        ):
+        if not item.passage_id or not item.passage_hash or not item.passage_text:
             reasons.append("evidence_passage_content_unavailable")
             continue
-        if (
-            hashlib.sha256(item.passage_text.encode()).hexdigest()
-            != item.passage_hash
-        ):
+        if hashlib.sha256(item.passage_text.encode()).hexdigest() != item.passage_hash:
             reasons.append("evidence_passage_hash_mismatch")
     return tuple(dict.fromkeys(reasons))
 
@@ -1987,17 +2004,11 @@ def _actual_cost(
     usage: ProviderUsage,
     price_card: ModelPriceCard,
 ) -> Decimal:
-    uncached = (
-        usage.input_tokens
-        - usage.cached_input_tokens
-        - usage.cache_write_tokens
-    )
+    uncached = usage.input_tokens - usage.cached_input_tokens - usage.cache_write_tokens
     return (
         Decimal(uncached) * price_card.input_per_million
-        + Decimal(usage.cached_input_tokens)
-        * price_card.cached_input_per_million
-        + Decimal(usage.cache_write_tokens)
-        * price_card.cache_write_per_million
+        + Decimal(usage.cached_input_tokens) * price_card.cached_input_per_million
+        + Decimal(usage.cache_write_tokens) * price_card.cache_write_per_million
         + Decimal(usage.output_tokens) * price_card.output_per_million
     ) / Decimal(1_000_000)
 
@@ -2016,10 +2027,7 @@ def _provider_usage_error(usage: ProviderUsage) -> str | None:
         return "invalid_provider_usage"
     if usage.cached_input_tokens > usage.input_tokens:
         return "invalid_provider_usage"
-    if (
-        usage.cached_input_tokens + usage.cache_write_tokens
-        > usage.input_tokens
-    ):
+    if usage.cached_input_tokens + usage.cache_write_tokens > usage.input_tokens:
         return "invalid_provider_usage"
     if usage.reasoning_tokens > usage.output_tokens:
         return "invalid_provider_usage"
@@ -2044,18 +2052,24 @@ def _without_reasoning_content(value: object) -> object:
         return {
             str(key): _without_reasoning_content(item)
             for key, item in value.items()
-            if key != "reasoning_content"
+            if key not in {"reasoning_content", "encrypted_content"}
         }
     if isinstance(value, (list, tuple)):
-        return [_without_reasoning_content(item) for item in value]
+        return [
+            _without_reasoning_content(item)
+            for item in value
+            if not (isinstance(item, Mapping) and item.get("type") == "reasoning")
+        ]
     return value
 
 
 __all__ = [
+    "BudgetLedger",
     "ExecutionPolicy",
     "GraderContract",
     "GraderExecution",
     "GraderExecutionError",
+    "GraderExecutionRepository",
     "GraderExecutionRequest",
     "GraderExecutionWorkflow",
     "InMemoryBudgetLedger",

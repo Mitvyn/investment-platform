@@ -47,6 +47,9 @@ from investment_research_os.research_committees import (
 from investment_research_os.research_runs import (
     AuthenticatedOperator,
     InMemoryResearchRunRepository,
+    PERSONAL_RESEARCH_QUESTION_TYPE,
+    PERSONAL_RESEARCH_QUESTION_TYPE_VERSION,
+    PERSONAL_RESEARCH_WORKFLOW_CONFIG_VERSION,
     QUESTION_TYPE,
     QUESTION_TYPE_VERSION,
     ResearchRun,
@@ -70,6 +73,19 @@ PROPOSITION_TEXT = (
     "research case with an identifiable catalyst capable of materially "
     "resolving uncertainty."
 )
+
+_SUPPORTED_COMMITTEE_CONTRACTS = {
+    (
+        QUESTION_TYPE,
+        QUESTION_TYPE_VERSION,
+        WORKFLOW_CONFIG_VERSION,
+    ): "biotech-readiness.v1",
+    (
+        PERSONAL_RESEARCH_QUESTION_TYPE,
+        PERSONAL_RESEARCH_QUESTION_TYPE_VERSION,
+        PERSONAL_RESEARCH_WORKFLOW_CONFIG_VERSION,
+    ): "biotech-personal-readiness.v1",
+}
 
 
 class BiotechResearchWorkflowError(ValueError):
@@ -134,10 +150,13 @@ class BiotechResearchCommitteeConfig:
     synthesis_budget_usd: Decimal
 
     def __post_init__(self) -> None:
+        research_contract = (
+            self.question_type,
+            self.question_type_version,
+            self.workflow_config_version,
+        )
         if (
-            self.question_type != QUESTION_TYPE
-            or self.question_type_version != QUESTION_TYPE_VERSION
-            or self.workflow_config_version != WORKFLOW_CONFIG_VERSION
+            research_contract not in _SUPPORTED_COMMITTEE_CONTRACTS
             or self.proposition_id != PROPOSITION_ID
             or self.proposition_version != PROPOSITION_VERSION
             or self.proposition_text != PROPOSITION_TEXT
@@ -165,7 +184,10 @@ class BiotechResearchCommitteeConfig:
             not item.contract.eligible for item in self.graders
         ):
             raise BiotechResearchWorkflowError("grader roster mismatch")
-        if self.readiness_policy_version != "biotech-readiness.v1":
+        if (
+            self.readiness_policy_version
+            != _SUPPORTED_COMMITTEE_CONTRACTS[research_contract]
+        ):
             raise BiotechResearchWorkflowError("readiness policy mismatch")
         if self.grader_budget_usd <= 0 or self.synthesis_budget_usd <= 0:
             raise BiotechResearchWorkflowError("offline budget must be positive")
@@ -335,9 +357,13 @@ def _execution_policy() -> ExecutionPolicy:
     )
 
 
-def build_offline_mvp_config() -> BiotechResearchCommitteeConfig:
-    """Build pinned test-environment config without authorizing live execution."""
-
+def _build_offline_mvp_config(
+    *,
+    question_type: str,
+    question_type_version: str,
+    workflow_config_version: str,
+    readiness_policy_version: str,
+) -> BiotechResearchCommitteeConfig:
     prompt_hashes = {
         "moonshot": "c44aff2da6de9cd8f74a24d48a65754bd703f4db5ff3596b56c29691ec78205b",
         "catalyst": "94ea632087eeb24a5760560902c0f0d9ed66f5872373ca0dfe1c6ef7833590e9",
@@ -410,17 +436,39 @@ def build_offline_mvp_config() -> BiotechResearchCommitteeConfig:
         policy=_execution_policy(),
     )
     return BiotechResearchCommitteeConfig(
-        question_type=QUESTION_TYPE,
-        question_type_version=QUESTION_TYPE_VERSION,
-        workflow_config_version=WORKFLOW_CONFIG_VERSION,
+        question_type=question_type,
+        question_type_version=question_type_version,
+        workflow_config_version=workflow_config_version,
         proposition_id=PROPOSITION_ID,
         proposition_version=PROPOSITION_VERSION,
         proposition_text=PROPOSITION_TEXT,
         graders=graders,
         synthesizer=synthesizer,
-        readiness_policy_version="biotech-readiness.v1",
+        readiness_policy_version=readiness_policy_version,
         grader_budget_usd=Decimal("7.00"),
         synthesis_budget_usd=Decimal("2.00"),
+    )
+
+
+def build_offline_mvp_config() -> BiotechResearchCommitteeConfig:
+    """Build pinned strict config without authorizing live execution."""
+
+    return _build_offline_mvp_config(
+        question_type=QUESTION_TYPE,
+        question_type_version=QUESTION_TYPE_VERSION,
+        workflow_config_version=WORKFLOW_CONFIG_VERSION,
+        readiness_policy_version="biotech-readiness.v1",
+    )
+
+
+def build_personal_research_mvp_config() -> BiotechResearchCommitteeConfig:
+    """Build pinned lower-assurance config over the same five grader contracts."""
+
+    return _build_offline_mvp_config(
+        question_type=PERSONAL_RESEARCH_QUESTION_TYPE,
+        question_type_version=PERSONAL_RESEARCH_QUESTION_TYPE_VERSION,
+        workflow_config_version=PERSONAL_RESEARCH_WORKFLOW_CONFIG_VERSION,
+        readiness_policy_version="biotech-personal-readiness.v1",
     )
 
 
@@ -583,4 +631,5 @@ __all__ = [
     "GraderEligibilityRouter",
     "SynthesizerRuntimeConfiguration",
     "build_offline_mvp_config",
+    "build_personal_research_mvp_config",
 ]

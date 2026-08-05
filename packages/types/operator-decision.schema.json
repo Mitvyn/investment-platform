@@ -16,7 +16,15 @@
     },
     "non_empty_string": {"type": "string", "minLength": 1},
     "timestamp": {"type": "string", "format": "date-time"},
-    "thesis_contract_id": {"const": "biotech_moonshot_catalyst_assessment"},
+    "thesis_contract_id": {
+      "enum": [
+        "biotech_moonshot_catalyst_assessment",
+        "biotech_moonshot_catalyst_personal_research_v1"
+      ]
+    },
+    "strict_thesis_contract_id": {
+      "const": "biotech_moonshot_catalyst_assessment"
+    },
     "disposition": {
       "enum": ["reject", "monitor", "deep_research", "decision_ready"]
     },
@@ -70,6 +78,21 @@
         "idempotency_key": {"$ref": "#/$defs/non_empty_string"},
         "created_at": {"$ref": "#/$defs/timestamp"}
       },
+      "allOf": [
+        {
+          "not": {
+            "properties": {
+              "thesis_contract_id": {
+                "const": "biotech_moonshot_catalyst_personal_research_v1"
+              },
+              "operator_action": {
+                "const": "mark_for_future_portfolio_review"
+              }
+            },
+            "required": ["thesis_contract_id", "operator_action"]
+          }
+        }
+      ],
       "oneOf": [
         {
           "properties": {
@@ -274,7 +297,7 @@
         "operator_decision_id": {"$ref": "#/$defs/uuid"},
         "operator_id": {"$ref": "#/$defs/uuid"},
         "security_id": {"$ref": "#/$defs/uuid"},
-        "thesis_contract_id": {"$ref": "#/$defs/thesis_contract_id"},
+        "thesis_contract_id": {"$ref": "#/$defs/strict_thesis_contract_id"},
         "thesis_version_id": {"$ref": "#/$defs/uuid"},
         "committee_result_id": {"$ref": "#/$defs/uuid"},
         "readiness_gate_result_id": {"$ref": "#/$defs/uuid"},

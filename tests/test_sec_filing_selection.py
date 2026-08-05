@@ -163,6 +163,41 @@ class RequiredSecFilingSelectorTests(unittest.TestCase):
             )
         )
 
+    def test_effect_notice_remains_submission_metadata_not_selected_document(
+        self,
+    ) -> None:
+        snapshot = collected_snapshot(
+            fixture="rxrx-submissions.json",
+            security_id="f594edb2-7fff-4e40-9c26-2c06bcbecb91",
+            cik="0001601830",
+            issuer_name="Recursion Pharmaceuticals, Inc.",
+        )
+        periodic = next(
+            filing for filing in snapshot.included_filings if filing.form == "10-Q"
+        )
+        effect = replace(
+            periodic,
+            accession_number="9999999995-25-003386",
+            form="EFFECT",
+            filing_date=datetime(2025, 11, 25, tzinfo=UTC).date(),
+            report_date=None,
+            primary_document="xslEFFECTX01/primary_doc.xml",
+            archive_url=(
+                "https://www.sec.gov/Archives/edgar/data/1601830/"
+                "999999999525003386/xslEFFECTX01/primary_doc.xml"
+            ),
+        )
+
+        result = RequiredSecFilingSelector().select(
+            replace(snapshot, included_filings=(*snapshot.included_filings, effect))
+        )
+
+        self.assertEqual(result.coverage_state, "complete")
+        self.assertNotIn(
+            "9999999995-25-003386",
+            {filing.accession_number for filing in result.selected_filings},
+        )
+
     def test_ambiguous_required_filing_does_not_fall_back_silently(
         self,
     ) -> None:
@@ -173,9 +208,7 @@ class RequiredSecFilingSelectorTests(unittest.TestCase):
             issuer_name="Recursion Pharmaceuticals, Inc.",
         )
         periodic = next(
-            filing
-            for filing in snapshot.included_filings
-            if filing.form == "10-Q"
+            filing for filing in snapshot.included_filings if filing.form == "10-Q"
         )
         ambiguous = replace(
             periodic,
@@ -220,9 +253,7 @@ class RequiredSecFilingSelectorTests(unittest.TestCase):
             issuer_name="Recursion Pharmaceuticals, Inc.",
         )
         without_annual_base = tuple(
-            replace(filing, form="10-K/A")
-            if filing.form == "10-K"
-            else filing
+            replace(filing, form="10-K/A") if filing.form == "10-K" else filing
             for filing in snapshot.included_filings
         )
 

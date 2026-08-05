@@ -151,6 +151,7 @@ class EvidenceBundleCandidate:
     metrics: tuple[VerifiedMetricSnapshot, ...] = ()
     catalysts: tuple[CatalystSnapshot, ...] = ()
     risks: tuple[RiskSnapshot, ...] = ()
+    declared_gaps: tuple[EvidenceGap, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -159,6 +160,8 @@ class EvidenceGap:
     source_class: str
     blocking: bool
     explanation: str
+    requirement_id: str | None = None
+    reason_code: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -353,9 +356,15 @@ def _gaps_wire(gaps: tuple[EvidenceGap, ...]) -> list[dict[str, object]]:
     return [
         {
             "gap_id": gap.code,
-            "requirement_id": f"{gap.source_class}_primary_evidence",
+            "requirement_id": (
+                gap.requirement_id
+                or f"{gap.source_class}_primary_evidence"
+            ),
             "source_class": gap.source_class,
-            "reason_code": "missing_blocking_primary_evidence",
+            "reason_code": (
+                gap.reason_code
+                or "missing_blocking_primary_evidence"
+            ),
             "explanation": gap.explanation,
         }
         for gap in gaps
@@ -455,6 +464,8 @@ def _blocking_gaps(
             source_class=source_class,
             blocking=True,
             explanation=f"Blocking {source_class} primary evidence is unavailable.",
+            requirement_id=f"{source_class}_primary_evidence",
+            reason_code="missing_blocking_primary_evidence",
         )
         for source_class in policy.blocking_source_classes
         if source_class not in available_classes
@@ -558,7 +569,37 @@ def _prepare_candidate(
         for item in manifest
     ):
         raise EvidenceBundleError("invalid evidence freshness state")
-    gaps = _blocking_gaps(manifest, policy)
+    for gap in candidate.declared_gaps:
+        _require_non_empty(gap.code, "evidence gap code")
+        _require_non_empty(gap.explanation, "evidence gap explanation")
+        if gap.requirement_id is not None:
+            _require_non_empty(
+                gap.requirement_id,
+                "evidence gap requirement",
+            )
+        if gap.reason_code is not None:
+            _require_non_empty(gap.reason_code, "evidence gap reason")
+        if gap.source_class not in source_class_order:
+            raise EvidenceBundleError("unsupported evidence gap source class")
+        if not gap.blocking:
+            raise EvidenceBundleError("declared evidence gap must be blocking")
+    combined_gaps = (
+        *_blocking_gaps(manifest, policy),
+        *candidate.declared_gaps,
+    )
+    gap_codes = [gap.code for gap in combined_gaps]
+    if len(set(gap_codes)) != len(gap_codes):
+        raise EvidenceBundleError("duplicate evidence gap identity")
+    gaps_by_code = {gap.code: gap for gap in combined_gaps}
+    gaps = tuple(
+        sorted(
+            gaps_by_code.values(),
+            key=lambda gap: (
+                source_class_order[gap.source_class],
+                gap.code,
+            ),
+        )
+    )
     metrics = tuple(sorted(candidate.metrics, key=lambda item: item.snapshot_id))
     catalysts = tuple(sorted(candidate.catalysts, key=lambda item: item.snapshot_id))
     risks = tuple(sorted(candidate.risks, key=lambda item: item.snapshot_id))
@@ -585,6 +626,13 @@ def _prepare_candidate(
             and metric.period_start > metric.period_end
         ):
             raise EvidenceBundleError("invalid verified metric period")
+        if (
+            metric.period_end is not None
+            and metric.period_end > run.as_of_cutoff.date()
+        ):
+            raise EvidenceBundleError(
+                "verified metric period is after cutoff"
+            )
     for catalyst in catalysts:
         _require_uuid(catalyst.snapshot_id, "catalyst identity")
         _require_non_empty(catalyst.program, "catalyst program")

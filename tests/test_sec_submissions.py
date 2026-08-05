@@ -149,6 +149,169 @@ class SecSubmissionsCollectorTests(unittest.TestCase):
         )
         self.assertTrue(snapshot.submission_history_complete)
         self.assertEqual(snapshot.history_files, ())
+        self.assertEqual(snapshot.identity_evidence.state, "verified")
+        self.assertEqual(
+            snapshot.identity_evidence.policy_version,
+            "sec-issuer-identity-v1",
+        )
+        self.assertEqual(
+            snapshot.identity_evidence.match_type,
+            "current_name",
+        )
+
+    def test_preserves_safe_non_html_primary_documents_in_full_history(
+        self,
+    ) -> None:
+        payload = json.loads((FIXTURE_ROOT / "rxrx-submissions.json").read_text())
+        payload["filings"]["recent"]["primaryDocument"][3] = (
+            "xslF345X06/wk-form4_1783026949.xml"
+        )
+        url = "https://data.sec.gov/submissions/CIK0001601830.json"
+
+        snapshot = SecSubmissionsCollector(
+            SecSettings(
+                user_agent="Investment Research OS operator@example.com",
+                base_url="https://data.sec.gov",
+            ),
+            transport=FixtureTransport({url: json.dumps(payload).encode()}),
+            clock=lambda: datetime(2026, 5, 7, 1, 0, tzinfo=UTC),
+        ).discover(
+            request(
+                security_id="f594edb2-7fff-4e40-9c26-2c06bcbecb91",
+                cik="0001601830",
+                issuer_name="Recursion Pharmaceuticals, Inc.",
+            )
+        )
+
+        filing = next(
+            item
+            for item in snapshot.excluded_filings
+            if item.accession_number == "0001601830-26-000043"
+        )
+        self.assertEqual(
+            filing.primary_document,
+            "xslF345X06/wk-form4_1783026949.xml",
+        )
+
+    def test_rejects_unsafe_primary_document_path(self) -> None:
+        payload = json.loads((FIXTURE_ROOT / "rxrx-submissions.json").read_text())
+        payload["filings"]["recent"]["primaryDocument"][0] = "../rxrx-20260331.htm"
+        url = "https://data.sec.gov/submissions/CIK0001601830.json"
+
+        with self.assertRaisesRegex(
+            SecSubmissionsError,
+            "filing identity is invalid",
+        ):
+            SecSubmissionsCollector(
+                SecSettings(
+                    user_agent="Investment Research OS operator@example.com",
+                    base_url="https://data.sec.gov",
+                ),
+                transport=FixtureTransport({url: json.dumps(payload).encode()}),
+            ).discover(
+                request(
+                    security_id=("f594edb2-7fff-4e40-9c26-2c06bcbecb91"),
+                    cik="0001601830",
+                    issuer_name="Recursion Pharmaceuticals, Inc.",
+                )
+            )
+
+    def test_identity_policy_normalizes_punctuation_and_case(self) -> None:
+        body = (FIXTURE_ROOT / "rxrx-submissions.json").read_bytes()
+        url = "https://data.sec.gov/submissions/CIK0001601830.json"
+        snapshot = SecSubmissionsCollector(
+            SecSettings(
+                user_agent="Investment Research OS operator@example.com",
+                base_url="https://data.sec.gov",
+            ),
+            transport=FixtureTransport({url: body}),
+            clock=lambda: datetime(2026, 5, 7, 1, 0, tzinfo=UTC),
+        ).discover(
+            request(
+                security_id="f594edb2-7fff-4e40-9c26-2c06bcbecb91",
+                cik="0001601830",
+                issuer_name="RECURSION PHARMACEUTICALS INC",
+            )
+        )
+
+        self.assertEqual(snapshot.identity_evidence.state, "verified")
+        self.assertEqual(
+            snapshot.identity_evidence.normalized_request_name,
+            "recursion pharmaceuticals inc",
+        )
+        self.assertEqual(
+            snapshot.identity_evidence.normalized_matched_name,
+            "recursion pharmaceuticals inc",
+        )
+
+    def test_identity_policy_materializes_verified_former_name_alias(
+        self,
+    ) -> None:
+        payload = json.loads((FIXTURE_ROOT / "rxrx-submissions.json").read_text())
+        payload["name"] = "New Therapeutics, Inc."
+        payload["formerNames"] = [
+            {
+                "name": "Recursion Pharmaceuticals, Inc.",
+                "from": "2017-01-01T00:00:00.000Z",
+                "to": "2026-01-01T00:00:00.000Z",
+            }
+        ]
+        url = "https://data.sec.gov/submissions/CIK0001601830.json"
+        snapshot = SecSubmissionsCollector(
+            SecSettings(
+                user_agent="Investment Research OS operator@example.com",
+                base_url="https://data.sec.gov",
+            ),
+            transport=FixtureTransport({url: json.dumps(payload).encode()}),
+            clock=lambda: datetime(2026, 5, 7, 1, 0, tzinfo=UTC),
+        ).discover(
+            request(
+                security_id="f594edb2-7fff-4e40-9c26-2c06bcbecb91",
+                cik="0001601830",
+                issuer_name="Recursion Pharmaceuticals, Inc.",
+            )
+        )
+
+        self.assertEqual(snapshot.identity_evidence.state, "verified")
+        self.assertEqual(
+            snapshot.identity_evidence.match_type,
+            "former_name",
+        )
+        self.assertEqual(
+            snapshot.identity_evidence.matched_name,
+            "Recursion Pharmaceuticals, Inc.",
+        )
+        self.assertEqual(
+            snapshot.identity_evidence.former_names[0].from_date.isoformat(),
+            "2017-01-01",
+        )
+
+    def test_identity_policy_materializes_mismatch_without_claiming_proof(
+        self,
+    ) -> None:
+        body = (FIXTURE_ROOT / "rxrx-submissions.json").read_bytes()
+        url = "https://data.sec.gov/submissions/CIK0001601830.json"
+        snapshot = SecSubmissionsCollector(
+            SecSettings(
+                user_agent="Investment Research OS operator@example.com",
+                base_url="https://data.sec.gov",
+            ),
+            transport=FixtureTransport({url: body}),
+            clock=lambda: datetime(2026, 5, 7, 1, 0, tzinfo=UTC),
+        ).discover(
+            request(
+                security_id="f594edb2-7fff-4e40-9c26-2c06bcbecb91",
+                cik="0001601830",
+                issuer_name="Unrelated Biotech, Inc.",
+            )
+        )
+
+        self.assertEqual(snapshot.identity_evidence.state, "mismatch")
+        self.assertEqual(
+            snapshot.identity_evidence.reason_code,
+            "sec_issuer_name_not_in_verified_history",
+        )
+        self.assertIsNone(snapshot.identity_evidence.matched_name)
 
     def test_same_collector_handles_materially_different_cik_without_symbol(
         self,
@@ -233,19 +396,28 @@ class SecSubmissionsCollectorTests(unittest.TestCase):
             ),
             clock=lambda: datetime(2026, 5, 7, 1, 0, tzinfo=UTC),
         )
-        with self.assertRaisesRegex(
-            SecSubmissionsError,
-            "filing CIK mismatch",
-        ):
-            wrong_accession_collector.discover(
-                request(
-                    security_id="f594edb2-7fff-4e40-9c26-2c06bcbecb91",
-                    cik="0001601830",
-                    issuer_name="Recursion Pharmaceuticals, Inc.",
-                )
+        agent_accession_snapshot = wrong_accession_collector.discover(
+            request(
+                security_id="f594edb2-7fff-4e40-9c26-2c06bcbecb91",
+                cik="0001601830",
+                issuer_name="Recursion Pharmaceuticals, Inc.",
             )
+        )
+        self.assertEqual(
+            agent_accession_snapshot.included_filings[0].accession_number,
+            "0000000001-26-000040",
+        )
+        self.assertEqual(
+            agent_accession_snapshot.included_filings[0].archive_url,
+            (
+                "https://www.sec.gov/Archives/edgar/data/1601830/"
+                "000000000126000040/rxrx-20260331.htm"
+            ),
+        )
 
-        malformed = b'{"cik":"0001900001","name":"Issuer","filings":{"recent":{"form":[]}}}'
+        malformed = (
+            b'{"cik":"0001900001","name":"Issuer","filings":{"recent":{"form":[]}}}'
+        )
         malformed_collector = SecSubmissionsCollector(
             SecSettings(
                 user_agent="Investment Research OS operator@example.com",
@@ -264,9 +436,7 @@ class SecSubmissionsCollectorTests(unittest.TestCase):
             )
 
     def test_discovery_fetches_and_merges_submission_history_chunks(self) -> None:
-        payload = json.loads(
-            (FIXTURE_ROOT / "rxrx-submissions.json").read_text()
-        )
+        payload = json.loads((FIXTURE_ROOT / "rxrx-submissions.json").read_text())
         payload["filings"]["files"] = [
             {
                 "name": "CIK0001601830-submissions-001.json",
@@ -278,8 +448,7 @@ class SecSubmissionsCollectorTests(unittest.TestCase):
         body = json.dumps(payload).encode()
         url = "https://data.sec.gov/submissions/CIK0001601830.json"
         history_url = (
-            "https://data.sec.gov/submissions/"
-            "CIK0001601830-submissions-001.json"
+            "https://data.sec.gov/submissions/CIK0001601830-submissions-001.json"
         )
         history_body = json.dumps(
             {
@@ -348,9 +517,7 @@ class SecSubmissionsCollectorTests(unittest.TestCase):
         self.assertEqual(result.source_url, url)
 
     def test_history_chunk_count_mismatch_fails_closed(self) -> None:
-        payload = json.loads(
-            (FIXTURE_ROOT / "rxrx-submissions.json").read_text()
-        )
+        payload = json.loads((FIXTURE_ROOT / "rxrx-submissions.json").read_text())
         history_name = "CIK0001601830-submissions-001.json"
         payload["filings"]["files"] = [
             {
@@ -399,9 +566,7 @@ class SecSubmissionsCollectorTests(unittest.TestCase):
             )
 
     def test_redirected_history_chunk_is_rejected(self) -> None:
-        payload = json.loads(
-            (FIXTURE_ROOT / "rxrx-submissions.json").read_text()
-        )
+        payload = json.loads((FIXTURE_ROOT / "rxrx-submissions.json").read_text())
         history_name = "CIK0001601830-submissions-001.json"
         payload["filings"]["files"] = [
             {
@@ -433,9 +598,7 @@ class SecSubmissionsCollectorTests(unittest.TestCase):
                     url: json.dumps(payload).encode(),
                     history_url: history_body,
                 },
-                final_urls={
-                    history_url: "https://example.com/redirected.json"
-                },
+                final_urls={history_url: "https://example.com/redirected.json"},
             ),
             clock=lambda: datetime(2026, 5, 7, 1, 0, tzinfo=UTC),
         )
@@ -455,9 +618,7 @@ class SecSubmissionsCollectorTests(unittest.TestCase):
     def test_history_chunk_date_outside_advertised_window_fails_closed(
         self,
     ) -> None:
-        payload = json.loads(
-            (FIXTURE_ROOT / "rxrx-submissions.json").read_text()
-        )
+        payload = json.loads((FIXTURE_ROOT / "rxrx-submissions.json").read_text())
         history_name = "CIK0001601830-submissions-001.json"
         payload["filings"]["files"] = [
             {
@@ -505,10 +666,64 @@ class SecSubmissionsCollectorTests(unittest.TestCase):
                 )
             )
 
-    def test_history_chunk_name_must_match_requested_cik(self) -> None:
-        payload = json.loads(
-            (FIXTURE_ROOT / "rxrx-submissions.json").read_text()
+    def test_history_chunk_accepts_one_day_sec_metadata_boundary_drift(
+        self,
+    ) -> None:
+        payload = json.loads((FIXTURE_ROOT / "rxrx-submissions.json").read_text())
+        history_name = "CIK0001601830-submissions-001.json"
+        payload["filings"]["files"] = [
+            {
+                "name": history_name,
+                "filingCount": 1,
+                "filingFrom": "2024-02-20",
+                "filingTo": "2024-02-20",
+            }
+        ]
+        url = "https://data.sec.gov/submissions/CIK0001601830.json"
+        history_url = f"https://data.sec.gov/submissions/{history_name}"
+        history_body = json.dumps(
+            {
+                "accessionNumber": ["0001601830-24-000031"],
+                "acceptanceDateTime": ["2024-02-21T21:00:00Z"],
+                "filingDate": ["2024-02-21"],
+                "reportDate": ["2023-12-31"],
+                "form": ["10-K/A"],
+                "primaryDocument": ["rxrx-20231231x10ka.htm"],
+            }
+        ).encode()
+        collector = SecSubmissionsCollector(
+            SecSettings(
+                user_agent="Investment Research OS operator@example.com",
+                base_url="https://data.sec.gov",
+            ),
+            transport=FixtureTransport(
+                {
+                    url: json.dumps(payload).encode(),
+                    history_url: history_body,
+                }
+            ),
+            clock=lambda: datetime(2026, 5, 7, 1, 0, tzinfo=UTC),
         )
+
+        result = collector.discover(
+            request(
+                security_id="f594edb2-7fff-4e40-9c26-2c06bcbecb91",
+                cik="0001601830",
+                issuer_name="Recursion Pharmaceuticals, Inc.",
+            )
+        )
+
+        self.assertEqual(len(result.history_files), 1)
+        self.assertIn(
+            "0001601830-24-000031",
+            {
+                filing.accession_number
+                for filing in (*result.included_filings, *result.excluded_filings)
+            },
+        )
+
+    def test_history_chunk_name_must_match_requested_cik(self) -> None:
+        payload = json.loads((FIXTURE_ROOT / "rxrx-submissions.json").read_text())
         payload["filings"]["files"] = [
             {
                 "name": "CIK0001900001-submissions-001.json",
@@ -523,9 +738,7 @@ class SecSubmissionsCollectorTests(unittest.TestCase):
                 user_agent="Investment Research OS operator@example.com",
                 base_url="https://data.sec.gov",
             ),
-            transport=FixtureTransport(
-                {url: json.dumps(payload).encode()}
-            ),
+            transport=FixtureTransport({url: json.dumps(payload).encode()}),
             clock=lambda: datetime(2026, 5, 7, 1, 0, tzinfo=UTC),
         )
 
@@ -542,9 +755,7 @@ class SecSubmissionsCollectorTests(unittest.TestCase):
             )
 
     def test_duplicate_history_chunk_reference_fails_before_fetch(self) -> None:
-        payload = json.loads(
-            (FIXTURE_ROOT / "rxrx-submissions.json").read_text()
-        )
+        payload = json.loads((FIXTURE_ROOT / "rxrx-submissions.json").read_text())
         history = {
             "name": "CIK0001601830-submissions-001.json",
             "filingCount": 0,
@@ -578,14 +789,10 @@ class SecSubmissionsCollectorTests(unittest.TestCase):
         self.assertEqual([call[0] for call in transport.requests], [url])
 
     def test_history_chunk_fan_out_is_bounded_before_fetch(self) -> None:
-        payload = json.loads(
-            (FIXTURE_ROOT / "rxrx-submissions.json").read_text()
-        )
+        payload = json.loads((FIXTURE_ROOT / "rxrx-submissions.json").read_text())
         payload["filings"]["files"] = [
             {
-                "name": (
-                    f"CIK0001601830-submissions-{index:03d}.json"
-                ),
+                "name": (f"CIK0001601830-submissions-{index:03d}.json"),
                 "filingCount": 0,
                 "filingFrom": "2024-02-20",
                 "filingTo": "2024-02-20",
@@ -618,9 +825,7 @@ class SecSubmissionsCollectorTests(unittest.TestCase):
         self.assertEqual([call[0] for call in transport.requests], [url])
 
     def test_missing_submission_history_metadata_is_not_complete(self) -> None:
-        payload = json.loads(
-            (FIXTURE_ROOT / "rxrx-submissions.json").read_text()
-        )
+        payload = json.loads((FIXTURE_ROOT / "rxrx-submissions.json").read_text())
         del payload["filings"]["files"]
         url = "https://data.sec.gov/submissions/CIK0001601830.json"
         collector = SecSubmissionsCollector(
@@ -628,9 +833,7 @@ class SecSubmissionsCollectorTests(unittest.TestCase):
                 user_agent="Investment Research OS operator@example.com",
                 base_url="https://data.sec.gov",
             ),
-            transport=FixtureTransport(
-                {url: json.dumps(payload).encode()}
-            ),
+            transport=FixtureTransport({url: json.dumps(payload).encode()}),
             clock=lambda: datetime(2026, 5, 7, 1, 0, tzinfo=UTC),
         )
 
@@ -646,9 +849,7 @@ class SecSubmissionsCollectorTests(unittest.TestCase):
         self.assertEqual(result.history_files, ())
 
     def test_conflicting_history_accession_fails_closed(self) -> None:
-        payload = json.loads(
-            (FIXTURE_ROOT / "rxrx-submissions.json").read_text()
-        )
+        payload = json.loads((FIXTURE_ROOT / "rxrx-submissions.json").read_text())
         history_name = "CIK0001601830-submissions-001.json"
         payload["filings"]["files"] = [
             {

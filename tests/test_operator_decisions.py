@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, datetime
 import json
 import subprocess
@@ -17,11 +18,27 @@ from investment_research_os.readiness_and_theses import (
     ReadinessAndThesisWorkflow,
     ReadinessRequest,
 )
+from investment_research_os.research_runs import (
+    PERSONAL_RESEARCH_QUESTION_TYPE,
+    PERSONAL_RESEARCH_QUESTION_TYPE_VERSION,
+    PERSONAL_RESEARCH_THESIS_CONTRACT_ID,
+    PERSONAL_RESEARCH_WORKFLOW_CONFIG_VERSION,
+)
+from investment_research_os.valuation_snapshots import (
+    InMemoryValuationSnapshotRepository,
+    PersonalResearchValuationSnapshotWorkflow,
+)
 from tests.test_readiness_and_thesis import (
+    FixedCommitteeRepository,
     synthesized_fixture,
     synthesized_terminal_fixture,
 )
 from tests.test_grader_execution_workflow import aligned_valuation_repository
+from tests.test_valuation_snapshot_workflow import (
+    FixedCalendar,
+    FixedValuationSource,
+    personal_input_candidate,
+)
 
 
 def thesis_fixture(
@@ -56,13 +73,54 @@ def thesis_fixture(
     return bundle, result, readiness_repository
 
 
+def personal_thesis_fixture(
+    disposition: str,
+    *,
+    provisional: bool = False,
+):
+    fixture = (
+        synthesized_terminal_fixture(terminal_state="abstained")
+        if provisional
+        else synthesized_fixture(requested_disposition=disposition)
+    )
+    bundle, committee, bundle_repository, _, memo_repository, _ = fixture
+    personal_committee = replace(
+        committee,
+        question_type_id=PERSONAL_RESEARCH_QUESTION_TYPE,
+        question_type_version=PERSONAL_RESEARCH_QUESTION_TYPE_VERSION,
+        workflow_config_version=PERSONAL_RESEARCH_WORKFLOW_CONFIG_VERSION,
+    )
+    valuation_repository = InMemoryValuationSnapshotRepository()
+    PersonalResearchValuationSnapshotWorkflow(
+        evidence_bundle_repository=bundle_repository,
+        valuation_snapshot_repository=valuation_repository,
+        market_calendar=FixedCalendar(),
+        input_source=FixedValuationSource(personal_input_candidate()),
+        clock=lambda: datetime(2026, 5, 7, 2, 0, tzinfo=UTC),
+    ).materialize(AuthenticatedOperator(bundle.operator_id), bundle.id)
+    readiness_repository = InMemoryReadinessAndThesisRepository()
+    result = ReadinessAndThesisWorkflow(
+        committee_repository=FixedCommitteeRepository(personal_committee),
+        evidence_bundle_repository=bundle_repository,
+        memo_repository=memo_repository,
+        repository=readiness_repository,
+        valuation_snapshot_repository=valuation_repository,
+        clock=lambda: datetime(2026, 7, 22, 5, 0, tzinfo=UTC),
+    ).execute(
+        AuthenticatedOperator(bundle.operator_id),
+        ReadinessRequest(
+            committee_id=personal_committee.committee_id,
+            gate_policy_version="biotech-personal-readiness.v1",
+        ),
+    )
+    return bundle, result, readiness_repository
+
+
 class OperatorDecisionWorkflowTests(unittest.TestCase):
     def _workflow(self, readiness_repository, decision_repository=None):
         return OperatorDecisionWorkflow(
             readiness_repository=readiness_repository,
-            repository=(
-                decision_repository or InMemoryOperatorDecisionRepository()
-            ),
+            repository=(decision_repository or InMemoryOperatorDecisionRepository()),
             clock=lambda: datetime(2026, 7, 22, 6, 0, tzinfo=UTC),
         )
 
@@ -234,7 +292,9 @@ class OperatorDecisionWorkflowTests(unittest.TestCase):
         )
 
         self.assertEqual(history.events, (event,))
-        self.assertEqual(current.current_operator_decision_id, event.operator_decision_id)
+        self.assertEqual(
+            current.current_operator_decision_id, event.operator_decision_id
+        )
         self.assertEqual(current.supersession_depth, 0)
         self.assertNotIn("current_operator_decision_id", history.as_dict())
         self.assertNotIn("events", current.as_dict())
@@ -298,6 +358,69 @@ class OperatorDecisionWorkflowTests(unittest.TestCase):
                     decision_policy_version="operator_decision_policy.v1",
                 ),
             )
+
+    def test_personal_research_thesis_can_never_create_portfolio_handoff(self) -> None:
+        bundle, ready, readiness_repository = personal_thesis_fixture("decision_ready")
+        self.assertEqual(
+            ready.thesis.thesis_contract_id,
+            PERSONAL_RESEARCH_THESIS_CONTRACT_ID,
+        )
+
+        with self.assertRaisesRegex(
+            OperatorDecisionError,
+            "personal research thesis cannot create portfolio handoff",
+        ):
+            self._workflow(readiness_repository).execute(
+                AuthenticatedOperator(bundle.operator_id),
+                OperatorDecisionRequest(
+                    thesis_version_id=ready.thesis.thesis_version_id,
+                    operator_action="mark_for_future_portfolio_review",
+                    rationale="Lower-assurance research cannot cross handoff boundary.",
+                    supersedes_operator_decision_id=None,
+                    idempotency_key="personal-decision-no-handoff",
+                    decision_policy_version="operator_decision_policy.v1",
+                ),
+            )
+
+    def test_personal_research_canonical_and_provisional_theses_record_actions(
+        self,
+    ) -> None:
+        canonical_bundle, canonical, canonical_readiness = personal_thesis_fixture(
+            "monitor"
+        )
+        canonical_outcome = self._workflow(canonical_readiness).execute(
+            AuthenticatedOperator(canonical_bundle.operator_id),
+            OperatorDecisionRequest(
+                thesis_version_id=canonical.thesis.thesis_version_id,
+                operator_action="monitor",
+                rationale="Monitor within lower-assurance research boundary.",
+                supersedes_operator_decision_id=None,
+                idempotency_key="personal-canonical-monitor",
+                decision_policy_version="operator_decision_policy.v1",
+            ),
+        )
+        self.assertEqual(canonical_outcome.event.relationship, "accept")
+        self.assertIsNone(canonical_outcome.workflow_command)
+        self.assertIsNone(canonical_outcome.portfolio_handoff_marker)
+
+        provisional_bundle, provisional, provisional_readiness = (
+            personal_thesis_fixture("deep_research", provisional=True)
+        )
+        self.assertEqual(provisional.thesis.thesis_status, "provisional")
+        provisional_outcome = self._workflow(provisional_readiness).execute(
+            AuthenticatedOperator(provisional_bundle.operator_id),
+            OperatorDecisionRequest(
+                thesis_version_id=provisional.thesis.thesis_version_id,
+                operator_action="request_deep_research",
+                rationale="Resolve evidence gaps before another personal run.",
+                supersedes_operator_decision_id=None,
+                idempotency_key="personal-provisional-deep-research",
+                decision_policy_version="operator_decision_policy.v1",
+            ),
+        )
+        self.assertEqual(provisional_outcome.event.relationship, "accept")
+        self.assertIsNotNone(provisional_outcome.workflow_command)
+        self.assertIsNone(provisional_outcome.portfolio_handoff_marker)
 
     def test_python_outputs_cross_parse_with_shared_contracts(self) -> None:
         ready_bundle, ready_research, ready_readiness_repository = thesis_fixture(

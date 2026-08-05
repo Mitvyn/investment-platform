@@ -8,6 +8,7 @@ from datetime import UTC, date, datetime
 from investment_research_os.evidence_bundles import (
     CatalystSnapshot,
     EvidenceBundleCandidate,
+    EvidenceGap,
     EvidenceBundleWorkflow,
     EvidenceItem,
     EvidencePolicyDefinition,
@@ -345,6 +346,54 @@ class EvidenceBundleWorkflowTests(unittest.TestCase):
             ],
         )
 
+    def test_declared_source_contradiction_prevents_grader_ready_bundle(
+        self,
+    ) -> None:
+        run_repository = InMemoryResearchRunRepository()
+        run_repository.save(eligible_run())
+        bundle = EvidenceBundleWorkflow(
+            research_run_repository=run_repository,
+            bundle_repository=InMemoryEvidenceBundleRepository(),
+            evidence_source=FixedBundleSource(
+                EvidenceBundleCandidate(
+                    security_id=SECURITY_ID,
+                    as_of_cutoff=CUTOFF,
+                    evidence_policy_version="biotech-primary-evidence-v1",
+                    freshness_policy_version="biotech-evidence-freshness-v1",
+                    items=required_source_items(),
+                    declared_gaps=(
+                        EvidenceGap(
+                            code=(
+                                "contradictory_metric_"
+                                "cash_and_cash_equivalents"
+                            ),
+                            source_class="financing",
+                            blocking=True,
+                            explanation=(
+                                "Contradictory reported cash values exist."
+                            ),
+                            requirement_id=(
+                                "metric_consistency:"
+                                "cash_and_cash_equivalents"
+                            ),
+                            reason_code="contradictory_reported_metric",
+                        ),
+                    ),
+                )
+            ),
+            clock=lambda: CREATED_AT,
+        ).materialize(AuthenticatedOperator(OPERATOR_ID), RUN_ID)
+
+        self.assertFalse(bundle.grader_ready)
+        self.assertEqual(
+            [gap.code for gap in bundle.gaps],
+            ["contradictory_metric_cash_and_cash_equivalents"],
+        )
+        self.assertEqual(
+            bundle.as_dict()["gaps"][0]["reason_code"],
+            "contradictory_reported_metric",
+        )
+
     def test_bundle_freezes_normalized_metric_catalyst_and_risk_snapshots(
         self,
     ) -> None:
@@ -590,6 +639,50 @@ class EvidenceBundleWorkflowTests(unittest.TestCase):
         )
 
         with self.assertRaisesRegex(ValueError, "canonical decimal"):
+            workflow.materialize(AuthenticatedOperator(OPERATOR_ID), RUN_ID)
+
+    def test_metric_period_after_cutoff_is_rejected_before_hashing(self) -> None:
+        item = sec_item()
+        metric = VerifiedMetricSnapshot(
+            snapshot_id="9b4e8b4a-8f28-578c-b106-6be921169188",
+            metric_key="cash_and_cash_equivalents",
+            value="999.0",
+            unit="USD_millions",
+            period_start=date(2027, 1, 1),
+            period_end=date(2027, 3, 31),
+            calculation_method="reported",
+            formula=None,
+            supporting_evidence_ids=(item.evidence_id,),
+        )
+        run_repository = InMemoryResearchRunRepository()
+        run_repository.save(eligible_run())
+        workflow = EvidenceBundleWorkflow(
+            research_run_repository=run_repository,
+            bundle_repository=InMemoryEvidenceBundleRepository(),
+            evidence_source=FixedBundleSource(
+                EvidenceBundleCandidate(
+                    security_id=SECURITY_ID,
+                    as_of_cutoff=CUTOFF,
+                    evidence_policy_version="biotech-primary-evidence-v1",
+                    freshness_policy_version="biotech-evidence-freshness-v1",
+                    items=(
+                        item,
+                        replace(
+                            item,
+                            evidence_id=metric.snapshot_id,
+                            evidence_version_id=(
+                                "7d713824-4b8d-54aa-8935-edbdcc8f4c03"
+                            ),
+                            item_kind="metric",
+                        ),
+                    ),
+                    metrics=(metric,),
+                )
+            ),
+            clock=lambda: CREATED_AT,
+        )
+
+        with self.assertRaisesRegex(ValueError, "period is after cutoff"):
             workflow.materialize(AuthenticatedOperator(OPERATOR_ID), RUN_ID)
 
     def test_primary_evidence_requires_valid_https_source_identity(self) -> None:

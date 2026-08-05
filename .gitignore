@@ -10,6 +10,7 @@ __pycache__/
 .coverage
 .pytest_cache/
 .ruff_cache/
+.codex-audit/
 node_modules/
 .next/
 supabase/.temp/
@@ -19,6 +20,7 @@ build/
 dist/
 apps/dashboard/desktop/worker/
 data/*.json
+data/primary-source-captures/
 !data/.gitkeep
 
 # Concurrent local draft preserved outside public Investment Research OS repo.

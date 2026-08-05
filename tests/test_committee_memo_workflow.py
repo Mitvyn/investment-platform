@@ -4,6 +4,7 @@ from copy import deepcopy
 from dataclasses import replace
 from datetime import UTC, datetime
 from decimal import Decimal
+import hashlib
 import unittest
 import json
 import subprocess
@@ -21,8 +22,14 @@ from investment_research_os.grader_executions import (
     ModelPriceCard,
     PromptContract,
     ProviderResponse,
+    ProviderTransportError,
     ProviderUsage,
 )
+from investment_research_os.provider_input_token_preflight import (
+    InputTokenPreflightReceipt,
+    PersistentInputTokenPreflightGate,
+)
+from investment_research_os.providers import OpenAIInputTokenPreflight
 from tests.test_five_grader_committee import completed_committee_fixture
 from tests.test_grader_execution_workflow import (
     FakeProvider,
@@ -30,16 +37,75 @@ from tests.test_grader_execution_workflow import (
 )
 
 
+class SynthesisPreflightStoreFake:
+    def __init__(self, events: list[str]) -> None:
+        self.events = events
+
+    def begin(self, start):
+        self.events.append("preflight_request_persisted")
+        return InputTokenPreflightReceipt(
+            preflight_id=start.preflight_id,
+            state="pending",
+            reused=False,
+        )
+
+    def complete(self, completion):
+        self.events.append("preflight_result_persisted")
+        return InputTokenPreflightReceipt(
+            preflight_id=completion.preflight_id,
+            state=completion.state,
+            reused=False,
+        )
+
+
+class PreflightSynthesisProvider(FakeProvider):
+    def __init__(self, responses, events: list[str]) -> None:
+        super().__init__(responses)
+        self.events = events
+
+    def audit_input_token_count_request(self, request):
+        return {
+            "method": "POST",
+            "url": "https://api.openai.com/v1/responses/input_tokens",
+            "headers": {"Authorization": "[REDACTED]"},
+            "payload": {"model": request.model, "input": request.logical_input},
+        }
+
+    def count_input_tokens(self, request):
+        self.events.append("input_tokens_counted")
+        payload = self.audit_input_token_count_request(request)["payload"]
+        return OpenAIInputTokenPreflight(
+            execution_identity=request.execution_identity,
+            request_hash=request.request_hash,
+            model=request.model,
+            input_payload_sha256=hashlib.sha256(
+                json.dumps(
+                    payload,
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                    sort_keys=True,
+                ).encode()
+            ).hexdigest(),
+            input_tokens=100,
+            input_token_cap=request.input_token_cap,
+            within_cap=True,
+            raw_provider_response={
+                "object": "response.input_tokens",
+                "input_tokens": 100,
+            },
+        )
+
+    def execute(self, request):
+        self.events.append("generation")
+        return super().execute(request)
+
+
 def approved_synthesis_request(committee) -> SynthesisRequest:
     grader_request = approved_request(committee.evidence_bundle_id)
     model = replace(
         grader_request.model,
-        config_id=(
-            "biotech_committee_synthesizer_gpt_5_6_sol_medium_v1"
-        ),
-        config_version=(
-            "biotech_committee_synthesizer_gpt_5_6_sol_medium_v1"
-        ),
+        config_id=("biotech_committee_synthesizer_gpt_5_6_sol_medium_v1"),
+        config_version=("biotech_committee_synthesizer_gpt_5_6_sol_medium_v1"),
         provider="openai",
         model="gpt-5.6-sol",
     )
@@ -161,9 +227,7 @@ def valid_memo_output(committee) -> dict[str, object]:
                 "grader_id": item.grader_id,
                 "execution_state": item.execution_state,
                 "opinion_id": (
-                    item.opinion.opinion_id
-                    if item.opinion is not None
-                    else None
+                    item.opinion.opinion_id if item.opinion is not None else None
                 ),
                 "stance": item.stance,
             }
@@ -173,6 +237,187 @@ def valid_memo_output(committee) -> dict[str, object]:
 
 
 class CommitteeMemoWorkflowTests(unittest.TestCase):
+    def test_synthesizer_requires_persisted_preflight_before_generation(
+        self,
+    ) -> None:
+        bundle, committee, bundle_repository, committee_repository = (
+            completed_committee_fixture()
+        )
+        events: list[str] = []
+        provider = PreflightSynthesisProvider(
+            (
+                ProviderResponse(
+                    provider_request_id="fake-synthesis-response",
+                    raw_output=valid_memo_output(committee),
+                    usage=ProviderUsage(100, 0, 50, 10, 150),
+                    resolved_model="gpt-5.6-sol",
+                    system_fingerprint="offline-synthesis-fingerprint-v1",
+                ),
+            ),
+            events,
+        )
+        now = datetime(2026, 7, 22, 4, 0, tzinfo=UTC)
+
+        execution = CommitteeMemoWorkflow(
+            committee_repository=committee_repository,
+            evidence_bundle_repository=bundle_repository,
+            memo_repository=InMemoryCommitteeMemoRepository(),
+            budget_ledger=InMemoryBudgetLedger(hard_limit_usd=Decimal("2.00")),
+            provider=provider,
+            input_token_preflight_gate=PersistentInputTokenPreflightGate(
+                store=SynthesisPreflightStoreFake(events),
+                clock=lambda: now,
+            ),
+            clock=lambda: now,
+        ).execute(
+            AuthenticatedOperator(bundle.operator_id),
+            approved_synthesis_request(committee),
+        )
+
+        self.assertEqual(execution.execution_state, "accepted")
+        self.assertEqual(
+            events,
+            [
+                "preflight_request_persisted",
+                "input_tokens_counted",
+                "preflight_result_persisted",
+                "generation",
+            ],
+        )
+
+    def test_synthesis_rejects_provider_model_drift_after_bounded_retry(
+        self,
+    ) -> None:
+        bundle, committee, bundle_repository, committee_repository = (
+            completed_committee_fixture()
+        )
+        drifted = ProviderResponse(
+            provider_request_id="fake-synthesis-model-drift",
+            raw_output=valid_memo_output(committee),
+            usage=ProviderUsage(2000, 500, 500, 100, 2500),
+            resolved_model="moving-provider-alias",
+            system_fingerprint="offline-synthesis-fingerprint-v1",
+        )
+        provider = FakeProvider((drifted, drifted))
+        times = iter(
+            datetime(2026, 7, 22, 4, minute, tzinfo=UTC) for minute in range(10)
+        )
+
+        execution = CommitteeMemoWorkflow(
+            committee_repository=committee_repository,
+            evidence_bundle_repository=bundle_repository,
+            memo_repository=InMemoryCommitteeMemoRepository(),
+            budget_ledger=InMemoryBudgetLedger(hard_limit_usd=Decimal("2.00")),
+            provider=provider,
+            clock=lambda: next(times),
+        ).execute(
+            AuthenticatedOperator(bundle.operator_id),
+            approved_synthesis_request(committee),
+        )
+
+        self.assertEqual(execution.execution_state, "failed")
+        self.assertEqual(len(execution.attempts), 2)
+        self.assertEqual(
+            execution.attempts[-1].validation_errors,
+            ("provider_model_mismatch",),
+        )
+
+    def test_synthesis_transport_failure_retries_same_logical_input(
+        self,
+    ) -> None:
+        bundle, committee, bundle_repository, committee_repository = (
+            completed_committee_fixture()
+        )
+        response = ProviderResponse(
+            provider_request_id="fake-synthesis-after-timeout",
+            raw_output=valid_memo_output(committee),
+            usage=ProviderUsage(2000, 500, 500, 100, 2500),
+            resolved_model="gpt-5.6-sol",
+            system_fingerprint="offline-synthesis-fingerprint-v1",
+        )
+        provider = FakeProvider(
+            (
+                ProviderTransportError("provider_timeout"),
+                response,
+            )
+        )
+        repository = InMemoryCommitteeMemoRepository()
+        times = iter(
+            datetime(2026, 7, 22, 4, minute, tzinfo=UTC) for minute in range(8)
+        )
+
+        execution = CommitteeMemoWorkflow(
+            committee_repository=committee_repository,
+            evidence_bundle_repository=bundle_repository,
+            memo_repository=repository,
+            budget_ledger=InMemoryBudgetLedger(hard_limit_usd=Decimal("2.00")),
+            provider=provider,
+            clock=lambda: next(times),
+        ).execute(
+            AuthenticatedOperator(bundle.operator_id),
+            approved_synthesis_request(committee),
+        )
+
+        self.assertEqual(execution.execution_state, "accepted")
+        self.assertEqual(len(execution.attempts), 2)
+        self.assertEqual(
+            execution.attempts[0].validation_errors,
+            ("provider_timeout",),
+        )
+        self.assertEqual(
+            execution.memo.as_dict()["execution_metadata"]["attempts"][0]["result"],
+            "transport_error",
+        )
+        self.assertEqual(
+            provider.requests[0].logical_input,
+            provider.requests[1].logical_input,
+        )
+        first_raw = repository.read_raw_attempt(
+            bundle.operator_id,
+            execution.attempts[0].attempt_id,
+            audit_authorized=True,
+        )
+        self.assertIsNone(first_raw["response"])
+
+    def test_synthesis_nonretryable_provider_error_stops_after_one_attempt(
+        self,
+    ) -> None:
+        bundle, committee, bundle_repository, committee_repository = (
+            completed_committee_fixture()
+        )
+        provider = FakeProvider(
+            (
+                ProviderTransportError(
+                    "openai_response_refusal",
+                    retryable=False,
+                    category="refusal",
+                ),
+            )
+        )
+        times = iter(
+            datetime(2026, 7, 22, 4, minute, tzinfo=UTC) for minute in range(5)
+        )
+
+        execution = CommitteeMemoWorkflow(
+            committee_repository=committee_repository,
+            evidence_bundle_repository=bundle_repository,
+            memo_repository=InMemoryCommitteeMemoRepository(),
+            budget_ledger=InMemoryBudgetLedger(hard_limit_usd=Decimal("2.00")),
+            provider=provider,
+            clock=lambda: next(times),
+        ).execute(
+            AuthenticatedOperator(bundle.operator_id),
+            approved_synthesis_request(committee),
+        )
+
+        self.assertEqual(execution.execution_state, "failed")
+        self.assertEqual(len(execution.attempts), 1)
+        self.assertEqual(len(provider.requests), 1)
+        self.assertEqual(
+            execution.attempts[0].validation_errors,
+            ("openai_response_refusal",),
+        )
+
     def test_cache_write_tokens_replace_ordinary_uncached_input_pricing(
         self,
     ) -> None:
@@ -203,8 +448,7 @@ class CommitteeMemoWorkflowTests(unittest.TestCase):
         )
         budget = InMemoryBudgetLedger(hard_limit_usd=Decimal("2.00"))
         times = iter(
-            datetime(2026, 7, 22, 4, minute, tzinfo=UTC)
-            for minute in range(4)
+            datetime(2026, 7, 22, 4, minute, tzinfo=UTC) for minute in range(4)
         )
 
         execution = CommitteeMemoWorkflow(
@@ -219,9 +463,7 @@ class CommitteeMemoWorkflowTests(unittest.TestCase):
         self.assertEqual(budget.reconciled_usd, Decimal("0.00395"))
         self.assertEqual(execution.memo.estimated_cost_usd, "0.00395")
         self.assertEqual(
-            execution.memo.as_dict()["execution_metadata"][
-                "cache_write_tokens"
-            ],
+            execution.memo.as_dict()["execution_metadata"]["cache_write_tokens"],
             700,
         )
 
@@ -248,8 +490,7 @@ class CommitteeMemoWorkflowTests(unittest.TestCase):
         )
         budget = InMemoryBudgetLedger(hard_limit_usd=Decimal("2.00"))
         times = iter(
-            datetime(2026, 7, 22, 4, minute, tzinfo=UTC)
-            for minute in range(8)
+            datetime(2026, 7, 22, 4, minute, tzinfo=UTC) for minute in range(8)
         )
 
         execution = CommitteeMemoWorkflow(
@@ -289,9 +530,7 @@ class CommitteeMemoWorkflowTests(unittest.TestCase):
             committee_repository=committee_repository,
             evidence_bundle_repository=bundle_repository,
             memo_repository=InMemoryCommitteeMemoRepository(),
-            budget_ledger=InMemoryBudgetLedger(
-                hard_limit_usd=Decimal("0.03")
-            ),
+            budget_ledger=InMemoryBudgetLedger(hard_limit_usd=Decimal("0.03")),
             provider=provider,
             clock=lambda: datetime(2026, 7, 22, 4, 0, tzinfo=UTC),
         )
@@ -370,9 +609,7 @@ class CommitteeMemoWorkflowTests(unittest.TestCase):
                 committee_repository=committee_repository,
                 evidence_bundle_repository=bundle_repository,
                 memo_repository=InMemoryCommitteeMemoRepository(),
-                budget_ledger=InMemoryBudgetLedger(
-                    hard_limit_usd=Decimal("2.00")
-                ),
+                budget_ledger=InMemoryBudgetLedger(hard_limit_usd=Decimal("2.00")),
                 provider=provider,
                 clock=lambda: checked_at,
             ).execute(AuthenticatedOperator(bundle.operator_id), request)
@@ -415,9 +652,7 @@ class CommitteeMemoWorkflowTests(unittest.TestCase):
                 committee_repository=committee_repository,
                 evidence_bundle_repository=bundle_repository,
                 memo_repository=InMemoryCommitteeMemoRepository(),
-                budget_ledger=InMemoryBudgetLedger(
-                    hard_limit_usd=Decimal("2.00")
-                ),
+                budget_ledger=InMemoryBudgetLedger(hard_limit_usd=Decimal("2.00")),
                 provider=provider,
                 clock=lambda: checked_at,
             ).execute(AuthenticatedOperator(bundle.operator_id), request)
@@ -455,9 +690,7 @@ class CommitteeMemoWorkflowTests(unittest.TestCase):
                 committee_repository=committee_repository,
                 evidence_bundle_repository=bundle_repository,
                 memo_repository=InMemoryCommitteeMemoRepository(),
-                budget_ledger=InMemoryBudgetLedger(
-                    hard_limit_usd=Decimal("2.00")
-                ),
+                budget_ledger=InMemoryBudgetLedger(hard_limit_usd=Decimal("2.00")),
                 provider=provider,
                 clock=lambda: checked_at,
             ).execute(AuthenticatedOperator(bundle.operator_id), request)
@@ -492,9 +725,7 @@ class CommitteeMemoWorkflowTests(unittest.TestCase):
                 committee_repository=committee_repository,
                 evidence_bundle_repository=bundle_repository,
                 memo_repository=InMemoryCommitteeMemoRepository(),
-                budget_ledger=InMemoryBudgetLedger(
-                    hard_limit_usd=Decimal("2.00")
-                ),
+                budget_ledger=InMemoryBudgetLedger(hard_limit_usd=Decimal("2.00")),
                 provider=provider,
                 clock=lambda: datetime(2026, 7, 22, 4, 0, tzinfo=UTC),
             ).execute(AuthenticatedOperator(bundle.operator_id), request)
@@ -523,9 +754,7 @@ class CommitteeMemoWorkflowTests(unittest.TestCase):
                 committee_repository=committee_repository,
                 evidence_bundle_repository=bundle_repository,
                 memo_repository=InMemoryCommitteeMemoRepository(),
-                budget_ledger=InMemoryBudgetLedger(
-                    hard_limit_usd=Decimal("2.00")
-                ),
+                budget_ledger=InMemoryBudgetLedger(hard_limit_usd=Decimal("2.00")),
                 provider=provider,
                 clock=lambda: datetime(2026, 7, 22, 4, 0, tzinfo=UTC),
             ).execute(AuthenticatedOperator(bundle.operator_id), request)
@@ -536,7 +765,15 @@ class CommitteeMemoWorkflowTests(unittest.TestCase):
         self,
     ) -> None:
         repository = InMemoryCommitteeMemoRepository()
-        repository.save_raw_attempt(
+        repository.begin_raw_attempt(
+            "10000000-0000-4000-8000-000000000001",
+            "attempt-1",
+            {
+                "provider": "openai",
+                "reasoning_content": "private chain of thought",
+            },
+        )
+        repository.finish_raw_attempt(
             "10000000-0000-4000-8000-000000000001",
             "attempt-1",
             {
@@ -560,7 +797,10 @@ class CommitteeMemoWorkflowTests(unittest.TestCase):
                 "attempt-1",
                 audit_authorized=True,
             ),
-            {"requested_disposition": "monitor"},
+            {
+                "request": {"provider": "openai"},
+                "response": {"requested_disposition": "monitor"},
+            },
         )
 
     def test_valid_persisted_committee_produces_retrievable_typed_memo(
@@ -579,16 +819,13 @@ class CommitteeMemoWorkflowTests(unittest.TestCase):
         )
         repository = InMemoryCommitteeMemoRepository()
         times = iter(
-            datetime(2026, 7, 22, 4, minute, tzinfo=UTC)
-            for minute in range(4)
+            datetime(2026, 7, 22, 4, minute, tzinfo=UTC) for minute in range(4)
         )
         workflow = CommitteeMemoWorkflow(
             committee_repository=committee_repository,
             evidence_bundle_repository=bundle_repository,
             memo_repository=repository,
-            budget_ledger=InMemoryBudgetLedger(
-                hard_limit_usd=Decimal("2.00")
-            ),
+            budget_ledger=InMemoryBudgetLedger(hard_limit_usd=Decimal("2.00")),
             provider=FakeProvider((response,)),
             clock=lambda: next(times),
         )
@@ -660,9 +897,7 @@ class CommitteeMemoWorkflowTests(unittest.TestCase):
         )
         request = approved_synthesis_request(committee)
         output = valid_memo_output(committee)
-        opinion_ids = [
-            item.opinion.opinion_id for item in committee.grader_results
-        ]
+        opinion_ids = [item.opinion.opinion_id for item in committee.grader_results]
         output["statements"].extend(
             (
                 {
@@ -723,16 +958,13 @@ class CommitteeMemoWorkflowTests(unittest.TestCase):
             system_fingerprint="offline-synthesis-fingerprint-v1",
         )
         times = iter(
-            datetime(2026, 7, 22, 4, minute, tzinfo=UTC)
-            for minute in range(4)
+            datetime(2026, 7, 22, 4, minute, tzinfo=UTC) for minute in range(4)
         )
         workflow = CommitteeMemoWorkflow(
             committee_repository=committee_repository,
             evidence_bundle_repository=bundle_repository,
             memo_repository=InMemoryCommitteeMemoRepository(),
-            budget_ledger=InMemoryBudgetLedger(
-                hard_limit_usd=Decimal("2.00")
-            ),
+            budget_ledger=InMemoryBudgetLedger(hard_limit_usd=Decimal("2.00")),
             provider=FakeProvider((response, response)),
             clock=lambda: next(times),
         )
@@ -765,16 +997,13 @@ class CommitteeMemoWorkflowTests(unittest.TestCase):
             system_fingerprint="offline-synthesis-fingerprint-v1",
         )
         times = iter(
-            datetime(2026, 7, 22, 4, minute, tzinfo=UTC)
-            for minute in range(4)
+            datetime(2026, 7, 22, 4, minute, tzinfo=UTC) for minute in range(4)
         )
         workflow = CommitteeMemoWorkflow(
             committee_repository=committee_repository,
             evidence_bundle_repository=bundle_repository,
             memo_repository=InMemoryCommitteeMemoRepository(),
-            budget_ledger=InMemoryBudgetLedger(
-                hard_limit_usd=Decimal("2.00")
-            ),
+            budget_ledger=InMemoryBudgetLedger(hard_limit_usd=Decimal("2.00")),
             provider=FakeProvider((response, response)),
             clock=lambda: next(times),
         )
@@ -823,16 +1052,13 @@ class CommitteeMemoWorkflowTests(unittest.TestCase):
             )
         )
         times = iter(
-            datetime(2026, 7, 22, 4, minute, tzinfo=UTC)
-            for minute in range(4)
+            datetime(2026, 7, 22, 4, minute, tzinfo=UTC) for minute in range(4)
         )
         workflow = CommitteeMemoWorkflow(
             committee_repository=committee_repository,
             evidence_bundle_repository=bundle_repository,
             memo_repository=InMemoryCommitteeMemoRepository(),
-            budget_ledger=InMemoryBudgetLedger(
-                hard_limit_usd=Decimal("2.00")
-            ),
+            budget_ledger=InMemoryBudgetLedger(hard_limit_usd=Decimal("2.00")),
             provider=provider,
             clock=lambda: next(times),
         )
@@ -893,9 +1119,7 @@ class CommitteeMemoWorkflowTests(unittest.TestCase):
             committee_repository=committee_repository,
             evidence_bundle_repository=bundle_repository,
             memo_repository=InMemoryCommitteeMemoRepository(),
-            budget_ledger=InMemoryBudgetLedger(
-                hard_limit_usd=Decimal("2.00")
-            ),
+            budget_ledger=InMemoryBudgetLedger(hard_limit_usd=Decimal("2.00")),
             provider=provider,
             clock=lambda: next(times),
         )
@@ -947,9 +1171,7 @@ class CommitteeMemoWorkflowTests(unittest.TestCase):
             committee_repository=committee_repository,
             evidence_bundle_repository=bundle_repository,
             memo_repository=repository,
-            budget_ledger=InMemoryBudgetLedger(
-                hard_limit_usd=Decimal("2.00")
-            ),
+            budget_ledger=InMemoryBudgetLedger(hard_limit_usd=Decimal("2.00")),
             provider=provider,
             clock=lambda: next(times),
         )

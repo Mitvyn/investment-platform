@@ -15,6 +15,16 @@ QUESTION_TYPE = "biotech_moonshot_catalyst_assessment"
 QUESTION_TYPE_VERSION = "biotech_moonshot_catalyst_assessment.v1"
 WORKFLOW_CONFIG_VERSION = "biotech-moonshot-catalyst-v1"
 THESIS_CONTRACT_ID = "biotech_moonshot_catalyst_assessment"
+PERSONAL_RESEARCH_WORKFLOW_CONFIG_VERSION = (
+    "biotech-moonshot-catalyst-personal-research-v1"
+)
+PERSONAL_RESEARCH_QUESTION_TYPE = (
+    "biotech_moonshot_catalyst_personal_research_assessment"
+)
+PERSONAL_RESEARCH_QUESTION_TYPE_VERSION = (
+    "biotech_moonshot_catalyst_personal_research_assessment.v1"
+)
+PERSONAL_RESEARCH_THESIS_CONTRACT_ID = "biotech_moonshot_catalyst_personal_research_v1"
 ELIGIBILITY_POLICY_VERSION = "biotech-security-eligibility-v1"
 
 RULE_IDS = (
@@ -68,29 +78,40 @@ class WorkflowConfigRegistry(Protocol):
 
 
 class FixedWorkflowConfigRegistry:
-    """Pinned MVP workflow registry used until durable config loading exists."""
+    """Pinned workflow registry used until durable config loading exists."""
 
     def __init__(self, *, active: bool = True) -> None:
-        self._config = WorkflowConfigDefinition(
-            question_type=QUESTION_TYPE,
-            version=WORKFLOW_CONFIG_VERSION,
-            question_type_version=QUESTION_TYPE_VERSION,
-            thesis_contract_id=THESIS_CONTRACT_ID,
-            eligibility_policy_version=ELIGIBILITY_POLICY_VERSION,
-            active=active,
-        )
+        self._configs = {
+            (question_type, version): WorkflowConfigDefinition(
+                question_type=question_type,
+                version=version,
+                question_type_version=question_type_version,
+                thesis_contract_id=thesis_contract_id,
+                eligibility_policy_version=ELIGIBILITY_POLICY_VERSION,
+                active=active,
+            )
+            for question_type, version, question_type_version, thesis_contract_id in (
+                (
+                    QUESTION_TYPE,
+                    WORKFLOW_CONFIG_VERSION,
+                    QUESTION_TYPE_VERSION,
+                    THESIS_CONTRACT_ID,
+                ),
+                (
+                    PERSONAL_RESEARCH_QUESTION_TYPE,
+                    PERSONAL_RESEARCH_WORKFLOW_CONFIG_VERSION,
+                    PERSONAL_RESEARCH_QUESTION_TYPE_VERSION,
+                    PERSONAL_RESEARCH_THESIS_CONTRACT_ID,
+                ),
+            )
+        }
 
     def resolve(
         self,
         question_type: str,
         workflow_config_version: str,
     ) -> WorkflowConfigDefinition | None:
-        if (
-            question_type == self._config.question_type
-            and workflow_config_version == self._config.version
-        ):
-            return self._config
-        return None
+        return self._configs.get((question_type, workflow_config_version))
 
 
 DEFAULT_WORKFLOW_CONFIG_REGISTRY = FixedWorkflowConfigRegistry()
@@ -334,8 +355,6 @@ def parse_research_question_request(
     question_type = payload["question_type"]
     workflow_version = payload["workflow_config_version"]
     security_id = payload["security_id"]
-    if question_type != QUESTION_TYPE:
-        raise ResearchRunRequestError("unsupported question_type")
     config = _resolve_workflow_config(
         str(question_type),
         str(workflow_version),
@@ -621,7 +640,7 @@ class ResearchRunWorkflow:
                 symbol=snapshot.display_symbol,
                 primary_listing_exchange=snapshot.primary_listing_exchange,
             ),
-            question_type=QUESTION_TYPE,
+            question_type=normalized.question_type,
             question_type_version=normalized.question_type_version,
             workflow_config_version=normalized.workflow_config_version,
             thesis_contract_id=normalized.thesis_contract_id,
@@ -651,6 +670,10 @@ __all__ = [
     "FixedWorkflowConfigRegistry",
     "InMemoryResearchRunRepository",
     "NormalizedResearchQuestionRequest",
+    "PERSONAL_RESEARCH_QUESTION_TYPE",
+    "PERSONAL_RESEARCH_QUESTION_TYPE_VERSION",
+    "PERSONAL_RESEARCH_THESIS_CONTRACT_ID",
+    "PERSONAL_RESEARCH_WORKFLOW_CONFIG_VERSION",
     "ResearchQuestionRequest",
     "ResearchRun",
     "ResearchRunNotFound",

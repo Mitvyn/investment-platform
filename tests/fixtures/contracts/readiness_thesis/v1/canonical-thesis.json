@@ -11,7 +11,7 @@
   "evidence_bundle_id": "4478d37e-95c4-545f-826c-d77257dfd4aa",
   "evidence_bundle_hash": "2d13851bd2d0b99ad5d5665506d36d181c68bd01501001f2da67fbcd6912cafe",
   "question_type_version": "biotech_moonshot_catalyst_assessment.v1",
-  "workflow_config_version": "biotech_moonshot_catalyst_workflow.v1",
+  "workflow_config_version": "biotech-moonshot-catalyst-v1",
   "proposition_id": "biotech_moonshot_catalyst_case",
   "proposition_version": "biotech_moonshot_catalyst_case.v1",
   "validated_grader_opinion_ids": [
@@ -25,7 +25,7 @@
   "committee_memo_id": "30000000-0000-4000-8000-000000000001",
   "committee_status": "complete",
   "readiness_gate_result_id": "40000000-0000-4000-8000-000000000001",
-  "readiness_gate_policy_version": "biotech_decision_readiness.v1",
+  "readiness_gate_policy_version": "biotech-readiness.v1",
   "requested_disposition": "decision_ready",
   "final_disposition": "decision_ready",
   "content": {

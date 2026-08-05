@@ -12,8 +12,10 @@ from investment_research_os.evidence_bundles import (
     InMemoryEvidenceBundleRepository,
 )
 from investment_research_os.grader_executions import (
+    BudgetLedger,
     ExecutionPolicy,
     GraderContract,
+    GraderExecutionRepository,
     GraderExecutionRequest,
     GraderExecutionError,
     GraderExecutionWorkflow,
@@ -45,6 +47,9 @@ class FakeProvider:
     ) -> None:
         self._responses = iter(responses)
         self.requests = []
+
+    def audit_request(self, request):
+        return request.as_dict()
 
     def execute(self, request):
         self.requests.append(request)
@@ -85,9 +90,7 @@ def approved_request(bundle_id: str) -> GraderExecutionRequest:
             grader_id="moonshot",
             grader_version="moonshot-grader-v1",
             grader_contract_version="moonshot-grader-contract-v1",
-            owned_decision_question=(
-                "Is the opportunity meaningfully asymmetric?"
-            ),
+            owned_decision_question=("Is the opportunity meaningfully asymmetric?"),
             eligibility_rule_version="moonshot-eligibility-v1",
             rubric_version="moonshot-rubric-v1",
             output_schema_version="moonshot_grader_payload.v1",
@@ -115,12 +118,8 @@ def approved_request(bundle_id: str) -> GraderExecutionRequest:
             ),
         ),
         model=ModelConfiguration(
-            config_id=(
-                "biotech_committee_graders_openai_sol_medium_v1"
-            ),
-            config_version=(
-                "biotech_committee_graders_openai_sol_medium_v1"
-            ),
+            config_id=("biotech_committee_graders_openai_sol_medium_v1"),
+            config_version=("biotech_committee_graders_openai_sol_medium_v1"),
             provider="openai",
             model="gpt-5.6-sol",
             reasoning_effort="medium",
@@ -257,6 +256,70 @@ def assert_typescript_contract(test, execution, bundle) -> None:
 
 
 class GraderExecutionWorkflowTests(unittest.TestCase):
+    def test_in_memory_ports_satisfy_public_workflow_protocols(self) -> None:
+        self.assertIsInstance(
+            InMemoryGraderExecutionRepository(),
+            GraderExecutionRepository,
+        )
+        self.assertIsInstance(
+            InMemoryBudgetLedger(hard_limit_usd=Decimal("1.00")),
+            BudgetLedger,
+        )
+
+    def test_raw_audit_strips_provider_reasoning_items(self) -> None:
+        repository = InMemoryGraderExecutionRepository()
+        operator_id = "10000000-0000-4000-8000-000000000001"
+        attempt_id = "10000000-0000-4000-8000-000000000002"
+        repository.begin_raw_attempt(
+            operator_id,
+            attempt_id,
+            {"provider": "openai"},
+        )
+        repository.finish_raw_attempt(
+            operator_id,
+            attempt_id,
+            {
+                "id": "resp_123",
+                "output": [
+                    {
+                        "type": "reasoning",
+                        "encrypted_content": "private-reasoning",
+                    },
+                    {
+                        "type": "message",
+                        "content": [
+                            {
+                                "type": "output_text",
+                                "text": '{"execution_state":"accepted"}',
+                            }
+                        ],
+                    },
+                ],
+            },
+        )
+
+        audit = repository.read_raw_attempt(
+            operator_id,
+            attempt_id,
+            audit_authorized=True,
+        )
+
+        self.assertEqual(
+            audit["response"]["output"],
+            [
+                {
+                    "type": "message",
+                    "content": [
+                        {
+                            "type": "output_text",
+                            "text": '{"execution_state":"accepted"}',
+                        }
+                    ],
+                }
+            ],
+        )
+        self.assertNotIn("encrypted_content", json.dumps(audit))
+
     def test_grader_receives_exact_frozen_passages_in_manifest_order(
         self,
     ) -> None:
@@ -267,9 +330,7 @@ class GraderExecutionWorkflowTests(unittest.TestCase):
             (
                 ProviderResponse(
                     provider_request_id="fake-passage-input",
-                    raw_output=accepted_output(
-                        bundle.manifest[0].evidence_id
-                    ),
+                    raw_output=accepted_output(bundle.manifest[0].evidence_id),
                     usage=ProviderUsage(1000, 200, 300, 100, 1300),
                     resolved_model="gpt-5.6-sol",
                     system_fingerprint="offline-fingerprint-v1",
@@ -279,9 +340,7 @@ class GraderExecutionWorkflowTests(unittest.TestCase):
         workflow = GraderExecutionWorkflow(
             evidence_bundle_repository=bundle_repository,
             execution_repository=InMemoryGraderExecutionRepository(),
-            budget_ledger=InMemoryBudgetLedger(
-                hard_limit_usd=Decimal("5.00")
-            ),
+            budget_ledger=InMemoryBudgetLedger(hard_limit_usd=Decimal("5.00")),
             provider=provider,
             clock=lambda: datetime(2026, 7, 22, 3, 0, tzinfo=UTC),
         )
@@ -291,9 +350,7 @@ class GraderExecutionWorkflowTests(unittest.TestCase):
             approved_request(bundle.id),
         )
 
-        passages = provider.requests[0].logical_input[
-            "evidence_passages"
-        ]
+        passages = provider.requests[0].logical_input["evidence_passages"]
         self.assertEqual(
             [passage["evidence_id"] for passage in passages],
             [
@@ -328,9 +385,7 @@ class GraderExecutionWorkflowTests(unittest.TestCase):
             (
                 ProviderResponse(
                     provider_request_id="must-not-run",
-                    raw_output=accepted_output(
-                        bundle.manifest[0].evidence_id
-                    ),
+                    raw_output=accepted_output(bundle.manifest[0].evidence_id),
                     usage=ProviderUsage(1000, 200, 300, 100, 1300),
                     resolved_model="gpt-5.6-sol",
                     system_fingerprint="offline-fingerprint-v1",
@@ -341,9 +396,7 @@ class GraderExecutionWorkflowTests(unittest.TestCase):
         execution = GraderExecutionWorkflow(
             evidence_bundle_repository=bundle_repository,
             execution_repository=InMemoryGraderExecutionRepository(),
-            budget_ledger=InMemoryBudgetLedger(
-                hard_limit_usd=Decimal("5.00")
-            ),
+            budget_ledger=InMemoryBudgetLedger(hard_limit_usd=Decimal("5.00")),
             provider=provider,
             clock=lambda: datetime(2026, 7, 22, 3, 0, tzinfo=UTC),
         ).execute(
@@ -374,9 +427,7 @@ class GraderExecutionWorkflowTests(unittest.TestCase):
         execution = GraderExecutionWorkflow(
             evidence_bundle_repository=bundle_repository,
             execution_repository=InMemoryGraderExecutionRepository(),
-            budget_ledger=InMemoryBudgetLedger(
-                hard_limit_usd=Decimal("5.00")
-            ),
+            budget_ledger=InMemoryBudgetLedger(hard_limit_usd=Decimal("5.00")),
             provider=provider,
             clock=lambda: datetime(2026, 7, 22, 3, 0, tzinfo=UTC),
         ).execute(
@@ -427,6 +478,7 @@ class GraderExecutionWorkflowTests(unittest.TestCase):
             provider.requests[0].logical_input["valuation_snapshot"],
             snapshot.as_dict(),
         )
+
     def test_cache_write_tokens_are_costed_and_exposed(self) -> None:
         bundle = materialized_bundle()
         bundle_repository = InMemoryEvidenceBundleRepository()
@@ -461,9 +513,7 @@ class GraderExecutionWorkflowTests(unittest.TestCase):
         execution = GraderExecutionWorkflow(
             evidence_bundle_repository=bundle_repository,
             execution_repository=InMemoryGraderExecutionRepository(),
-            budget_ledger=InMemoryBudgetLedger(
-                hard_limit_usd=Decimal("1.00")
-            ),
+            budget_ledger=InMemoryBudgetLedger(hard_limit_usd=Decimal("1.00")),
             provider=provider,
             clock=lambda: datetime(2026, 7, 22, 1, 0, tzinfo=UTC),
         ).execute(AuthenticatedOperator(bundle.operator_id), request)
@@ -473,9 +523,7 @@ class GraderExecutionWorkflowTests(unittest.TestCase):
             "0.00152",
         )
         self.assertEqual(
-            execution.as_dict()["attempts"][0]["usage"][
-                "cache_write_tokens"
-            ],
+            execution.as_dict()["attempts"][0]["usage"]["cache_write_tokens"],
             400,
         )
 
@@ -502,9 +550,7 @@ class GraderExecutionWorkflowTests(unittest.TestCase):
         execution = GraderExecutionWorkflow(
             evidence_bundle_repository=bundle_repository,
             execution_repository=InMemoryGraderExecutionRepository(),
-            budget_ledger=InMemoryBudgetLedger(
-                hard_limit_usd=Decimal("1.00")
-            ),
+            budget_ledger=InMemoryBudgetLedger(hard_limit_usd=Decimal("1.00")),
             provider=provider,
             clock=lambda: datetime(2026, 7, 22, 1, 0, tzinfo=UTC),
         ).execute(
@@ -534,9 +580,7 @@ class GraderExecutionWorkflowTests(unittest.TestCase):
             (
                 ProviderResponse(
                     provider_request_id="fake-request-bounded-reservation",
-                    raw_output=accepted_output(
-                        bundle.manifest[0].evidence_id
-                    ),
+                    raw_output=accepted_output(bundle.manifest[0].evidence_id),
                     usage=ProviderUsage(1000, 0, 300, 100, 1300),
                     resolved_model="gpt-5.6-sol",
                     system_fingerprint="offline-fingerprint-v1",
@@ -547,9 +591,7 @@ class GraderExecutionWorkflowTests(unittest.TestCase):
         execution = GraderExecutionWorkflow(
             evidence_bundle_repository=bundle_repository,
             execution_repository=InMemoryGraderExecutionRepository(),
-            budget_ledger=InMemoryBudgetLedger(
-                hard_limit_usd=Decimal("0.03")
-            ),
+            budget_ledger=InMemoryBudgetLedger(hard_limit_usd=Decimal("0.03")),
             provider=provider,
             clock=lambda: datetime(2026, 7, 22, 1, 0, tzinfo=UTC),
         ).execute(AuthenticatedOperator(bundle.operator_id), request)
@@ -698,9 +740,7 @@ class GraderExecutionWorkflowTests(unittest.TestCase):
         execution = GraderExecutionWorkflow(
             evidence_bundle_repository=bundle_repository,
             execution_repository=InMemoryGraderExecutionRepository(),
-            budget_ledger=InMemoryBudgetLedger(
-                hard_limit_usd=Decimal("1.00")
-            ),
+            budget_ledger=InMemoryBudgetLedger(hard_limit_usd=Decimal("1.00")),
             provider=provider,
             clock=lambda: datetime(2026, 7, 22, 1, 0, tzinfo=UTC),
         ).execute(AuthenticatedOperator(bundle.operator_id), request)
@@ -733,9 +773,7 @@ class GraderExecutionWorkflowTests(unittest.TestCase):
         execution = GraderExecutionWorkflow(
             evidence_bundle_repository=bundle_repository,
             execution_repository=InMemoryGraderExecutionRepository(),
-            budget_ledger=InMemoryBudgetLedger(
-                hard_limit_usd=Decimal("1.00")
-            ),
+            budget_ledger=InMemoryBudgetLedger(hard_limit_usd=Decimal("1.00")),
             provider=provider,
             clock=lambda: checked_at,
         ).execute(AuthenticatedOperator(bundle.operator_id), request)
@@ -776,9 +814,7 @@ class GraderExecutionWorkflowTests(unittest.TestCase):
         execution = GraderExecutionWorkflow(
             evidence_bundle_repository=bundle_repository,
             execution_repository=InMemoryGraderExecutionRepository(),
-            budget_ledger=InMemoryBudgetLedger(
-                hard_limit_usd=Decimal("1.00")
-            ),
+            budget_ledger=InMemoryBudgetLedger(hard_limit_usd=Decimal("1.00")),
             provider=provider,
             clock=lambda: checked_at,
         ).execute(AuthenticatedOperator(bundle.operator_id), request)
@@ -814,9 +850,7 @@ class GraderExecutionWorkflowTests(unittest.TestCase):
         execution = GraderExecutionWorkflow(
             evidence_bundle_repository=bundle_repository,
             execution_repository=InMemoryGraderExecutionRepository(),
-            budget_ledger=InMemoryBudgetLedger(
-                hard_limit_usd=Decimal("1.00")
-            ),
+            budget_ledger=InMemoryBudgetLedger(hard_limit_usd=Decimal("1.00")),
             provider=provider,
             clock=lambda: checked_at,
         ).execute(AuthenticatedOperator(bundle.operator_id), request)
@@ -852,9 +886,7 @@ class GraderExecutionWorkflowTests(unittest.TestCase):
         execution = GraderExecutionWorkflow(
             evidence_bundle_repository=bundle_repository,
             execution_repository=InMemoryGraderExecutionRepository(),
-            budget_ledger=InMemoryBudgetLedger(
-                hard_limit_usd=Decimal("1.00")
-            ),
+            budget_ledger=InMemoryBudgetLedger(hard_limit_usd=Decimal("1.00")),
             provider=provider,
             clock=lambda: checked_at,
         ).execute(AuthenticatedOperator(bundle.operator_id), request)
@@ -879,9 +911,7 @@ class GraderExecutionWorkflowTests(unittest.TestCase):
         execution = GraderExecutionWorkflow(
             evidence_bundle_repository=bundle_repository,
             execution_repository=InMemoryGraderExecutionRepository(),
-            budget_ledger=InMemoryBudgetLedger(
-                hard_limit_usd=Decimal("1.00")
-            ),
+            budget_ledger=InMemoryBudgetLedger(hard_limit_usd=Decimal("1.00")),
             provider=provider,
             clock=lambda: datetime(2026, 7, 22, 1, 0, tzinfo=UTC),
         ).execute(AuthenticatedOperator(bundle.operator_id), request)
@@ -900,9 +930,7 @@ class GraderExecutionWorkflowTests(unittest.TestCase):
         execution = GraderExecutionWorkflow(
             evidence_bundle_repository=bundle_repository,
             execution_repository=InMemoryGraderExecutionRepository(),
-            budget_ledger=InMemoryBudgetLedger(
-                hard_limit_usd=Decimal("0.001")
-            ),
+            budget_ledger=InMemoryBudgetLedger(hard_limit_usd=Decimal("0.001")),
             provider=provider,
             clock=lambda: datetime(2026, 7, 22, 1, 0, tzinfo=UTC),
         ).execute(
@@ -936,9 +964,7 @@ class GraderExecutionWorkflowTests(unittest.TestCase):
                 ),
                 ProviderResponse(
                     provider_request_id="fake-request-2",
-                    raw_output=accepted_output(
-                        bundle.manifest[0].evidence_id
-                    ),
+                    raw_output=accepted_output(bundle.manifest[0].evidence_id),
                     usage=ProviderUsage(1000, 200, 300, 100, 1300),
                     resolved_model="gpt-5.6-sol",
                     system_fingerprint="offline-fingerprint-v1",
@@ -991,9 +1017,7 @@ class GraderExecutionWorkflowTests(unittest.TestCase):
             (
                 ProviderResponse(
                     provider_request_id="fake-request-abstain",
-                    raw_output=abstained_output(
-                        bundle.manifest[0].evidence_id
-                    ),
+                    raw_output=abstained_output(bundle.manifest[0].evidence_id),
                     usage=ProviderUsage(900, 100, 200, 50, 1100),
                     resolved_model="gpt-5.6-sol",
                     system_fingerprint="offline-fingerprint-v1",
@@ -1081,9 +1105,7 @@ class GraderExecutionWorkflowTests(unittest.TestCase):
                 ProviderTransportError("provider_timeout"),
                 ProviderResponse(
                     provider_request_id="fake-request-after-timeout",
-                    raw_output=accepted_output(
-                        bundle.manifest[0].evidence_id
-                    ),
+                    raw_output=accepted_output(bundle.manifest[0].evidence_id),
                     usage=ProviderUsage(1000, 200, 300, 100, 1300),
                     resolved_model="gpt-5.6-sol",
                     system_fingerprint="offline-fingerprint-v1",
@@ -1121,6 +1143,39 @@ class GraderExecutionWorkflowTests(unittest.TestCase):
         self.assertEqual(budget.reserved_usd, Decimal("0"))
         self.assertEqual(budget.reconciled_usd, Decimal("0.00142"))
 
+    def test_nonretryable_provider_error_stops_after_one_attempt(self) -> None:
+        bundle = materialized_bundle()
+        bundle_repository = InMemoryEvidenceBundleRepository()
+        bundle_repository.save(bundle)
+        provider = FakeProvider(
+            (
+                ProviderTransportError(
+                    "openai_response_refusal",
+                    retryable=False,
+                    category="refusal",
+                ),
+            )
+        )
+
+        execution = GraderExecutionWorkflow(
+            evidence_bundle_repository=bundle_repository,
+            execution_repository=InMemoryGraderExecutionRepository(),
+            budget_ledger=InMemoryBudgetLedger(hard_limit_usd=Decimal("1.00")),
+            provider=provider,
+            clock=lambda: datetime(2026, 7, 22, 1, 0, tzinfo=UTC),
+        ).execute(
+            AuthenticatedOperator(bundle.operator_id),
+            approved_request(bundle.id),
+        )
+
+        self.assertEqual(execution.execution_state, "failed")
+        self.assertEqual(len(execution.attempts), 1)
+        self.assertEqual(len(provider.requests), 1)
+        self.assertEqual(
+            execution.failure.final_reason,
+            "openai_response_refusal",
+        )
+
     def test_identical_request_reuses_validated_execution_without_new_call(
         self,
     ) -> None:
@@ -1131,9 +1186,7 @@ class GraderExecutionWorkflowTests(unittest.TestCase):
             (
                 ProviderResponse(
                     provider_request_id="fake-request-reused",
-                    raw_output=accepted_output(
-                        bundle.manifest[0].evidence_id
-                    ),
+                    raw_output=accepted_output(bundle.manifest[0].evidence_id),
                     usage=ProviderUsage(1000, 200, 300, 100, 1300),
                     resolved_model="gpt-5.6-sol",
                     system_fingerprint="offline-fingerprint-v1",
@@ -1174,9 +1227,7 @@ class GraderExecutionWorkflowTests(unittest.TestCase):
         workflow = GraderExecutionWorkflow(
             evidence_bundle_repository=bundle_repository,
             execution_repository=InMemoryGraderExecutionRepository(),
-            budget_ledger=InMemoryBudgetLedger(
-                hard_limit_usd=Decimal("1.00")
-            ),
+            budget_ledger=InMemoryBudgetLedger(hard_limit_usd=Decimal("1.00")),
             provider=provider,
             clock=lambda: datetime(2026, 7, 22, 1, 0, tzinfo=UTC),
         )
@@ -1215,9 +1266,7 @@ class GraderExecutionWorkflowTests(unittest.TestCase):
         workflow = GraderExecutionWorkflow(
             evidence_bundle_repository=bundle_repository,
             execution_repository=InMemoryGraderExecutionRepository(),
-            budget_ledger=InMemoryBudgetLedger(
-                hard_limit_usd=Decimal("1.00")
-            ),
+            budget_ledger=InMemoryBudgetLedger(hard_limit_usd=Decimal("1.00")),
             provider=provider,
             clock=lambda: datetime(2026, 7, 22, 1, 0, tzinfo=UTC),
         )
@@ -1252,18 +1301,14 @@ class GraderExecutionWorkflowTests(unittest.TestCase):
             (
                 ProviderResponse(
                     provider_request_id="fake-invalid-usage",
-                    raw_output=accepted_output(
-                        bundle.manifest[0].evidence_id
-                    ),
+                    raw_output=accepted_output(bundle.manifest[0].evidence_id),
                     usage=ProviderUsage(100, 200, 300, 100, 400),
                     resolved_model="gpt-5.6-sol",
                     system_fingerprint="offline-fingerprint-v1",
                 ),
                 ProviderResponse(
                     provider_request_id="fake-valid-usage",
-                    raw_output=accepted_output(
-                        bundle.manifest[0].evidence_id
-                    ),
+                    raw_output=accepted_output(bundle.manifest[0].evidence_id),
                     usage=ProviderUsage(1000, 200, 300, 100, 1300),
                     resolved_model="gpt-5.6-sol",
                     system_fingerprint="offline-fingerprint-v1",
@@ -1299,18 +1344,14 @@ class GraderExecutionWorkflowTests(unittest.TestCase):
             (
                 ProviderResponse(
                     provider_request_id="fake-model-drift",
-                    raw_output=accepted_output(
-                        bundle.manifest[0].evidence_id
-                    ),
+                    raw_output=accepted_output(bundle.manifest[0].evidence_id),
                     usage=ProviderUsage(1000, 200, 300, 100, 1300),
                     resolved_model="gpt-5.6",
                     system_fingerprint="offline-fingerprint-v2",
                 ),
                 ProviderResponse(
                     provider_request_id="fake-pinned-model",
-                    raw_output=accepted_output(
-                        bundle.manifest[0].evidence_id
-                    ),
+                    raw_output=accepted_output(bundle.manifest[0].evidence_id),
                     usage=ProviderUsage(1000, 200, 300, 100, 1300),
                     resolved_model="gpt-5.6-sol",
                     system_fingerprint="offline-fingerprint-v1",
@@ -1346,9 +1387,7 @@ class GraderExecutionWorkflowTests(unittest.TestCase):
             (
                 ProviderResponse(
                     provider_request_id="fake-contract-validation",
-                    raw_output=accepted_output(
-                        bundle.manifest[0].evidence_id
-                    ),
+                    raw_output=accepted_output(bundle.manifest[0].evidence_id),
                     usage=ProviderUsage(1000, 200, 300, 100, 1300),
                     resolved_model="gpt-5.6-sol",
                     system_fingerprint="offline-fingerprint-v1",
@@ -1413,6 +1452,15 @@ class GraderExecutionWorkflowTests(unittest.TestCase):
             audit_authorized=True,
         )
         self.assertNotIn("reasoning_content", json.dumps(raw))
+        self.assertEqual(raw["request"]["attempt_number"], 1)
+        self.assertEqual(
+            raw["request"]["provider"],
+            "openai",
+        )
+        self.assertEqual(
+            raw["response"]["grader_id"],
+            "moonshot",
+        )
 
 
 if __name__ == "__main__":

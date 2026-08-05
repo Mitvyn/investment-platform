@@ -4,7 +4,7 @@ import ast
 from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from dataclasses import replace
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 import hashlib
 import json
@@ -230,7 +230,7 @@ class FixtureValuationSource:
         self.value = value
         self.session = session
 
-    def load(self, security_id: str, cutoff: datetime):
+    def load(self, bundle, session: MarketSession):
         case_id = str(self.value["case_id"])
         security = self.value["security"]
         valuation = self.value["valuation"]
@@ -239,16 +239,21 @@ class FixtureValuationSource:
         basic = Decimal(str(valuation["basic_shares"]))
         diluted = Decimal(str(valuation["fully_diluted_shares"]))
         increment = diluted - basic
+        capital_effective_at = datetime(2026, 3, 31, 23, 59, 59, tzinfo=UTC)
         return ValuationInputCandidate(
+            security_id=bundle.security_id,
+            evidence_bundle_id=bundle.id,
+            evidence_bundle_hash=bundle.content_hash,
+            market_session=session,
             prices=(
                 PriceObservation(
                     price_type="official_unadjusted_close",
                     session_type="regular_us_trading_session",
-                    session_date=self.session.session_date,
+                    session_date=session.session_date,
                     primary_listing_exchange=str(security["exchange"]),
                     price=str(valuation["price"]),
                     currency="USD",
-                    official_close_timestamp=self.session.closes_at,
+                    official_close_timestamp=session.closes_at,
                     market_status="closed",
                     corporate_action_adjustment_status="unadjusted",
                     provider="licensed-market-fake",
@@ -259,15 +264,25 @@ class FixtureValuationSource:
                 basic_shares_outstanding=str(valuation["basic_shares"]),
                 fully_diluted_shares=str(valuation["fully_diluted_shares"]),
                 cash=str(valuation["cash"]),
+                restricted_cash="0",
+                restricted_cash_treatment="none",
                 debt=str(valuation["debt"]),
                 other_included_claims="0",
                 included_cash=str(valuation["cash"]),
                 currency="USD",
-                effective_date=date(2026, 3, 31),
+                basic_shares_effective_at=capital_effective_at,
+                fully_diluted_shares_effective_at=capital_effective_at,
+                cash_effective_at=capital_effective_at,
+                restricted_cash_effective_at=capital_effective_at,
+                included_cash_effective_at=capital_effective_at,
+                debt_effective_at=capital_effective_at,
+                other_included_claims_effective_at=capital_effective_at,
                 basic_shares_evidence_ids=(evidence_ids["sec"],),
                 diluted_shares_evidence_ids=(evidence_ids["financing"],),
                 cash_evidence_ids=(evidence_ids["financing"],),
+                restricted_cash_evidence_ids=(evidence_ids["financing"],),
                 debt_evidence_ids=(evidence_ids["financing"],),
+                other_included_claims_evidence_ids=(evidence_ids["financing"],),
                 dilution_instruments=(
                     DilutionInstrument(
                         instrument_id="fixture-dilution",
@@ -289,7 +304,7 @@ class FixtureValuationSource:
             materiality_assessments=tuple(
                 MaterialityAssessment(
                     evidence_id=item.evidence_id,
-                    publication_at=self.session.closes_at - timedelta(hours=1),
+                    publication_at=session.closes_at - timedelta(hours=1),
                     market_materiality="material",
                     materiality_reason_code="available_before_close",
                     affected_domains=("valuation",),
@@ -305,9 +320,9 @@ class FixtureValuationSource:
                     source_type="licensed_market_data",
                     provider="licensed-market-fake",
                     locator=f"{case_id} official close",
-                    published_at=self.session.closes_at,
-                    retrieved_at=cutoff + timedelta(hours=1),
-                    effective_at=self.session.closes_at,
+                    published_at=session.closes_at,
+                    retrieved_at=bundle.as_of_cutoff + timedelta(hours=1),
+                    effective_at=session.closes_at,
                 ),
             ),
         )
@@ -340,6 +355,9 @@ class FixtureGraderProvider:
         self.execution_states = dict(execution_states or {})
         self.delay_seconds = delay_seconds
         self.requests = []
+
+    def audit_request(self, request):
+        return request.as_dict()
 
     def execute(self, request):
         self.requests.append(request)
@@ -529,6 +547,9 @@ class FixtureSynthesisProvider:
         self.delay_seconds = delay_seconds
         self.requests = []
 
+    def audit_request(self, request):
+        return request.as_dict()
+
     def execute(self, request):
         self.requests.append(request)
         if self.delay_seconds:
@@ -665,10 +686,7 @@ def _workflow(
                     item,
                     model=replace(
                         item.model,
-                        active=(
-                            states.get(item.contract.grader_id)
-                            != "not_executed"
-                        ),
+                        active=(states.get(item.contract.grader_id) != "not_executed"),
                     ),
                 )
                 for item in config.graders
@@ -814,9 +832,7 @@ class GenericOfflineWorkflowTests(unittest.TestCase):
         self.assertEqual(len(synthesis_provider.requests), 1)
 
     def test_public_orchestrator_contains_no_fixture_or_ticker_branch(self) -> None:
-        source_path = Path(
-            "src/investment_research_os/research_workflows/__init__.py"
-        )
+        source_path = Path("src/investment_research_os/research_workflows/__init__.py")
         source = source_path.read_text()
         tree = ast.parse(source)
         forbidden_fixture_values = (
@@ -885,8 +901,7 @@ class GenericOfflineWorkflowTests(unittest.TestCase):
                 )
                 self.assertEqual(
                     sum(
-                        request.logical_input["grader"]["grader_id"]
-                        == "valuation"
+                        request.logical_input["grader"]["grader_id"] == "valuation"
                         for request in grader_provider.requests
                     ),
                     consequence[2],

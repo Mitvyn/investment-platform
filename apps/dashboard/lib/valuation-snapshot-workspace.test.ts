@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import type { ResearchRun } from "../../../packages/types/research-run.ts";
+import type { PersonalResearchValuationSnapshot } from "../../../packages/types/personal-research-valuation-snapshot.ts";
 import type { ValuationSnapshot } from "../../../packages/types/valuation-snapshot.ts";
 
 import { presentValuationSnapshotWorkspace } from "./valuation-snapshot-workspace.ts";
@@ -17,6 +18,18 @@ const runFixture = JSON.parse(
   ),
 ) as ResearchRun;
 
+const personalRunFixture = {
+  ...runFixture,
+  question_type:
+    "biotech_moonshot_catalyst_personal_research_assessment",
+  question_type_version:
+    "biotech_moonshot_catalyst_personal_research_assessment.v1",
+  workflow_config_version:
+    "biotech-moonshot-catalyst-personal-research-v1",
+  thesis_contract_id:
+    "biotech_moonshot_catalyst_personal_research_v1",
+} satisfies ResearchRun;
+
 const snapshotFixture = JSON.parse(
   readFileSync(
     new URL(
@@ -26,6 +39,60 @@ const snapshotFixture = JSON.parse(
     "utf8",
   ),
 ) as ValuationSnapshot;
+
+function personalSnapshotFixture(): PersonalResearchValuationSnapshot {
+  const fixture = structuredClone(snapshotFixture) as Record<string, any>;
+  fixture.contract_version = "valuation_snapshot.personal_research.v1";
+  fixture.valuation_assurance = {
+    level: "personal_research",
+    usage_scope: "private_personal_research",
+    rights_assurance: "not_independently_verified",
+    limitation_codes: [
+      "not_primary_venue_official_close",
+      "not_institutional_grade",
+      "not_for_trade_execution",
+    ],
+  };
+  fixture.price_basis = {
+    ...fixture.price_basis,
+    input_id: "consolidated_eod_close",
+    price_type: "verified_consolidated_end_of_day_close",
+    price_timestamp: fixture.price_basis.official_close_timestamp,
+    timestamp_basis: "market_calendar_session_close",
+    halt_verification_status: "verified_not_halted",
+  };
+  delete fixture.price_basis.official_close_timestamp;
+  fixture.market_capitalization.input_ids = [
+    "consolidated_eod_close",
+    "fully_diluted_shares",
+  ];
+  fixture.source_references = fixture.source_references.map(
+    (source: Record<string, any>) =>
+      source.source_reference_id === "market-close-source"
+        ? {
+            ...source,
+            source_type: "personal_market_data",
+            provider: "massive_stocks_basic",
+            provider_plan_id: "stocks_basic_personal",
+            provider_contract_status: "candidate_unapproved",
+            provider_limitation_codes: [
+              "official_close_provenance_unconfirmed",
+              "persistence_rights_unconfirmed",
+            ],
+            response_sha256: "b".repeat(64),
+          }
+        : {
+            ...source,
+            provider_plan_id: null,
+            provider_contract_status: null,
+            provider_limitation_codes: [],
+            response_sha256: null,
+          },
+  );
+  fixture.price_basis_policy_version =
+    "verified-consolidated-eod-close-personal-research-v1";
+  return fixture as PersonalResearchValuationSnapshot;
+}
 
 test("a Research Run without a persisted valuation shows an explicit missing state", () => {
   assert.deepEqual(presentValuationSnapshotWorkspace(runFixture, null), {
@@ -82,8 +149,15 @@ test("a valid aligned snapshot exposes official close, capital inputs, calculati
     [
       { label: "Basic shares", value: "357000000", unit: "shares" },
       { label: "Fully diluted shares", value: "383000000", unit: "shares" },
-      { label: "Cash", value: "665200000", unit: "USD" },
+      { label: "Reported cash", value: "665200000", unit: "USD" },
+      {
+        label: "Restricted cash (excluded)",
+        value: "5000000",
+        unit: "USD",
+      },
+      { label: "Included cash", value: "660200000", unit: "USD" },
       { label: "Debt", value: "5100000", unit: "USD" },
+      { label: "Other included claims", value: "12000000", unit: "USD" },
     ],
   );
   assert.deepEqual(
@@ -106,8 +180,9 @@ test("a valid aligned snapshot exposes official close, capital inputs, calculati
       },
       {
         label: "Enterprise value",
-        value: "1714500000 USD",
-        formula: "market capitalization + debt - cash",
+        value: "1731500000 USD",
+        formula:
+          "market capitalization + debt + other included claims - included cash",
         formulaVersion: "enterprise-value-v1",
         calculationId: "enterprise-value-result",
       },
@@ -121,6 +196,103 @@ test("a valid aligned snapshot exposes official close, capital inputs, calculati
     shareCountAdjustment: "not_applicable",
     result: "not_required",
   });
+});
+
+test("personal research snapshot exposes assurance and consolidated EOD provenance without claiming official close", () => {
+  const presentation = presentValuationSnapshotWorkspace(
+    personalRunFixture,
+    personalSnapshotFixture(),
+  );
+
+  assert.equal(presentation.kind, "ready");
+  if (presentation.kind !== "ready") return;
+  assert.deepEqual(presentation.assurance, {
+    label: "Personal research",
+    variant: "attention",
+    description:
+      "Consolidated end-of-day price is not a primary-venue official close and is not institutional-grade.",
+    usageScope: "private_personal_research",
+    rightsAssurance: "not_independently_verified",
+    limitationCodes: [
+      "not_primary_venue_official_close",
+      "not_institutional_grade",
+      "not_for_trade_execution",
+    ],
+  });
+  assert.equal(
+    presentation.alignment.description,
+    "Consolidated EOD price reflects all market-material evidence in this Research Run.",
+  );
+  assert.deepEqual(
+    presentation.priceBasis?.fields.find(
+      (field) => field.label === "Price timestamp",
+    ),
+    {
+      label: "Price timestamp",
+      value: "2026-05-06T20:00:00+00:00",
+    },
+  );
+  assert.equal(
+    presentation.priceBasis?.fields.some(
+      (field) => field.label === "Official close",
+    ),
+    false,
+  );
+  assert.deepEqual(
+    presentation.sourceReferences.find(
+      (source) => source.type === "personal_market_data",
+    ),
+    {
+      id: "market-close-source",
+      type: "personal_market_data",
+      provider: "massive_stocks_basic",
+      providerPlan: "stocks_basic_personal",
+      providerContractStatus: "candidate_unapproved",
+      providerLimitationCodes: [
+        "official_close_provenance_unconfirmed",
+        "persistence_rights_unconfirmed",
+      ],
+      providerProvenanceVariant: "attention",
+      locator: "RXRX official close 2026-05-06",
+      published: "2026-05-06T20:00:00+00:00",
+      retrieved: "2026-05-07T01:00:00+00:00",
+      effective: "2026-05-06T20:00:00+00:00",
+      responseSha256: "b".repeat(64),
+    },
+  );
+  assert.equal(
+    presentation.sourceReferences.some(
+      (source) => "providerContractStatus" in source,
+    ),
+    true,
+  );
+});
+
+test("strict valuation source references do not gain personal provider caveats", () => {
+  const presentation = presentValuationSnapshotWorkspace(
+    runFixture,
+    snapshotFixture,
+  );
+
+  assert.equal(presentation.kind, "ready");
+  if (presentation.kind !== "ready") return;
+  assert.equal(
+    presentation.sourceReferences.some(
+      (source) => "providerContractStatus" in source,
+    ),
+    false,
+  );
+});
+
+test("valuation snapshot contract must match Research Run thesis contract", () => {
+  assert.throws(
+    () => presentValuationSnapshotWorkspace(runFixture, personalSnapshotFixture()),
+    /outside Research Run valuation contract/,
+  );
+  assert.throws(
+    () => presentValuationSnapshotWorkspace(personalRunFixture, snapshotFixture),
+    /outside Research Run valuation contract/,
+  );
 });
 
 test("invalid and pre-material-evidence states remain distinct and block market-relative analysis", () => {

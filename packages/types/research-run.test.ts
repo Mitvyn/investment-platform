@@ -119,6 +119,41 @@ test("TypeScript round trips question and normalized request fixtures", () => {
   assert.deepEqual(normalizeResearchQuestionRequest(request), normalizedFixture);
 });
 
+test("TypeScript routes personal research into a separate thesis contract", () => {
+  const strictRequest = loadFixture("request.json") as Record<string, unknown>;
+  const personalRequest = parseResearchQuestionRequest({
+    ...strictRequest,
+    question_type:
+      "biotech_moonshot_catalyst_personal_research_assessment",
+    workflow_config_version:
+      "biotech-moonshot-catalyst-personal-research-v1",
+  });
+
+  assert.deepEqual(normalizeResearchQuestionRequest(personalRequest), {
+    question_type:
+      "biotech_moonshot_catalyst_personal_research_assessment",
+    question_type_version:
+      "biotech_moonshot_catalyst_personal_research_assessment.v1",
+    security_id: strictRequest.security_id,
+    as_of_cutoff: strictRequest.as_of_cutoff,
+    workflow_config_version:
+      "biotech-moonshot-catalyst-personal-research-v1",
+    thesis_contract_id:
+      "biotech_moonshot_catalyst_personal_research_v1",
+    operator_focus_original: strictRequest.operator_focus,
+    operator_focus_normalized: "Review financing through catalyst.",
+  });
+
+  const personalRun = structuredClone(fixture) as Record<string, unknown>;
+  personalRun.question_type = personalRequest.question_type;
+  personalRun.question_type_version =
+    "biotech_moonshot_catalyst_personal_research_assessment.v1";
+  personalRun.workflow_config_version = personalRequest.workflow_config_version;
+  personalRun.thesis_contract_id =
+    "biotech_moonshot_catalyst_personal_research_v1";
+  assert.deepEqual(parseResearchRun(personalRun), personalRun);
+});
+
 test("TypeScript normalizes request identity and cutoff to canonical wire values", () => {
   const requestFixture = loadFixture("request.json") as Record<string, unknown>;
   const request = parseResearchQuestionRequest({

@@ -37,10 +37,16 @@
       "$ref": "#/$defs/uuid"
     },
     "question_type_version": {
-      "const": "biotech_moonshot_catalyst_assessment.v1"
+      "enum": [
+        "biotech_moonshot_catalyst_assessment.v1",
+        "biotech_moonshot_catalyst_personal_research_assessment.v1"
+      ]
     },
     "workflow_config_version": {
-      "const": "biotech-moonshot-catalyst-v1"
+      "enum": [
+        "biotech-moonshot-catalyst-v1",
+        "biotech-moonshot-catalyst-personal-research-v1"
+      ]
     },
     "as_of_cutoff": {
       "$ref": "#/$defs/timestamp"
@@ -126,7 +132,33 @@
       "pattern": "^[a-z][a-z0-9_]{0,127}$"
     }
   },
-  "oneOf": [
+  "allOf": [
+    {
+      "oneOf": [
+        {
+          "properties": {
+            "question_type_version": {
+              "const": "biotech_moonshot_catalyst_assessment.v1"
+            },
+            "workflow_config_version": {
+              "const": "biotech-moonshot-catalyst-v1"
+            }
+          }
+        },
+        {
+          "properties": {
+            "question_type_version": {
+              "const": "biotech_moonshot_catalyst_personal_research_assessment.v1"
+            },
+            "workflow_config_version": {
+              "const": "biotech-moonshot-catalyst-personal-research-v1"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "oneOf": [
     {
       "properties": {
         "state": {
@@ -177,13 +209,47 @@
           "const": "blocked"
         },
         "blocking_reason_codes": {
-          "minItems": 1
+          "oneOf": [
+            {
+              "minItems": 5,
+              "maxItems": 5,
+              "prefixItems": [
+                { "const": "generic_primary_source_pipeline_unavailable" },
+                { "const": "persistent_committee_worker_unavailable" },
+                { "const": "model_execution_inactive" },
+                { "const": "licensed_valuation_unavailable" },
+                { "const": "hosted_isolation_unverified" }
+              ],
+              "items": false
+            },
+            {
+              "minItems": 5,
+              "maxItems": 5,
+              "prefixItems": [
+                { "const": "generic_primary_source_pipeline_unavailable" },
+                { "const": "persistent_committee_worker_unavailable" },
+                { "const": "model_execution_inactive" },
+                {
+                  "const": "personal_research_valuation_pipeline_unavailable"
+                },
+                { "const": "hosted_isolation_unverified" }
+              ],
+              "items": false
+            }
+          ]
         },
         "error_code": {
           "type": "null"
         },
         "research_run_id": {
-          "type": "null"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/uuid"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "started_at": {
           "type": "null"
@@ -207,6 +273,9 @@
         "research_run_id": {
           "type": "null"
         },
+        "started_at": {
+          "$ref": "#/$defs/timestamp"
+        },
         "finished_at": {
           "$ref": "#/$defs/timestamp"
         }
@@ -226,10 +295,15 @@
         "research_run_id": {
           "$ref": "#/$defs/uuid"
         },
+        "started_at": {
+          "$ref": "#/$defs/timestamp"
+        },
         "finished_at": {
           "$ref": "#/$defs/timestamp"
         }
       }
+    }
+      ]
     }
   ]
 }

@@ -20,19 +20,41 @@ type ResearchRunCommandRpcClient = {
   ): PromiseLike<{ data: unknown; error: { message: string } | null }>;
 };
 
+export type ResearchContractSelection =
+  | "personal_research"
+  | "licensed_official";
+
+const RESEARCH_CONTRACTS = {
+  personal_research: {
+    question_type:
+      "biotech_moonshot_catalyst_personal_research_assessment",
+    workflow_config_version:
+      "biotech-moonshot-catalyst-personal-research-v1",
+  },
+  licensed_official: {
+    question_type: "biotech_moonshot_catalyst_assessment",
+    workflow_config_version: "biotech-moonshot-catalyst-v1",
+  },
+} as const;
+
 export function buildResearchRunRequestFromFormFields(fields: {
   securityId: string;
   asOfCutoff: string;
   operatorFocus: string;
+  researchContract: ResearchContractSelection;
 }): ResearchQuestionRequest {
   if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(fields.asOfCutoff)) {
     throw new TypeError("invalid UTC cutoff input");
   }
+  const contract = RESEARCH_CONTRACTS[fields.researchContract];
+  if (!contract) {
+    throw new TypeError("invalid research contract selection");
+  }
   return {
-    question_type: "biotech_moonshot_catalyst_assessment",
+    question_type: contract.question_type,
     security_id: fields.securityId,
     as_of_cutoff: `${fields.asOfCutoff}:00Z`,
-    workflow_config_version: "biotech-moonshot-catalyst-v1",
+    workflow_config_version: contract.workflow_config_version,
     operator_focus: fields.operatorFocus,
   };
 }
@@ -62,6 +84,8 @@ export async function enqueueResearchRunCommand(
       p_security_id: normalized.security_id,
       p_as_of_cutoff: normalized.as_of_cutoff,
       p_operator_focus: normalized.operator_focus_normalized,
+      p_question_type_version: normalized.question_type_version,
+      p_workflow_config_version: normalized.workflow_config_version,
     },
   );
   if (error) {

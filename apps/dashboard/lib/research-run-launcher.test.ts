@@ -65,6 +65,9 @@ test("authenticated operator creates one blocked Research Run command", async ()
         p_security_id: securityId,
         p_as_of_cutoff: "2026-07-23T05:00:00+00:00",
         p_operator_focus: "Focus on financing through Phase 2 data.",
+        p_question_type_version:
+          "biotech_moonshot_catalyst_assessment.v1",
+        p_workflow_config_version: "biotech-moonshot-catalyst-v1",
       },
     ],
   ]);
@@ -193,12 +196,13 @@ test("enqueue does not expose hosted error detail", async () => {
   );
 });
 
-test("form fields become a UTC fixed-contract request without locale parsing", () => {
+test("form fields select an exact strict or personal Research Run contract", () => {
   assert.deepEqual(
     buildResearchRunRequestFromFormFields({
       securityId,
       asOfCutoff: "2026-07-23T13:45",
       operatorFocus: "  Focus on runway.  ",
+      researchContract: "licensed_official",
     }),
     {
       question_type: "biotech_moonshot_catalyst_assessment",
@@ -208,13 +212,41 @@ test("form fields become a UTC fixed-contract request without locale parsing", (
       operator_focus: "  Focus on runway.  ",
     },
   );
+  assert.deepEqual(
+    buildResearchRunRequestFromFormFields({
+      securityId,
+      asOfCutoff: "2026-07-23T13:45",
+      operatorFocus: "Focus on runway.",
+      researchContract: "personal_research",
+    }),
+    {
+      question_type:
+        "biotech_moonshot_catalyst_personal_research_assessment",
+      security_id: securityId,
+      as_of_cutoff: "2026-07-23T13:45:00Z",
+      workflow_config_version:
+        "biotech-moonshot-catalyst-personal-research-v1",
+      operator_focus: "Focus on runway.",
+    },
+  );
   assert.throws(
     () =>
       buildResearchRunRequestFromFormFields({
         securityId,
         asOfCutoff: "2026-07-23T13:45+08:00",
         operatorFocus: "",
+        researchContract: "licensed_official",
       }),
     /invalid UTC cutoff input/,
+  );
+  assert.throws(
+    () =>
+      buildResearchRunRequestFromFormFields({
+        securityId,
+        asOfCutoff: "2026-07-23T13:45",
+        operatorFocus: "",
+        researchContract: "unsupported" as "personal_research",
+      }),
+    /invalid research contract selection/,
   );
 });

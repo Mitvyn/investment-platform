@@ -5,6 +5,13 @@ import {
   type RiskDilutionDomainPayload,
   type ValuationDomainPayload,
 } from "./committee.ts";
+import {
+  RESEARCH_CONTRACTS,
+  type ResearchQuestionType,
+  type ResearchQuestionTypeVersion,
+  type ResearchWorkflowConfigVersion,
+  type ThesisContractId,
+} from "./research-run.ts";
 
 export type GraderExecutionState =
   | "not_executed"
@@ -237,10 +244,10 @@ type GraderExecutionBase = {
   evidence_bundle_id: string;
   evidence_bundle_hash: string;
   execution_key: string;
-  question_type_id: "biotech_moonshot_catalyst_assessment";
-  question_type_version: string;
-  workflow_config_version: string;
-  thesis_contract_id: string;
+  question_type_id: ResearchQuestionType;
+  question_type_version: ResearchQuestionTypeVersion;
+  workflow_config_version: ResearchWorkflowConfigVersion;
+  thesis_contract_id: ThesisContractId;
   grader_version: string;
   grader_contract_version: string;
   eligibility_rule_version: string;
@@ -425,6 +432,21 @@ function string(value: unknown, label: string) {
 
 function oneOf(value: unknown, options: readonly string[], label: string) {
   if (typeof value !== "string" || !options.includes(value)) throw new TypeError(`invalid ${label}`);
+}
+
+function assertResearchContractIdentity(
+  execution: Record<string, unknown>,
+) {
+  const matches = Object.values(RESEARCH_CONTRACTS).filter(
+    (contract) =>
+      execution.question_type_id === contract.question_type &&
+      execution.question_type_version === contract.question_type_version &&
+      execution.workflow_config_version === contract.workflow_config_version &&
+      execution.thesis_contract_id === contract.thesis_contract_id,
+  );
+  if (matches.length !== 1) {
+    throw new TypeError("invalid research contract identity");
+  }
 }
 
 function nullableString(value: unknown, label: string) {
@@ -676,18 +698,16 @@ export function parseGraderExecution(
   ["id", "operator_id", "research_run_id", "evidence_bundle_id"].forEach((key) => uuid(execution[key], key));
   hash(execution.evidence_bundle_hash, "evidence_bundle_hash");
   hash(execution.execution_key, "execution_key");
-  oneOf(execution.question_type_id, ["biotech_moonshot_catalyst_assessment"], "question_type_id");
   [
-    "question_type_version", "workflow_config_version", "thesis_contract_id",
+    "question_type_id", "question_type_version", "workflow_config_version",
+    "thesis_contract_id",
     "grader_version", "grader_contract_version", "eligibility_rule_version",
     "rubric_version", "output_schema_version", "abstention_rules_version",
     "prompt_version", "model_config_id", "provider", "model",
     "retry_policy_version",
   ].forEach((key) => string(execution[key], key));
+  assertResearchContractIdentity(execution);
   const definition = graderDefinition(execution.grader_id);
-  if (execution.thesis_contract_id !== execution.question_type_id) {
-    throw new TypeError("invalid thesis contract identity");
-  }
   if (execution.output_schema_version !== definition.outputSchema) {
     throw new TypeError("invalid output schema identity");
   }

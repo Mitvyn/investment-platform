@@ -24,10 +24,30 @@
     "evidence_bundle_id": { "$ref": "#/$defs/uuid" },
     "evidence_bundle_hash": { "$ref": "#/$defs/sha256" },
     "execution_key": { "$ref": "#/$defs/sha256" },
-    "question_type_id": { "const": "biotech_moonshot_catalyst_assessment" },
-    "question_type_version": { "$ref": "#/$defs/non_empty_string" },
-    "workflow_config_version": { "$ref": "#/$defs/non_empty_string" },
-    "thesis_contract_id": { "const": "biotech_moonshot_catalyst_assessment" },
+    "question_type_id": {
+      "enum": [
+        "biotech_moonshot_catalyst_assessment",
+        "biotech_moonshot_catalyst_personal_research_assessment"
+      ]
+    },
+    "question_type_version": {
+      "enum": [
+        "biotech_moonshot_catalyst_assessment.v1",
+        "biotech_moonshot_catalyst_personal_research_assessment.v1"
+      ]
+    },
+    "workflow_config_version": {
+      "enum": [
+        "biotech-moonshot-catalyst-v1",
+        "biotech-moonshot-catalyst-personal-research-v1"
+      ]
+    },
+    "thesis_contract_id": {
+      "enum": [
+        "biotech_moonshot_catalyst_assessment",
+        "biotech_moonshot_catalyst_personal_research_v1"
+      ]
+    },
     "grader_id": {
       "enum": ["moonshot", "catalyst", "biotech", "risk_dilution", "valuation"]
     },
@@ -74,15 +94,37 @@
     "started_at": { "$ref": "#/$defs/timestamp" },
     "finished_at": { "$ref": "#/$defs/timestamp" }
   },
-  "allOf": [{
-    "oneOf": [
-      { "properties": { "grader_id": { "const": "moonshot" }, "output_schema_version": { "const": "moonshot_grader_payload.v1" } } },
-      { "properties": { "grader_id": { "const": "catalyst" }, "output_schema_version": { "const": "catalyst_grader_payload.v1" } } },
-      { "properties": { "grader_id": { "const": "biotech" }, "output_schema_version": { "const": "biotech_grader_payload.v1" } } },
-      { "properties": { "grader_id": { "const": "risk_dilution" }, "output_schema_version": { "const": "risk_dilution_grader_payload.v1" } } },
-      { "properties": { "grader_id": { "const": "valuation" }, "output_schema_version": { "const": "valuation_grader_payload.v1" } } }
-    ]
-  }],
+  "allOf": [
+    {
+      "oneOf": [
+        {
+          "properties": {
+            "question_type_id": { "const": "biotech_moonshot_catalyst_assessment" },
+            "question_type_version": { "const": "biotech_moonshot_catalyst_assessment.v1" },
+            "workflow_config_version": { "const": "biotech-moonshot-catalyst-v1" },
+            "thesis_contract_id": { "const": "biotech_moonshot_catalyst_assessment" }
+          }
+        },
+        {
+          "properties": {
+            "question_type_id": { "const": "biotech_moonshot_catalyst_personal_research_assessment" },
+            "question_type_version": { "const": "biotech_moonshot_catalyst_personal_research_assessment.v1" },
+            "workflow_config_version": { "const": "biotech-moonshot-catalyst-personal-research-v1" },
+            "thesis_contract_id": { "const": "biotech_moonshot_catalyst_personal_research_v1" }
+          }
+        }
+      ]
+    },
+    {
+      "oneOf": [
+        { "properties": { "grader_id": { "const": "moonshot" }, "output_schema_version": { "const": "moonshot_grader_payload.v1" } } },
+        { "properties": { "grader_id": { "const": "catalyst" }, "output_schema_version": { "const": "catalyst_grader_payload.v1" } } },
+        { "properties": { "grader_id": { "const": "biotech" }, "output_schema_version": { "const": "biotech_grader_payload.v1" } } },
+        { "properties": { "grader_id": { "const": "risk_dilution" }, "output_schema_version": { "const": "risk_dilution_grader_payload.v1" } } },
+        { "properties": { "grader_id": { "const": "valuation" }, "output_schema_version": { "const": "valuation_grader_payload.v1" } } }
+      ]
+    }
+  ],
   "$defs": {
     "uuid": {
       "type": "string",

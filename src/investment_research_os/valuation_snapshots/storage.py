@@ -20,6 +20,7 @@ from . import (
     MarketSession,
     MaterialityAssessment,
     PriceObservation,
+    ValuationAssurance,
     ValuationSnapshot,
     ValuationSourceReference,
 )
@@ -47,9 +48,7 @@ class SupabaseValuationSnapshotRepository:
         self._finalize(snapshot)
         persisted = self.get_for_run(snapshot.operator_id, snapshot.research_run_id)
         if persisted is None:
-            raise EvidenceStorageError(
-                "persisted valuation snapshot is unavailable"
-            )
+            raise EvidenceStorageError("persisted valuation snapshot is unavailable")
         return self._require_exact_match(persisted, snapshot)
 
     def get(
@@ -137,8 +136,7 @@ class SupabaseValuationSnapshotRepository:
         )
         if response.status not in (200, 201, 204):
             raise EvidenceStorageError(
-                "valuation snapshot store returned "
-                f"HTTP {response.status} for {table}"
+                f"valuation snapshot store returned HTTP {response.status} for {table}"
             )
 
     def _finalize(self, snapshot: ValuationSnapshot) -> None:
@@ -215,7 +213,18 @@ class SupabaseValuationSnapshotRepository:
                     ),
                     "share_price": price.get("share_price") if price else None,
                     "official_close_timestamp": (
-                        price.get("official_close_timestamp") if price else None
+                        (
+                            price.get("official_close_timestamp")
+                            or price.get("price_timestamp")
+                        )
+                        if price
+                        else None
+                    ),
+                    "price_timestamp": (
+                        price.get("price_timestamp") if price else None
+                    ),
+                    "halt_verification_status": (
+                        price.get("halt_verification_status") if price else None
                     ),
                     "market_calendar_version": (
                         price.get("market_calendar_version") if price else None
@@ -227,27 +236,19 @@ class SupabaseValuationSnapshotRepository:
                     "provider_source_reference_id": (
                         price.get("provider_source_reference_id") if price else None
                     ),
-                    "basic_shares_outstanding": (
-                        basic.get("value") if basic else None
-                    ),
-                    "fully_diluted_shares": (
-                        diluted.get("value") if diluted else None
-                    ),
+                    "basic_shares_outstanding": (basic.get("value") if basic else None),
+                    "fully_diluted_shares": (diluted.get("value") if diluted else None),
                     "cash": cash.get("value") if cash else None,
                     "debt": debt.get("value") if debt else None,
                     "market_capitalization": (
                         market_cap.get("value") if market_cap else None
                     ),
                     "enterprise_value": (
-                        enterprise_value.get("value")
-                        if enterprise_value
-                        else None
+                        enterprise_value.get("value") if enterprise_value else None
                     ),
                     "corporate_action_event_id": corporate_action["event_id"],
                     "corporate_action_event_type": corporate_action["event_type"],
-                    "corporate_action_effective_at": corporate_action[
-                        "effective_at"
-                    ],
+                    "corporate_action_effective_at": corporate_action["effective_at"],
                     "share_count_adjustment_status": corporate_action[
                         "share_count_adjustment_status"
                     ],
@@ -260,6 +261,8 @@ class SupabaseValuationSnapshotRepository:
                         snapshot.market_relative_analysis_permitted
                     ),
                     "price_basis_policy_version": snapshot.valuation_policy_version,
+                    "valuation_contract_version": snapshot.contract_version,
+                    "valuation_assurance": wire.get("valuation_assurance"),
                     "freshness_policy_version": snapshot.freshness_policy_version,
                     "materiality_policy_version": snapshot.materiality_policy_version,
                     "canonical_snapshot": wire,
@@ -434,9 +437,7 @@ def _calculation_record(
             "formula": calculation["formula"],
             "formula_version": calculation["formula_version"],
             "input_ids": calculation["input_ids"],
-            "supporting_evidence_ids": calculation[
-                "supporting_evidence_ids"
-            ],
+            "supporting_evidence_ids": calculation["supporting_evidence_ids"],
             "canonical_payload": calculation,
             "created_at": snapshot.created_at.isoformat(),
         },
@@ -463,12 +464,8 @@ def _materiality_record(
             "publication_at": assessment["publication_at"],
             "timing_state": assessment["timing_state"],
             "market_materiality": assessment["market_materiality"],
-            "materiality_reason_code": assessment[
-                "materiality_reason_code"
-            ],
-            "materiality_policy_version": assessment[
-                "materiality_policy_version"
-            ],
+            "materiality_reason_code": assessment["materiality_reason_code"],
+            "materiality_policy_version": assessment["materiality_policy_version"],
             "affected_domains": assessment["affected_domains"],
             "canonical_payload": assessment,
             "created_at": snapshot.created_at.isoformat(),
@@ -488,36 +485,57 @@ def _timestamp(value: str | None) -> datetime | None:
 def _capital_from_wire(payload: Mapping[str, Any]) -> CapitalStructureInput:
     basic = _mapping(payload["basic_shares_outstanding"])
     diluted = _mapping(payload["fully_diluted_shares"])
-    cash = _mapping(payload["cash"])
+    included_cash = _mapping(payload["cash"])
     debt = _mapping(payload["debt"])
-    effective_at = _timestamp(str(basic["effective_at"]))
-    if effective_at is None:
-        raise ValueError("capital effective timestamp required")
+    cash_treatment = _mapping(payload["cash_treatment"])
+    reported_cash = _mapping(cash_treatment["reported_cash"])
+    restricted_cash = _mapping(cash_treatment["restricted_cash"])
+    other_claims = _mapping(payload["other_included_claims"])
     return CapitalStructureInput(
         basic_shares_outstanding=str(basic["value"]),
         fully_diluted_shares=str(diluted["value"]),
-        cash=str(cash["value"]),
+        cash=str(reported_cash["value"]),
+        restricted_cash=str(restricted_cash["value"]),
+        restricted_cash_treatment=str(cash_treatment["restricted_cash_treatment"]),
         debt=str(debt["value"]),
-        other_included_claims="0",
-        included_cash=str(cash["value"]),
+        other_included_claims=str(other_claims["value"]),
+        included_cash=str(included_cash["value"]),
         currency=str(payload["currency"]),
-        effective_date=effective_at.date(),
+        basic_shares_effective_at=_required_timestamp(basic["effective_at"]),
+        fully_diluted_shares_effective_at=_required_timestamp(diluted["effective_at"]),
+        cash_effective_at=_required_timestamp(reported_cash["effective_at"]),
+        restricted_cash_effective_at=_required_timestamp(
+            restricted_cash["effective_at"]
+        ),
+        included_cash_effective_at=_required_timestamp(included_cash["effective_at"]),
+        debt_effective_at=_required_timestamp(debt["effective_at"]),
+        other_included_claims_effective_at=_required_timestamp(
+            other_claims["effective_at"]
+        ),
         basic_shares_evidence_ids=tuple(basic["supporting_evidence_ids"]),
         diluted_shares_evidence_ids=tuple(diluted["supporting_evidence_ids"]),
-        cash_evidence_ids=tuple(cash["supporting_evidence_ids"]),
+        cash_evidence_ids=tuple(reported_cash["supporting_evidence_ids"]),
+        restricted_cash_evidence_ids=tuple(restricted_cash["supporting_evidence_ids"]),
         debt_evidence_ids=tuple(debt["supporting_evidence_ids"]),
+        other_included_claims_evidence_ids=tuple(
+            other_claims["supporting_evidence_ids"]
+        ),
         basic_shares_freshness_state=str(basic["freshness_state"]),
-        basic_shares_freshness_reason_code=str(
-            basic["freshness_reason_code"]
-        ),
+        basic_shares_freshness_reason_code=str(basic["freshness_reason_code"]),
         diluted_shares_freshness_state=str(diluted["freshness_state"]),
-        diluted_shares_freshness_reason_code=str(
-            diluted["freshness_reason_code"]
+        diluted_shares_freshness_reason_code=str(diluted["freshness_reason_code"]),
+        cash_freshness_state=str(reported_cash["freshness_state"]),
+        cash_freshness_reason_code=str(reported_cash["freshness_reason_code"]),
+        restricted_cash_freshness_state=str(restricted_cash["freshness_state"]),
+        restricted_cash_freshness_reason_code=str(
+            restricted_cash["freshness_reason_code"]
         ),
-        cash_freshness_state=str(cash["freshness_state"]),
-        cash_freshness_reason_code=str(cash["freshness_reason_code"]),
         debt_freshness_state=str(debt["freshness_state"]),
         debt_freshness_reason_code=str(debt["freshness_reason_code"]),
+        other_included_claims_freshness_state=str(other_claims["freshness_state"]),
+        other_included_claims_freshness_reason_code=str(
+            other_claims["freshness_reason_code"]
+        ),
         freshness_policy_version=str(basic["freshness_policy_version"]),
         dilution_instruments=tuple(
             DilutionInstrument(
@@ -556,8 +574,33 @@ def _required_timestamp(value: object) -> datetime:
 
 
 def _snapshot_from_wire(payload: Mapping[str, Any]) -> ValuationSnapshot:
-    if payload["contract_version"] != "valuation_snapshot.v1":
+    contract_version = str(payload["contract_version"])
+    if contract_version not in {
+        "valuation_snapshot.v1",
+        "valuation_snapshot.personal_research.v1",
+    }:
         raise ValueError("unsupported valuation snapshot contract")
+    personal_research = contract_version == "valuation_snapshot.personal_research.v1"
+    assurance = None
+    if personal_research:
+        raw_assurance = _mapping(payload["valuation_assurance"])
+        assurance = ValuationAssurance(
+            level=str(raw_assurance["level"]),
+            usage_scope=str(raw_assurance["usage_scope"]),
+            rights_assurance=str(raw_assurance["rights_assurance"]),
+            limitation_codes=tuple(raw_assurance["limitation_codes"]),
+        )
+        if (
+            assurance.level != "personal_research"
+            or assurance.usage_scope != "private_personal_research"
+            or assurance.rights_assurance != "not_independently_verified"
+            or not {
+                "not_primary_venue_official_close",
+                "not_institutional_grade",
+                "not_for_trade_execution",
+            }.issubset(assurance.limitation_codes)
+        ):
+            raise ValueError("invalid personal valuation assurance")
     price_basis = _optional_mapping(payload["price_basis"])
     source_references = tuple(
         ValuationSourceReference(
@@ -568,6 +611,25 @@ def _snapshot_from_wire(payload: Mapping[str, Any]) -> ValuationSnapshot:
             published_at=_timestamp(item["published_at"]),
             retrieved_at=_required_timestamp(item["retrieved_at"]),
             effective_at=_timestamp(item["effective_at"]),
+            provider_plan_id=(
+                str(item["provider_plan_id"])
+                if item.get("provider_plan_id") is not None
+                else None
+            ),
+            response_sha256=(
+                str(item["response_sha256"])
+                if item.get("response_sha256") is not None
+                else None
+            ),
+            provider_contract_status=(
+                str(item["provider_contract_status"])
+                if item.get("provider_contract_status") is not None
+                else None
+            ),
+            provider_limitation_codes=tuple(
+                str(code)
+                for code in item.get("provider_limitation_codes", ())
+            ),
         )
         for raw in _sequence(payload["source_references"])
         for item in (_mapping(raw),)
@@ -577,22 +639,22 @@ def _snapshot_from_wire(payload: Mapping[str, Any]) -> ValuationSnapshot:
     }
     price = None
     if price_basis is not None:
-        provider_reference_id = str(
-            price_basis["provider_source_reference_id"]
-        )
+        provider_reference_id = str(price_basis["provider_source_reference_id"])
         if provider_reference_id not in provider_by_reference:
             raise ValueError("price provider source reference is unresolved")
         price = PriceObservation(
             price_type=str(price_basis["price_type"]),
             session_type=str(price_basis["session_type"]),
             session_date=date.fromisoformat(str(price_basis["session_date"])),
-            primary_listing_exchange=str(
-                price_basis["primary_listing_exchange"]
-            ),
+            primary_listing_exchange=str(price_basis["primary_listing_exchange"]),
             price=str(price_basis["share_price"]),
             currency=str(payload["currency"]),
             official_close_timestamp=_required_timestamp(
-                price_basis["official_close_timestamp"]
+                price_basis[
+                    "price_timestamp"
+                    if personal_research
+                    else "official_close_timestamp"
+                ]
             ),
             market_status=str(price_basis["market_status"]),
             corporate_action_adjustment_status=str(
@@ -600,6 +662,9 @@ def _snapshot_from_wire(payload: Mapping[str, Any]) -> ValuationSnapshot:
             ),
             provider=provider_by_reference[provider_reference_id],
             source_reference=provider_reference_id,
+            halt_verification_status=str(
+                price_basis.get("halt_verification_status", "verified_not_halted")
+            ),
         )
     cutoff = _required_timestamp(payload["as_of_cutoff"])
     close = price.official_close_timestamp if price is not None else cutoff
@@ -633,9 +698,7 @@ def _snapshot_from_wire(payload: Mapping[str, Any]) -> ValuationSnapshot:
         price=price,
         session=session,
         capital=_capital_from_wire(payload),
-        market_capitalization=_derived_from_wire(
-            payload["market_capitalization"]
-        ),
+        market_capitalization=_derived_from_wire(payload["market_capitalization"]),
         enterprise_value=_derived_from_wire(payload["enterprise_value"]),
         calculation_ids=tuple(payload["calculation_ids"]),
         corporate_action=CorporateActionReconciliation(
@@ -672,6 +735,8 @@ def _snapshot_from_wire(payload: Mapping[str, Any]) -> ValuationSnapshot:
         freshness_policy_version=str(payload["freshness_policy_version"]),
         materiality_policy_version=str(payload["materiality_policy_version"]),
         created_at=_required_timestamp(payload["created_at"]),
+        contract_version=contract_version,
+        valuation_assurance=assurance,
     )
 
 

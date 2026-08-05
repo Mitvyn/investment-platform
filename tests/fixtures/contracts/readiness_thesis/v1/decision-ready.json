@@ -20,7 +20,7 @@
   "requested_disposition": "decision_ready",
   "final_disposition": "decision_ready",
   "readiness_status": "passed",
-  "gate_policy_version": "biotech_decision_readiness.v1",
+  "gate_policy_version": "biotech-readiness.v1",
   "passed_checks": [
     {"check_id":"committee_status_complete","check_version":"committee_status_complete.v1","reason_code":"passed","explanation":"Committee status is complete.","reference_ids":["32000000-0000-4000-8000-000000000001"]},
     {"check_id":"all_eligible_graders_accepted","check_version":"all_eligible_graders_accepted.v1","reason_code":"passed","explanation":"Every eligible grader produced an accepted opinion.","reference_ids":["20000000-0000-4000-8000-000000000001","20000000-0000-4000-8000-000000000002","20000000-0000-4000-8000-000000000003","20000000-0000-4000-8000-000000000004","20000000-0000-4000-8000-000000000005"]},

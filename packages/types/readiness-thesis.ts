@@ -1,5 +1,38 @@
 import type { ResearchDisposition } from "./committee-memo.ts";
 import type { CommitteeStatus } from "./committee.ts";
+import type {
+  ResearchQuestionTypeVersion,
+  ThesisContractId,
+} from "./research-run.ts";
+
+const THESIS_CONTRACTS = Object.freeze({
+  biotech_moonshot_catalyst_assessment: {
+    questionTypeVersion: "biotech_moonshot_catalyst_assessment.v1",
+    workflowConfigVersion: "biotech-moonshot-catalyst-v1",
+    gatePolicyVersion: "biotech-readiness.v1",
+  },
+  biotech_moonshot_catalyst_personal_research_v1: {
+    questionTypeVersion:
+      "biotech_moonshot_catalyst_personal_research_assessment.v1",
+    workflowConfigVersion:
+      "biotech-moonshot-catalyst-personal-research-v1",
+    gatePolicyVersion: "biotech-personal-readiness.v1",
+  },
+} as const satisfies Record<
+  ThesisContractId,
+  {
+    questionTypeVersion: ResearchQuestionTypeVersion;
+    workflowConfigVersion: string;
+    gatePolicyVersion: string;
+  }
+>);
+
+function thesisContract(value: unknown) {
+  if (typeof value !== "string" || !(value in THESIS_CONTRACTS)) {
+    throw new TypeError("invalid thesis contract identity");
+  }
+  return THESIS_CONTRACTS[value as ThesisContractId];
+}
 
 export const READINESS_CHECK_IDS = Object.freeze([
   "committee_status_complete",
@@ -43,7 +76,7 @@ export type ReadinessGateResult = {
   readiness_gate_result_id: string;
   operator_id: string;
   security_id: string;
-  thesis_contract_id: "biotech_moonshot_catalyst_assessment";
+  thesis_contract_id: ThesisContractId;
   research_run_id: string;
   evidence_bundle_id: string;
   evidence_bundle_hash: string;
@@ -93,13 +126,13 @@ export type ThesisVersion = {
   thesis_status: ThesisStatus;
   operator_id: string;
   security_id: string;
-  thesis_contract_id: "biotech_moonshot_catalyst_assessment";
+  thesis_contract_id: ThesisContractId;
   previous_canonical_thesis_version_id: string | null;
   based_on_thesis_version_id: string | null;
   research_run_id: string;
   evidence_bundle_id: string;
   evidence_bundle_hash: string;
-  question_type_version: "biotech_moonshot_catalyst_assessment.v1";
+  question_type_version: ResearchQuestionTypeVersion;
   workflow_config_version: string;
   proposition_id: string;
   proposition_version: string;
@@ -137,7 +170,7 @@ export type ThesisCreationResult = {
   thesis_creation_result_id: string;
   operator_id: string;
   security_id: string;
-  thesis_contract_id: "biotech_moonshot_catalyst_assessment";
+  thesis_contract_id: ThesisContractId;
   research_run_id: string;
   committee_result_id: string;
   readiness_gate_result_id: string;
@@ -157,7 +190,7 @@ export type ThesisChain = {
   contract_version: "thesis_chain.v1";
   operator_id: string;
   security_id: string;
-  thesis_contract_id: "biotech_moonshot_catalyst_assessment";
+  thesis_contract_id: ThesisContractId;
   active_canonical_thesis_version_id: string | null;
   canonical_versions: ThesisVersion[];
   provisional_branches: ThesisVersion[];
@@ -378,8 +411,8 @@ export function parseReadinessGateResult(
   uuid(result.evidence_bundle_id, "evidence bundle id");
   uuid(result.committee_result_id, "committee result id");
   uuid(result.committee_memo_id, "committee memo id");
+  const contract = thesisContract(result.thesis_contract_id);
   if (
-    result.thesis_contract_id !== "biotech_moonshot_catalyst_assessment" ||
     typeof result.evidence_bundle_hash !== "string" ||
     !/^[0-9a-f]{64}$/.test(result.evidence_bundle_hash) ||
     !COMMITTEE_STATUSES.includes(result.committee_status as CommitteeStatus) ||
@@ -389,7 +422,9 @@ export function parseReadinessGateResult(
   ) {
     throw new TypeError("invalid readiness state");
   }
-  nonEmptyString(result.gate_policy_version, "gate policy version");
+  if (result.gate_policy_version !== contract.gatePolicyVersion) {
+    throw new TypeError("readiness gate policy identity mismatch");
+  }
   timestamp(result.evaluated_at, "readiness evaluated_at");
   const opinions = stringArray(
     result.validated_grader_opinion_ids,
@@ -537,9 +572,11 @@ export function parseThesisVersion(
   ] as const) {
     uuid(thesis[key], `thesis ${key}`);
   }
+  const contract = thesisContract(thesis.thesis_contract_id);
   if (
-    thesis.thesis_contract_id !== "biotech_moonshot_catalyst_assessment" ||
-    thesis.question_type_version !== "biotech_moonshot_catalyst_assessment.v1" ||
+    thesis.question_type_version !== contract.questionTypeVersion ||
+    thesis.workflow_config_version !== contract.workflowConfigVersion ||
+    thesis.readiness_gate_policy_version !== contract.gatePolicyVersion ||
     typeof thesis.evidence_bundle_hash !== "string" ||
     !/^[0-9a-f]{64}$/.test(thesis.evidence_bundle_hash) ||
     !["canonical", "provisional"].includes(thesis.thesis_status as string)
@@ -714,9 +751,9 @@ function parsePublicThesisVersion(
   ] as const) {
     uuid(thesis[key], `public thesis ${key}`);
   }
+  const contract = thesisContract(thesis.thesis_contract_id);
   if (
-    thesis.thesis_contract_id !== "biotech_moonshot_catalyst_assessment" ||
-    thesis.question_type_version !== "biotech_moonshot_catalyst_assessment.v1" ||
+    thesis.question_type_version !== contract.questionTypeVersion ||
     typeof thesis.evidence_bundle_hash !== "string" ||
     !/^[0-9a-f]{64}$/.test(thesis.evidence_bundle_hash) ||
     !DISPOSITIONS.includes(thesis.requested_disposition as ResearchDisposition) ||
@@ -792,9 +829,7 @@ export function parseThesisChain(
   }
   uuid(chain.operator_id, "thesis chain operator id");
   uuid(chain.security_id, "thesis chain security id");
-  if (chain.thesis_contract_id !== "biotech_moonshot_catalyst_assessment") {
-    throw new TypeError("invalid thesis chain contract identity");
-  }
+  thesisContract(chain.thesis_contract_id);
   timestamp(chain.generated_at, "thesis chain generated_at");
   if (!Array.isArray(chain.canonical_versions) || !Array.isArray(chain.provisional_branches)) {
     throw new TypeError("invalid thesis chain versions");

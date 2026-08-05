@@ -89,7 +89,7 @@ const readiness = parseReadinessGateResult(readinessRaw, {
 const thesis = parseThesisVersion(thesisRaw, {
   readinessResult: readiness,
   questionTypeVersion: "biotech_moonshot_catalyst_assessment.v1",
-  workflowConfigVersion: "biotech_moonshot_catalyst_workflow.v1",
+  workflowConfigVersion: "biotech-moonshot-catalyst-v1",
   propositionId: "biotech_moonshot_catalyst_case",
   propositionVersion: "biotech_moonshot_catalyst_case.v1",
   memoStatementIds: [
@@ -103,10 +103,122 @@ const thesis = parseThesisVersion(thesisRaw, {
 
 const upstream = { thesisVersion: thesis, readinessResult: readiness };
 
+const personalReadiness = parseReadinessGateResult(
+  {
+    ...readinessRaw,
+    thesis_contract_id: "biotech_moonshot_catalyst_personal_research_v1",
+    gate_policy_version: "biotech-personal-readiness.v1",
+  },
+  {
+    operatorId: readiness.operator_id,
+    securityId: readiness.security_id,
+    thesisContractId: "biotech_moonshot_catalyst_personal_research_v1",
+    researchRunId: readiness.research_run_id,
+    evidenceBundleId: readiness.evidence_bundle_id,
+    evidenceBundleHash: readiness.evidence_bundle_hash,
+    validatedGraderOpinionIds: readiness.validated_grader_opinion_ids,
+    committeeResultId: readiness.committee_result_id,
+    committeeMemoId: readiness.committee_memo_id,
+    committeeStatus: readiness.committee_status,
+    requestedDisposition: readiness.requested_disposition,
+  },
+);
+
+const personalThesis = parseThesisVersion(
+  {
+    ...thesisRaw,
+    thesis_contract_id: "biotech_moonshot_catalyst_personal_research_v1",
+    question_type_version:
+      "biotech_moonshot_catalyst_personal_research_assessment.v1",
+    workflow_config_version:
+      "biotech-moonshot-catalyst-personal-research-v1",
+    readiness_gate_policy_version: "biotech-personal-readiness.v1",
+  },
+  {
+    readinessResult: personalReadiness,
+    questionTypeVersion:
+      "biotech_moonshot_catalyst_personal_research_assessment.v1",
+    workflowConfigVersion:
+      "biotech-moonshot-catalyst-personal-research-v1",
+    propositionId: "biotech_moonshot_catalyst_case",
+    propositionVersion: "biotech_moonshot_catalyst_case.v1",
+    memoStatementIds: [
+      "statement-common-ground",
+      "statement-invalidation",
+      "statement-gap",
+      "statement-review-trigger",
+    ],
+    memoDisagreementIds: ["disagreement-financing-asymmetry"],
+  },
+);
+
+const personalUpstream = {
+  thesisVersion: personalThesis,
+  readinessResult: personalReadiness,
+};
+
 test("accepts an immutable operator decision tied to exact thesis and readiness output", () => {
   assert.deepEqual(
     parseOperatorDecisionEvent(decisionReadyHandoff, upstream),
     decisionReadyHandoff,
+  );
+});
+
+test("accepts non-handoff actions for personal-research thesis history", () => {
+  const personalDecision = {
+    ...decisionReadyHandoff,
+    thesis_contract_id: "biotech_moonshot_catalyst_personal_research_v1",
+    operator_action: "no_action",
+    relationship: "defer",
+    rationale: "Reviewed within lower-assurance personal research boundary.",
+    idempotency_key: "personal-research:no-action",
+  };
+
+  assert.deepEqual(
+    parseOperatorDecisionEvent(personalDecision, personalUpstream),
+    personalDecision,
+  );
+});
+
+test("rejects portfolio-handoff action for personal-research thesis", () => {
+  assert.throws(
+    () =>
+      parseOperatorDecisionEvent(
+        {
+          ...decisionReadyHandoff,
+          thesis_contract_id:
+            "biotech_moonshot_catalyst_personal_research_v1",
+        },
+        personalUpstream,
+      ),
+    /personal research thesis cannot create portfolio handoff/,
+  );
+});
+
+test("accepts separate deep-research command for personal-research thesis", () => {
+  const decision = parseOperatorDecisionEvent(
+    {
+      ...decisionReadyHandoff,
+      operator_decision_id: "50000000-0000-4000-8000-000000000003",
+      thesis_contract_id:
+        "biotech_moonshot_catalyst_personal_research_v1",
+      operator_action: "request_deep_research",
+      relationship: "override",
+      rationale: "Collect stronger evidence before another personal run.",
+      idempotency_key: "personal-research:deep-research",
+      created_at: "2026-05-06T22:07:30Z",
+    },
+    personalUpstream,
+  );
+  const command = {
+    ...deepResearchCommand,
+    thesis_contract_id:
+      "biotech_moonshot_catalyst_personal_research_v1",
+  };
+
+  assert.deepEqual(
+    parseOperatorWorkflowCommand(command, { decision }),
+    command,
   );
 });
 
@@ -453,6 +565,19 @@ test("publishes strict operator-decision schemas and package-root exports", () =
     "operator_decision_event.v1",
   );
   assert.equal(schema.$defs.operator_decision_event.additionalProperties, false);
+  assert.deepEqual(schema.$defs.thesis_contract_id.enum, [
+    "biotech_moonshot_catalyst_assessment",
+    "biotech_moonshot_catalyst_personal_research_v1",
+  ]);
+  assert.equal(
+    schema.$defs.portfolio_review_handoff_marker.properties.thesis_contract_id
+      .$ref,
+    "#/$defs/strict_thesis_contract_id",
+  );
+  assert.match(
+    JSON.stringify(schema.$defs.operator_decision_event.allOf),
+    /biotech_moonshot_catalyst_personal_research_v1.*mark_for_future_portfolio_review/,
+  );
   assert.equal(schema.$defs.operator_workflow_command.additionalProperties, false);
   assert.equal(
     schema.$defs.portfolio_review_handoff_marker.additionalProperties,

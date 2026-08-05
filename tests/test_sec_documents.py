@@ -100,7 +100,7 @@ class SecFilingDocumentCollectorTests(unittest.TestCase):
         self,
     ) -> None:
         annual = filing(
-            accession_number="0001601830-26-000030",
+            accession_number="0001193125-25-025185",
             form="10-K",
             filing_date=date(2026, 2, 20),
             report_date=date(2025, 12, 31),
@@ -139,7 +139,7 @@ class SecFilingDocumentCollectorTests(unittest.TestCase):
         self.assertEqual(
             [document.accession_number for document in snapshot.documents],
             [
-                "0001601830-26-000030",
+                "0001193125-25-025185",
                 "0001601830-26-000040",
             ],
         )

@@ -13,13 +13,18 @@ from investment_research_os.production_execution import (
 )
 
 
-AUTHORIZATION_MANIFEST_CONTRACT = "LiveExecutionAuthorizationManifest.v1"
+AUTHORIZATION_MANIFEST_CONTRACT = "LiveExecutionAuthorizationManifest.v2"
 LIVE_INTERACTIONS = (
     "hosted_database",
     "live_primary_sources",
     "licensed_market_data",
+    "personal_market_data",
     "model_provider",
 )
+STRICT_THESIS_CONTRACT_ID = "biotech_moonshot_catalyst_assessment"
+PERSONAL_RESEARCH_THESIS_CONTRACT_ID = "biotech_moonshot_catalyst_personal_research_v1"
+STRICT_VALUATION_CONTRACT_VERSION = "valuation_snapshot.v1"
+PERSONAL_RESEARCH_VALUATION_CONTRACT_VERSION = "valuation_snapshot.personal_research.v1"
 APPROVED_RUN_BUDGET_USD = Decimal("7.00")
 APPROVED_DAILY_BUDGET_USD = Decimal("14.00")
 APPROVED_MONTHLY_BUDGET_USD = Decimal("30.00")
@@ -194,6 +199,10 @@ class LiveMvpPreflightInputs:
     run_budget_remaining_usd: Decimal
     daily_budget_remaining_usd: Decimal
     monthly_budget_remaining_usd: Decimal
+    thesis_contract_id: str = STRICT_THESIS_CONTRACT_ID
+    valuation_contract_version: str = STRICT_VALUATION_CONTRACT_VERSION
+    personal_research_valuation_pipeline_verified: bool = False
+    nasdaq_trader_live_contract_verified: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -259,17 +268,24 @@ def evaluate_live_mvp_preflight(
         reasons.append("authorization_not_yet_valid")
     if inputs.checked_at >= manifest.expires_at:
         reasons.append("authorization_expired")
+    required_interactions = _required_interactions(inputs.thesis_contract_id)
     interaction_reasons = {
         "hosted_database": "database_interaction_not_authorized",
         "live_primary_sources": "primary_source_interaction_not_authorized",
         "licensed_market_data": "market_interaction_not_authorized",
+        "personal_market_data": "personal_market_interaction_not_authorized",
         "model_provider": "model_interaction_not_authorized",
     }
-    reasons.extend(
-        reason
-        for interaction, reason in interaction_reasons.items()
-        if interaction not in manifest.authorized_interactions
-    )
+    if required_interactions is None:
+        reasons.append("thesis_contract_unsupported")
+    else:
+        reasons.extend(
+            interaction_reasons[interaction]
+            for interaction in required_interactions
+            if interaction not in manifest.authorized_interactions
+        )
+        if manifest.authorized_interactions != required_interactions:
+            reasons.append("authorization_interactions_not_exact")
     if reasons:
         return LiveMvpPreflightDecision(
             allowed=False,
@@ -283,10 +299,23 @@ def evaluate_live_mvp_preflight(
         reasons.append("paid_evaluations_incomplete")
     if not inputs.sample_memo_approved:
         reasons.append("sample_memo_not_approved")
-    if not inputs.licensed_official_close_rights:
-        reasons.append("licensed_official_close_rights_missing")
-    if not inputs.licensed_authenticated_display_rights:
-        reasons.append("licensed_authenticated_display_rights_missing")
+    if inputs.thesis_contract_id == STRICT_THESIS_CONTRACT_ID:
+        if inputs.valuation_contract_version != STRICT_VALUATION_CONTRACT_VERSION:
+            reasons.append("strict_valuation_contract_mismatch")
+        if not inputs.licensed_official_close_rights:
+            reasons.append("licensed_official_close_rights_missing")
+        if not inputs.licensed_authenticated_display_rights:
+            reasons.append("licensed_authenticated_display_rights_missing")
+    elif inputs.thesis_contract_id == PERSONAL_RESEARCH_THESIS_CONTRACT_ID:
+        if (
+            inputs.valuation_contract_version
+            != PERSONAL_RESEARCH_VALUATION_CONTRACT_VERSION
+        ):
+            reasons.append("personal_research_valuation_contract_mismatch")
+        if not inputs.personal_research_valuation_pipeline_verified:
+            reasons.append("personal_research_valuation_pipeline_unverified")
+        if not inputs.nasdaq_trader_live_contract_verified:
+            reasons.append("nasdaq_trader_live_contract_unverified")
     if not inputs.hosted_isolation_verified:
         reasons.append("hosted_isolation_not_verified")
     if inputs.estimated_run_cost_usd <= 0:
@@ -327,9 +356,27 @@ def evaluate_live_mvp_preflight(
     return LiveMvpPreflightDecision(
         allowed=not reasons,
         blocking_reason_codes=tuple(reasons),
-        permitted_interactions=LIVE_INTERACTIONS if not reasons else (),
+        permitted_interactions=required_interactions if not reasons else (),
         authorization_manifest_sha256=manifest.content_sha256,
     )
+
+
+def _required_interactions(thesis_contract_id: str) -> tuple[str, ...] | None:
+    if thesis_contract_id == STRICT_THESIS_CONTRACT_ID:
+        return (
+            "hosted_database",
+            "live_primary_sources",
+            "licensed_market_data",
+            "model_provider",
+        )
+    if thesis_contract_id == PERSONAL_RESEARCH_THESIS_CONTRACT_ID:
+        return (
+            "hosted_database",
+            "live_primary_sources",
+            "personal_market_data",
+            "model_provider",
+        )
+    return None
 
 
 __all__ = [

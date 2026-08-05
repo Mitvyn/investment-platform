@@ -38,6 +38,10 @@ class SecFilingDocument:
     content_sha256: str
     content_text: str
 
+    @property
+    def document_name(self) -> str:
+        return self.primary_document
+
 
 @dataclass(frozen=True, slots=True)
 class SecFilingDocumentSnapshot:
@@ -190,7 +194,6 @@ class SecFilingDocumentCollector:
     ) -> str:
         if (
             ACCESSION_PATTERN.fullmatch(accession_number) is None
-            or accession_number[:10] != cik
             or DOCUMENT_PATTERN.fullmatch(primary_document) is None
         ):
             raise SecFilingDocumentError(

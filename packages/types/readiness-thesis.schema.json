@@ -15,6 +15,18 @@
     },
     "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
     "non_empty_string": {"type": "string", "minLength": 1},
+    "thesis_contract_id": {
+      "enum": [
+        "biotech_moonshot_catalyst_assessment",
+        "biotech_moonshot_catalyst_personal_research_v1"
+      ]
+    },
+    "question_type_version": {
+      "enum": [
+        "biotech_moonshot_catalyst_assessment.v1",
+        "biotech_moonshot_catalyst_personal_research_assessment.v1"
+      ]
+    },
     "timestamp": {"type": "string", "format": "date-time"},
     "uuid_array": {
       "type": "array",
@@ -126,7 +138,7 @@
         "readiness_gate_result_id": {"$ref": "#/$defs/uuid"},
         "operator_id": {"$ref": "#/$defs/uuid"},
         "security_id": {"$ref": "#/$defs/uuid"},
-        "thesis_contract_id": {"const": "biotech_moonshot_catalyst_assessment"},
+        "thesis_contract_id": {"$ref": "#/$defs/thesis_contract_id"},
         "research_run_id": {"$ref": "#/$defs/uuid"},
         "evidence_bundle_id": {"$ref": "#/$defs/uuid"},
         "evidence_bundle_hash": {"$ref": "#/$defs/sha256"},
@@ -137,7 +149,9 @@
         "requested_disposition": {"$ref": "#/$defs/disposition"},
         "final_disposition": {"$ref": "#/$defs/disposition"},
         "readiness_status": {"enum": ["passed", "blocked", "not_requested"]},
-        "gate_policy_version": {"$ref": "#/$defs/non_empty_string"},
+        "gate_policy_version": {
+          "enum": ["biotech-readiness.v1", "biotech-personal-readiness.v1"]
+        },
         "passed_checks": {
           "type": "array",
           "uniqueItems": true,
@@ -262,7 +276,7 @@
         "thesis_status": {"enum": ["canonical", "provisional"]},
         "operator_id": {"$ref": "#/$defs/uuid"},
         "security_id": {"$ref": "#/$defs/uuid"},
-        "thesis_contract_id": {"const": "biotech_moonshot_catalyst_assessment"},
+        "thesis_contract_id": {"$ref": "#/$defs/thesis_contract_id"},
         "previous_canonical_thesis_version_id": {
           "anyOf": [{"$ref": "#/$defs/uuid"}, {"type": "null"}]
         },
@@ -272,7 +286,7 @@
         "research_run_id": {"$ref": "#/$defs/uuid"},
         "evidence_bundle_id": {"$ref": "#/$defs/uuid"},
         "evidence_bundle_hash": {"$ref": "#/$defs/sha256"},
-        "question_type_version": {"const": "biotech_moonshot_catalyst_assessment.v1"},
+        "question_type_version": {"$ref": "#/$defs/question_type_version"},
         "workflow_config_version": {"$ref": "#/$defs/non_empty_string"},
         "proposition_id": {"$ref": "#/$defs/non_empty_string"},
         "proposition_version": {"$ref": "#/$defs/non_empty_string"},
@@ -281,7 +295,9 @@
         "committee_memo_id": {"$ref": "#/$defs/uuid"},
         "committee_status": {"$ref": "#/$defs/committee_status"},
         "readiness_gate_result_id": {"$ref": "#/$defs/uuid"},
-        "readiness_gate_policy_version": {"$ref": "#/$defs/non_empty_string"},
+        "readiness_gate_policy_version": {
+          "enum": ["biotech-readiness.v1", "biotech-personal-readiness.v1"]
+        },
         "requested_disposition": {"$ref": "#/$defs/disposition"},
         "final_disposition": {"$ref": "#/$defs/disposition"},
         "content": {"$ref": "#/$defs/thesis_content"},
@@ -326,7 +342,7 @@
         "thesis_creation_result_id": {"$ref": "#/$defs/uuid"},
         "operator_id": {"$ref": "#/$defs/uuid"},
         "security_id": {"$ref": "#/$defs/uuid"},
-        "thesis_contract_id": {"const": "biotech_moonshot_catalyst_assessment"},
+        "thesis_contract_id": {"$ref": "#/$defs/thesis_contract_id"},
         "research_run_id": {"$ref": "#/$defs/uuid"},
         "committee_result_id": {"$ref": "#/$defs/uuid"},
         "readiness_gate_result_id": {"$ref": "#/$defs/uuid"},
@@ -386,7 +402,7 @@
         "contract_version": {"const": "thesis_chain.v1"},
         "operator_id": {"$ref": "#/$defs/uuid"},
         "security_id": {"$ref": "#/$defs/uuid"},
-        "thesis_contract_id": {"const": "biotech_moonshot_catalyst_assessment"},
+        "thesis_contract_id": {"$ref": "#/$defs/thesis_contract_id"},
         "active_canonical_thesis_version_id": {
           "anyOf": [{"$ref": "#/$defs/uuid"}, {"type": "null"}]
         },

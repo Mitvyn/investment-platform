@@ -46,16 +46,28 @@
       }
     },
     "question_type": {
-      "const": "biotech_moonshot_catalyst_assessment"
+      "enum": [
+        "biotech_moonshot_catalyst_assessment",
+        "biotech_moonshot_catalyst_personal_research_assessment"
+      ]
     },
     "question_type_version": {
-      "const": "biotech_moonshot_catalyst_assessment.v1"
+      "enum": [
+        "biotech_moonshot_catalyst_assessment.v1",
+        "biotech_moonshot_catalyst_personal_research_assessment.v1"
+      ]
     },
     "workflow_config_version": {
-      "const": "biotech-moonshot-catalyst-v1"
+      "enum": [
+        "biotech-moonshot-catalyst-v1",
+        "biotech-moonshot-catalyst-personal-research-v1"
+      ]
     },
     "thesis_contract_id": {
-      "const": "biotech_moonshot_catalyst_assessment"
+      "enum": [
+        "biotech_moonshot_catalyst_assessment",
+        "biotech_moonshot_catalyst_personal_research_v1"
+      ]
     },
     "as_of_cutoff": { "type": "string", "format": "date-time" },
     "operator_focus_original": { "type": ["string", "null"] },
@@ -94,6 +106,28 @@
     },
     "created_at": { "type": "string", "format": "date-time" }
   },
+  "allOf": [
+    {
+      "oneOf": [
+        {
+          "properties": {
+            "question_type": { "const": "biotech_moonshot_catalyst_assessment" },
+            "question_type_version": { "const": "biotech_moonshot_catalyst_assessment.v1" },
+            "workflow_config_version": { "const": "biotech-moonshot-catalyst-v1" },
+            "thesis_contract_id": { "const": "biotech_moonshot_catalyst_assessment" }
+          }
+        },
+        {
+          "properties": {
+            "question_type": { "const": "biotech_moonshot_catalyst_personal_research_assessment" },
+            "question_type_version": { "const": "biotech_moonshot_catalyst_personal_research_assessment.v1" },
+            "workflow_config_version": { "const": "biotech-moonshot-catalyst-personal-research-v1" },
+            "thesis_contract_id": { "const": "biotech_moonshot_catalyst_personal_research_v1" }
+          }
+        }
+      ]
+    }
+  ],
   "$defs": {
     "eligibility_check": {
       "type": "object",
@@ -182,15 +216,39 @@
       ],
       "properties": {
         "question_type": {
-          "const": "biotech_moonshot_catalyst_assessment"
+          "enum": [
+            "biotech_moonshot_catalyst_assessment",
+            "biotech_moonshot_catalyst_personal_research_assessment"
+          ]
         },
         "security_id": { "type": "string", "format": "uuid" },
         "as_of_cutoff": { "type": "string", "format": "date-time" },
         "workflow_config_version": {
-          "const": "biotech-moonshot-catalyst-v1"
+          "enum": [
+            "biotech-moonshot-catalyst-v1",
+            "biotech-moonshot-catalyst-personal-research-v1"
+          ]
         },
         "operator_focus": { "type": ["string", "null"], "maxLength": 2000 }
-      }
+      },
+      "allOf": [
+        {
+          "oneOf": [
+            {
+              "properties": {
+                "question_type": { "const": "biotech_moonshot_catalyst_assessment" },
+                "workflow_config_version": { "const": "biotech-moonshot-catalyst-v1" }
+              }
+            },
+            {
+              "properties": {
+                "question_type": { "const": "biotech_moonshot_catalyst_personal_research_assessment" },
+                "workflow_config_version": { "const": "biotech-moonshot-catalyst-personal-research-v1" }
+              }
+            }
+          ]
+        }
+      ]
     },
     "normalized_research_question_request": {
       "type": "object",
@@ -207,25 +265,59 @@
       ],
       "properties": {
         "question_type": {
-          "const": "biotech_moonshot_catalyst_assessment"
+          "enum": [
+            "biotech_moonshot_catalyst_assessment",
+            "biotech_moonshot_catalyst_personal_research_assessment"
+          ]
         },
         "question_type_version": {
-          "const": "biotech_moonshot_catalyst_assessment.v1"
+          "enum": [
+            "biotech_moonshot_catalyst_assessment.v1",
+            "biotech_moonshot_catalyst_personal_research_assessment.v1"
+          ]
         },
         "security_id": { "type": "string", "format": "uuid" },
         "as_of_cutoff": { "type": "string", "format": "date-time" },
         "workflow_config_version": {
-          "const": "biotech-moonshot-catalyst-v1"
+          "enum": [
+            "biotech-moonshot-catalyst-v1",
+            "biotech-moonshot-catalyst-personal-research-v1"
+          ]
         },
         "thesis_contract_id": {
-          "const": "biotech_moonshot_catalyst_assessment"
+          "enum": [
+            "biotech_moonshot_catalyst_assessment",
+            "biotech_moonshot_catalyst_personal_research_v1"
+          ]
         },
         "operator_focus_original": { "type": ["string", "null"] },
         "operator_focus_normalized": {
           "type": ["string", "null"],
           "maxLength": 2000
         }
-      }
+      },
+      "allOf": [
+        {
+          "oneOf": [
+            {
+              "properties": {
+                "question_type": { "const": "biotech_moonshot_catalyst_assessment" },
+                "question_type_version": { "const": "biotech_moonshot_catalyst_assessment.v1" },
+                "workflow_config_version": { "const": "biotech-moonshot-catalyst-v1" },
+                "thesis_contract_id": { "const": "biotech_moonshot_catalyst_assessment" }
+              }
+            },
+            {
+              "properties": {
+                "question_type": { "const": "biotech_moonshot_catalyst_personal_research_assessment" },
+                "question_type_version": { "const": "biotech_moonshot_catalyst_personal_research_assessment.v1" },
+                "workflow_config_version": { "const": "biotech-moonshot-catalyst-personal-research-v1" },
+                "thesis_contract_id": { "const": "biotech_moonshot_catalyst_personal_research_v1" }
+              }
+            }
+          ]
+        }
+      ]
     }
   }
 }

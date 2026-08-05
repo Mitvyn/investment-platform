@@ -1,12 +1,12 @@
 from __future__ import annotations
 
+import json
+import subprocess
+import unittest
 from copy import deepcopy
 from dataclasses import replace
 from datetime import UTC, datetime
 from decimal import Decimal
-import json
-import subprocess
-import unittest
 
 from investment_research_os.evidence_bundles import (
     AuthenticatedOperator,
@@ -18,26 +18,40 @@ from investment_research_os.grader_executions import (
     InMemoryBudgetLedger,
     InMemoryGraderExecutionRepository,
     PromptContract,
-    ProviderTransportError,
     ProviderResponse,
+    ProviderTransportError,
     ProviderUsage,
 )
 from investment_research_os.research_committees import (
-    InMemoryResearchCommitteeRepository,
     MVP_GRADER_ROSTER,
+    InMemoryResearchCommitteeRepository,
+    ResearchCommitteeError,
     ResearchCommitteeWorkflow,
 )
 from tests.test_evidence_bundle_storage import materialized_bundle
 from tests.test_grader_execution_workflow import (
     FakeProvider,
+    abstained_output,
     accepted_output,
     aligned_valuation_repository,
-    abstained_output,
     approved_request,
 )
 
 
 class FiveGraderDomainContractTests(unittest.TestCase):
+    def test_committee_grader_state_requires_exact_draft_parent(self) -> None:
+        _, committee, _, _ = completed_committee_fixture()
+        repository = InMemoryResearchCommitteeRepository()
+
+        with self.assertRaisesRegex(
+            ResearchCommitteeError,
+            "draft must persist",
+        ):
+            repository.save_grader_state(
+                committee,
+                committee.grader_results[0],
+            )
+
     def test_valuation_payload_may_reference_frozen_snapshot_calculation(
         self,
     ) -> None:
@@ -99,9 +113,7 @@ class FiveGraderDomainContractTests(unittest.TestCase):
             {
                 "grader_id": request.grader.grader_id,
                 "grader_version": request.grader.grader_version,
-                "owned_decision_question": (
-                    request.grader.owned_decision_question
-                ),
+                "owned_decision_question": (request.grader.owned_decision_question),
             }
         )
         output.pop("moonshot_payload")
@@ -142,9 +154,7 @@ class FiveGraderDomainContractTests(unittest.TestCase):
         request = self._request_for(
             bundle.id,
             grader_id="biotech",
-            owned_question=(
-                "Is the scientific and clinical evidence credible?"
-            ),
+            owned_question=("Is the scientific and clinical evidence credible?"),
         )
         output = self._base_output(bundle, request)
         output["biotech_payload"] = {
@@ -276,8 +286,7 @@ class FiveGraderDomainContractTests(unittest.TestCase):
             for definition in MVP_GRADER_ROSTER
         )
         outputs = tuple(
-            self._output_for_request(bundle, request)
-            for request in requests
+            self._output_for_request(bundle, request) for request in requests
         )
         provider = FakeProvider(
             tuple(
@@ -300,9 +309,7 @@ class FiveGraderDomainContractTests(unittest.TestCase):
         grader_workflow = GraderExecutionWorkflow(
             evidence_bundle_repository=bundle_repository,
             execution_repository=execution_repository,
-            budget_ledger=InMemoryBudgetLedger(
-                hard_limit_usd=Decimal("5.00")
-            ),
+            budget_ledger=InMemoryBudgetLedger(hard_limit_usd=Decimal("5.00")),
             provider=provider,
             clock=lambda: datetime(2026, 7, 22, 3, 0, tzinfo=UTC),
         )
@@ -337,6 +344,7 @@ class FiveGraderDomainContractTests(unittest.TestCase):
         self.assertEqual(
             committee_repository.persistence_order,
             (
+                "committee_draft",
                 "moonshot",
                 "catalyst",
                 "biotech",
@@ -350,12 +358,8 @@ class FiveGraderDomainContractTests(unittest.TestCase):
             "context": {
                 "evidenceBundleId": bundle.id,
                 "evidenceBundleHash": bundle.content_hash,
-                "evidenceIds": [
-                    item.evidence_id for item in bundle.manifest
-                ],
-                "calculationIds": [
-                    item.snapshot_id for item in bundle.metrics
-                ],
+                "evidenceIds": [item.evidence_id for item in bundle.manifest],
+                "calculationIds": [item.snapshot_id for item in bundle.metrics],
             },
         }
         result = subprocess.run(
@@ -388,9 +392,7 @@ class FiveGraderDomainContractTests(unittest.TestCase):
             requests[1],
             grader=replace(requests[1].grader, eligible=False),
         )
-        eligible_requests = [
-            request for request in requests if request.grader.eligible
-        ]
+        eligible_requests = [request for request in requests if request.grader.eligible]
         provider = FakeProvider(
             tuple(
                 ProviderResponse(
@@ -529,9 +531,7 @@ class FiveGraderDomainContractTests(unittest.TestCase):
             requests[2],
             model=replace(requests[2].model, active=False),
         )
-        executable_requests = [
-            request for request in requests if request.model.active
-        ]
+        executable_requests = [request for request in requests if request.model.active]
         provider = FakeProvider(
             tuple(
                 ProviderResponse(
@@ -581,9 +581,7 @@ class FiveGraderDomainContractTests(unittest.TestCase):
         workflow = GraderExecutionWorkflow(
             evidence_bundle_repository=bundle_repository,
             execution_repository=InMemoryGraderExecutionRepository(),
-            budget_ledger=InMemoryBudgetLedger(
-                hard_limit_usd=Decimal("1.00")
-            ),
+            budget_ledger=InMemoryBudgetLedger(hard_limit_usd=Decimal("1.00")),
             provider=FakeProvider((response, response)),
             clock=lambda: datetime(2026, 7, 22, 3, 0, tzinfo=UTC),
         )
@@ -616,9 +614,7 @@ class FiveGraderDomainContractTests(unittest.TestCase):
         workflow = GraderExecutionWorkflow(
             evidence_bundle_repository=bundle_repository,
             execution_repository=InMemoryGraderExecutionRepository(),
-            budget_ledger=InMemoryBudgetLedger(
-                hard_limit_usd=Decimal("1.00")
-            ),
+            budget_ledger=InMemoryBudgetLedger(hard_limit_usd=Decimal("1.00")),
             provider=FakeProvider((response, response)),
             clock=lambda: datetime(2026, 7, 22, 3, 0, tzinfo=UTC),
         )
@@ -647,9 +643,7 @@ class FiveGraderDomainContractTests(unittest.TestCase):
         workflow = GraderExecutionWorkflow(
             evidence_bundle_repository=bundle_repository,
             execution_repository=InMemoryGraderExecutionRepository(),
-            budget_ledger=InMemoryBudgetLedger(
-                hard_limit_usd=Decimal("1.00")
-            ),
+            budget_ledger=InMemoryBudgetLedger(hard_limit_usd=Decimal("1.00")),
             provider=FakeProvider((response, response)),
             clock=lambda: datetime(2026, 7, 22, 3, 0, tzinfo=UTC),
         )
@@ -723,9 +717,7 @@ class FiveGraderDomainContractTests(unittest.TestCase):
             grader_workflow=GraderExecutionWorkflow(
                 evidence_bundle_repository=bundle_repository,
                 execution_repository=grader_repository,
-                budget_ledger=InMemoryBudgetLedger(
-                    hard_limit_usd=Decimal("5.00")
-                ),
+                budget_ledger=InMemoryBudgetLedger(hard_limit_usd=Decimal("5.00")),
                 provider=provider,
                 clock=lambda: datetime(2026, 7, 22, 3, 0, tzinfo=UTC),
             ),
@@ -745,7 +737,7 @@ class FiveGraderDomainContractTests(unittest.TestCase):
 
         self.assertIs(second, first)
         self.assertEqual(len(provider.requests), 5)
-        self.assertEqual(len(committee_repository.persistence_order), 6)
+        self.assertEqual(len(committee_repository.persistence_order), 7)
 
     def _request_for(self, bundle_id, *, grader_id, owned_question):
         request = approved_request(bundle_id)
@@ -780,9 +772,7 @@ class FiveGraderDomainContractTests(unittest.TestCase):
             {
                 "grader_id": request.grader.grader_id,
                 "grader_version": request.grader.grader_version,
-                "owned_decision_question": (
-                    request.grader.owned_decision_question
-                ),
+                "owned_decision_question": (request.grader.owned_decision_question),
             }
         )
         output.pop("moonshot_payload")
@@ -809,9 +799,7 @@ class FiveGraderDomainContractTests(unittest.TestCase):
         grader_workflow = GraderExecutionWorkflow(
             evidence_bundle_repository=bundle_repository,
             execution_repository=InMemoryGraderExecutionRepository(),
-            budget_ledger=InMemoryBudgetLedger(
-                hard_limit_usd=Decimal("5.00")
-            ),
+            budget_ledger=InMemoryBudgetLedger(hard_limit_usd=Decimal("5.00")),
             provider=provider,
             clock=lambda: datetime(2026, 7, 22, 3, 0, tzinfo=UTC),
         )
@@ -971,9 +959,7 @@ class FiveGraderDomainContractTests(unittest.TestCase):
             evidence_bundle_repository=bundle_repository,
             valuation_snapshot_repository=valuation_repository,
             execution_repository=InMemoryGraderExecutionRepository(),
-            budget_ledger=InMemoryBudgetLedger(
-                hard_limit_usd=Decimal("1.00")
-            ),
+            budget_ledger=InMemoryBudgetLedger(hard_limit_usd=Decimal("1.00")),
             provider=provider,
             clock=lambda: datetime(2026, 7, 22, 3, 0, tzinfo=UTC),
         )
@@ -1006,9 +992,7 @@ def completed_committee_fixture():
         grader_workflow=GraderExecutionWorkflow(
             evidence_bundle_repository=bundle_repository,
             execution_repository=InMemoryGraderExecutionRepository(),
-            budget_ledger=InMemoryBudgetLedger(
-                hard_limit_usd=Decimal("5.00")
-            ),
+            budget_ledger=InMemoryBudgetLedger(hard_limit_usd=Decimal("5.00")),
             provider=provider,
             clock=lambda: datetime(2026, 7, 22, 3, 0, tzinfo=UTC),
         ),

@@ -16,7 +16,10 @@ test("dashboard exposes an authenticated fixed-contract Research Run launcher", 
   assert.match(page, /name="securityId"/);
   assert.match(page, /name="asOfCutoff"/);
   assert.match(page, /name="operatorFocus"/);
-  assert.match(page, /biotech_moonshot_catalyst_assessment/);
+  assert.match(page, /name="researchContract"/);
+  assert.match(page, /Licensed official close/);
+  assert.match(page, /Personal research/);
+  assert.match(page, /Not\s+institutional-grade or for trade execution/);
   assert.match(page, /Research Run preflight/);
   assert.match(page, /blocking_reason_codes/);
   assert.match(actions, /auth\.getClaims\(\)/);

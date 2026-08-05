@@ -92,6 +92,30 @@ function alignedContext() {
   return { run, bundle };
 }
 
+function personalAlignedContext() {
+  const { run, bundle } = alignedContext();
+  const personalRun = structuredClone(run) as Record<string, any>;
+  personalRun.question_type =
+    "biotech_moonshot_catalyst_personal_research_assessment";
+  personalRun.question_type_version =
+    "biotech_moonshot_catalyst_personal_research_assessment.v1";
+  personalRun.workflow_config_version =
+    "biotech-moonshot-catalyst-personal-research-v1";
+  personalRun.thesis_contract_id =
+    "biotech_moonshot_catalyst_personal_research_v1";
+
+  const execution = structuredClone(executionFixture) as Record<string, any>;
+  execution.question_type_id = personalRun.question_type;
+  execution.question_type_version = personalRun.question_type_version;
+  execution.workflow_config_version = personalRun.workflow_config_version;
+  execution.thesis_contract_id = personalRun.thesis_contract_id;
+  return {
+    run: personalRun as ResearchRun,
+    bundle,
+    execution: execution as GraderExecution,
+  };
+}
+
 function notExecutedExecution() {
   const execution = structuredClone(executionFixture);
   execution.execution_state = "not_executed";
@@ -218,6 +242,18 @@ test("accepted grader execution exposes validated opinion and auditable model co
   assert.doesNotMatch(
     JSON.stringify(presentation),
     /raw_payload_id|raw_payload_sha256|raw_request|raw_response|reasoning_content/,
+  );
+});
+
+test("personal-research grader execution displays only under matching run contract", () => {
+  const { run, bundle, execution } = personalAlignedContext();
+
+  const presentation = presentGraderExecutionWorkspace(run, bundle, [execution]);
+
+  assert.equal(presentation.kind, "ready");
+  assert.throws(
+    () => presentGraderExecutionWorkspace(run, bundle, [executionFixture]),
+    /research contract boundary/,
   );
 });
 

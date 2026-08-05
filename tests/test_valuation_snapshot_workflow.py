@@ -16,6 +16,7 @@ from investment_research_os.valuation_snapshots import (
     MarketSession,
     MaterialityAssessment,
     PriceObservation,
+    PersonalResearchValuationSnapshotWorkflow,
     ValuationInputCandidate,
     ValuationSourceReference,
     ValuationSnapshotWorkflow,
@@ -50,7 +51,12 @@ class FixedCalendar:
 
 
 def input_candidate() -> ValuationInputCandidate:
+    bundle = materialized_bundle()
     return ValuationInputCandidate(
+        security_id=bundle.security_id,
+        evidence_bundle_id=bundle.id,
+        evidence_bundle_hash=bundle.content_hash,
+        market_session=SESSION,
         prices=(
             PriceObservation(
                 price_type="official_unadjusted_close",
@@ -70,28 +76,38 @@ def input_candidate() -> ValuationInputCandidate:
             basic_shares_outstanding="286000000",
             fully_diluted_shares="318000000",
             cash="474300000",
+            restricted_cash="4300000",
+            restricted_cash_treatment="excluded",
             debt="128000000",
-            other_included_claims="0",
-            included_cash="474300000",
+            other_included_claims="12000000",
+            included_cash="470000000",
             currency="USD",
-            effective_date=date(2026, 3, 31),
-            basic_shares_evidence_ids=(
-                "c72e8a02-c5a6-5b05-af51-d6bd2d08ce55",
+            basic_shares_effective_at=datetime(2026, 3, 31, 23, 59, 59, tzinfo=UTC),
+            fully_diluted_shares_effective_at=datetime(
+                2026, 3, 31, 23, 59, 59, tzinfo=UTC
             ),
-            diluted_shares_evidence_ids=(
+            cash_effective_at=datetime(2026, 3, 31, 23, 59, 59, tzinfo=UTC),
+            restricted_cash_effective_at=datetime(2026, 3, 31, 23, 59, 59, tzinfo=UTC),
+            included_cash_effective_at=datetime(2026, 3, 31, 23, 59, 59, tzinfo=UTC),
+            debt_effective_at=datetime(2025, 12, 31, 23, 59, 59, tzinfo=UTC),
+            other_included_claims_effective_at=datetime(
+                2026, 2, 28, 23, 59, 59, tzinfo=UTC
+            ),
+            basic_shares_evidence_ids=("c72e8a02-c5a6-5b05-af51-d6bd2d08ce55",),
+            diluted_shares_evidence_ids=("635e63a1-ed42-540c-99cd-114aacb0ef51",),
+            cash_evidence_ids=("635e63a1-ed42-540c-99cd-114aacb0ef51",),
+            restricted_cash_evidence_ids=("635e63a1-ed42-540c-99cd-114aacb0ef51",),
+            debt_evidence_ids=("635e63a1-ed42-540c-99cd-114aacb0ef51",),
+            other_included_claims_evidence_ids=(
                 "635e63a1-ed42-540c-99cd-114aacb0ef51",
             ),
-            cash_evidence_ids=("635e63a1-ed42-540c-99cd-114aacb0ef51",),
-            debt_evidence_ids=("635e63a1-ed42-540c-99cd-114aacb0ef51",),
             dilution_instruments=(
                 DilutionInstrument(
                     instrument_id="equity-awards",
                     instrument_type="options",
                     diluted_share_increment="32000000",
                     effective_at=datetime(2026, 3, 31, 23, 59, 59, tzinfo=UTC),
-                    supporting_evidence_ids=(
-                        "635e63a1-ed42-540c-99cd-114aacb0ef51",
-                    ),
+                    supporting_evidence_ids=("635e63a1-ed42-540c-99cd-114aacb0ef51",),
                 ),
             ),
         ),
@@ -170,21 +186,162 @@ def input_candidate() -> ValuationInputCandidate:
     )
 
 
+def personal_input_candidate() -> ValuationInputCandidate:
+    candidate = input_candidate()
+    return replace(
+        candidate,
+        prices=(
+            replace(
+                candidate.prices[0],
+                price_type="verified_consolidated_end_of_day_close",
+                provider="massive",
+            ),
+        ),
+        valuation_policy_version="personal_research_valuation_v1",
+        source_references=(
+            replace(
+                candidate.source_references[0],
+                source_type="personal_market_data",
+                provider="massive",
+                locator="NASDAQ:RXRX consolidated end-of-day 2026-05-06",
+                provider_plan_id="massive-personal-free",
+                response_sha256="a" * 64,
+                provider_contract_status="candidate_unapproved",
+                provider_limitation_codes=(
+                    "official_close_provenance_unconfirmed",
+                    "persistence_rights_unconfirmed",
+                ),
+            ),
+            *candidate.source_references[1:],
+        ),
+    )
+
+
 class FixedValuationSource:
     def __init__(self, candidate: ValuationInputCandidate) -> None:
         self.candidate = candidate
-        self.requests: list[tuple[str, datetime]] = []
+        self.requests: list[tuple[object, MarketSession]] = []
 
     def load(
         self,
-        security_id: str,
-        cutoff: datetime,
+        bundle: object,
+        session: MarketSession,
     ) -> ValuationInputCandidate:
-        self.requests.append((security_id, cutoff))
+        self.requests.append((bundle, session))
         return self.candidate
 
 
 class ValuationSnapshotWorkflowTests(unittest.TestCase):
+    def test_personal_research_snapshot_uses_lower_assurance_contract(self) -> None:
+        bundle = materialized_bundle()
+        bundle_repository = InMemoryEvidenceBundleRepository()
+        bundle_repository.save(bundle)
+        candidate = personal_input_candidate()
+        snapshot = PersonalResearchValuationSnapshotWorkflow(
+            evidence_bundle_repository=bundle_repository,
+            valuation_snapshot_repository=InMemoryValuationSnapshotRepository(),
+            market_calendar=FixedCalendar(),
+            input_source=FixedValuationSource(candidate),
+            clock=lambda: datetime(2026, 5, 7, 2, 0, tzinfo=UTC),
+        ).materialize(AuthenticatedOperator(bundle.operator_id), bundle.id)
+
+        wire = snapshot.as_dict()
+        self.assertEqual(
+            wire["contract_version"],
+            "valuation_snapshot.personal_research.v1",
+        )
+        self.assertEqual(wire["snapshot_status"], "valid")
+        self.assertEqual(
+            wire["price_basis"]["price_type"],
+            "verified_consolidated_end_of_day_close",
+        )
+        self.assertEqual(
+            wire["price_basis"]["price_timestamp"],
+            SESSION.closes_at.isoformat(),
+        )
+        self.assertNotIn("official_close_timestamp", wire["price_basis"])
+        self.assertEqual(wire["valuation_assurance"]["level"], "personal_research")
+        self.assertEqual(
+            wire["valuation_assurance"]["rights_assurance"],
+            "not_independently_verified",
+        )
+        self.assertIn(
+            "not_primary_venue_official_close",
+            wire["valuation_assurance"]["limitation_codes"],
+        )
+        self.assertEqual(
+            wire["source_references"][0]["response_sha256"],
+            "a" * 64,
+        )
+
+    def test_personal_research_indeterminate_halt_status_invalidates_snapshot(
+        self,
+    ) -> None:
+        bundle = materialized_bundle()
+        bundle_repository = InMemoryEvidenceBundleRepository()
+        bundle_repository.save(bundle)
+        candidate = personal_input_candidate()
+        price = replace(
+            candidate.prices[0],
+            halt_verification_status="indeterminate",
+        )
+        snapshot = PersonalResearchValuationSnapshotWorkflow(
+            evidence_bundle_repository=bundle_repository,
+            valuation_snapshot_repository=InMemoryValuationSnapshotRepository(),
+            market_calendar=FixedCalendar(),
+            input_source=FixedValuationSource(
+                replace(
+                    candidate,
+                    prices=(price,),
+                )
+            ),
+            clock=lambda: datetime(2026, 5, 7, 2, 0, tzinfo=UTC),
+        ).materialize(AuthenticatedOperator(bundle.operator_id), bundle.id)
+
+        self.assertEqual(snapshot.snapshot_status, "invalid")
+        self.assertEqual(
+            snapshot.invalid_reason_codes,
+            ("market_halt_status_indeterminate",),
+        )
+        self.assertFalse(snapshot.market_relative_analysis_permitted)
+
+    def test_personal_research_market_provenance_is_required(self) -> None:
+        bundle = materialized_bundle()
+        bundle_repository = InMemoryEvidenceBundleRepository()
+        bundle_repository.save(bundle)
+        candidate = input_candidate()
+        price = replace(
+            candidate.prices[0],
+            price_type="verified_consolidated_end_of_day_close",
+        )
+        incomplete_source = replace(
+            candidate.source_references[0],
+            source_type="personal_market_data",
+        )
+        workflow = PersonalResearchValuationSnapshotWorkflow(
+            evidence_bundle_repository=bundle_repository,
+            valuation_snapshot_repository=InMemoryValuationSnapshotRepository(),
+            market_calendar=FixedCalendar(),
+            input_source=FixedValuationSource(
+                replace(
+                    candidate,
+                    prices=(price,),
+                    valuation_policy_version="personal_research_valuation_v1",
+                    source_references=(
+                        incomplete_source,
+                        *candidate.source_references[1:],
+                    ),
+                )
+            ),
+            clock=lambda: datetime(2026, 5, 7, 2, 0, tzinfo=UTC),
+        )
+
+        with self.assertRaisesRegex(
+            ValuationSnapshotError,
+            "personal market source provenance is incomplete",
+        ):
+            workflow.materialize(AuthenticatedOperator(bundle.operator_id), bundle.id)
+
     def test_selects_official_close_for_latest_completed_session(self) -> None:
         bundle = materialized_bundle()
         bundle_repository = InMemoryEvidenceBundleRepository()
@@ -214,7 +371,7 @@ class ValuationSnapshotWorkflowTests(unittest.TestCase):
             calendar.requests,
             [(bundle.security_identity.primary_listing_exchange, bundle.as_of_cutoff)],
         )
-        self.assertEqual(source.requests, [(bundle.security_id, bundle.as_of_cutoff)])
+        self.assertEqual(source.requests, [(bundle, SESSION)])
         self.assertEqual(
             valuation_repository.get_for_run(
                 bundle.operator_id,
@@ -247,14 +404,43 @@ class ValuationSnapshotWorkflowTests(unittest.TestCase):
             snapshot.market_capitalization.formula,
             "share_price * fully_diluted_shares",
         )
-        self.assertEqual(snapshot.enterprise_value.value, "1641200000.00")
+        self.assertEqual(snapshot.enterprise_value.value, "1657500000.00")
         self.assertEqual(
             snapshot.enterprise_value.formula,
-            "market_capitalization + debt - cash",
+            ("market_capitalization + debt + other_included_claims - included_cash"),
         )
         self.assertEqual(snapshot.market_capitalization.unit, "USD")
         self.assertEqual(snapshot.enterprise_value.unit, "USD")
         self.assertEqual(len(snapshot.calculation_ids), 3)
+        wire = snapshot.as_dict()
+        self.assertEqual(
+            wire["basic_shares_outstanding"]["effective_at"],
+            "2026-03-31T23:59:59+00:00",
+        )
+        self.assertEqual(
+            wire["debt"]["effective_at"],
+            "2025-12-31T23:59:59+00:00",
+        )
+        self.assertEqual(
+            wire["cash_treatment"]["reported_cash"]["value"],
+            "474300000",
+        )
+        self.assertEqual(
+            wire["cash_treatment"]["restricted_cash"]["value"],
+            "4300000",
+        )
+        self.assertEqual(
+            wire["cash_treatment"]["restricted_cash_treatment"],
+            "excluded",
+        )
+        self.assertEqual(
+            wire["cash_treatment"]["restricted_cash"]["effective_at"],
+            "2026-03-31T23:59:59+00:00",
+        )
+        self.assertEqual(
+            wire["other_included_claims"]["value"],
+            "12000000",
+        )
 
     def test_valid_snapshot_exposes_language_neutral_wire_contract(self) -> None:
         bundle = materialized_bundle()
@@ -307,9 +493,7 @@ class ValuationSnapshotWorkflowTests(unittest.TestCase):
             evidence_bundle_repository=bundle_repository,
             valuation_snapshot_repository=valuation_repository,
             market_calendar=FixedCalendar(),
-            input_source=FixedValuationSource(
-                replace(input_candidate(), prices=())
-            ),
+            input_source=FixedValuationSource(replace(input_candidate(), prices=())),
             clock=lambda: datetime(2026, 5, 7, 2, 0, tzinfo=UTC),
         )
 
@@ -669,9 +853,7 @@ class ValuationSnapshotWorkflowTests(unittest.TestCase):
             input_source=FixedValuationSource(
                 replace(
                     candidate,
-                    materiality_assessments=(
-                        candidate.materiality_assessments[0],
-                    ),
+                    materiality_assessments=(candidate.materiality_assessments[0],),
                 )
             ),
             clock=lambda: datetime(2026, 5, 7, 2, 0, tzinfo=UTC),
@@ -680,6 +862,87 @@ class ValuationSnapshotWorkflowTests(unittest.TestCase):
         with self.assertRaisesRegex(
             ValuationSnapshotError,
             "materiality assessments must cover bundle evidence exactly",
+        ):
+            workflow.materialize(
+                AuthenticatedOperator(bundle.operator_id),
+                bundle.id,
+            )
+
+    def test_missing_required_capital_provenance_fails_closed(self) -> None:
+        bundle = materialized_bundle()
+        bundle_repository = InMemoryEvidenceBundleRepository()
+        bundle_repository.save(bundle)
+        candidate = input_candidate()
+        incomplete_capital = replace(
+            candidate.capital,
+            other_included_claims_evidence_ids=(),
+        )
+        workflow = ValuationSnapshotWorkflow(
+            evidence_bundle_repository=bundle_repository,
+            valuation_snapshot_repository=InMemoryValuationSnapshotRepository(),
+            market_calendar=FixedCalendar(),
+            input_source=FixedValuationSource(
+                replace(candidate, capital=incomplete_capital)
+            ),
+            clock=lambda: datetime(2026, 5, 7, 2, 0, tzinfo=UTC),
+        )
+
+        with self.assertRaisesRegex(
+            ValuationSnapshotError,
+            "capital input evidence is incomplete",
+        ):
+            workflow.materialize(
+                AuthenticatedOperator(bundle.operator_id),
+                bundle.id,
+            )
+
+    def test_mismatched_candidate_identity_fails_closed(self) -> None:
+        bundle = materialized_bundle()
+        bundle_repository = InMemoryEvidenceBundleRepository()
+        bundle_repository.save(bundle)
+        mismatched = replace(
+            input_candidate(),
+            evidence_bundle_hash="0" * 64,
+        )
+        workflow = ValuationSnapshotWorkflow(
+            evidence_bundle_repository=bundle_repository,
+            valuation_snapshot_repository=InMemoryValuationSnapshotRepository(),
+            market_calendar=FixedCalendar(),
+            input_source=FixedValuationSource(mismatched),
+            clock=lambda: datetime(2026, 5, 7, 2, 0, tzinfo=UTC),
+        )
+
+        with self.assertRaisesRegex(
+            ValuationSnapshotError,
+            "valuation candidate identity mismatch",
+        ):
+            workflow.materialize(
+                AuthenticatedOperator(bundle.operator_id),
+                bundle.id,
+            )
+
+    def test_mismatched_cash_basis_fails_closed(self) -> None:
+        bundle = materialized_bundle()
+        bundle_repository = InMemoryEvidenceBundleRepository()
+        bundle_repository.save(bundle)
+        candidate = input_candidate()
+        mismatched_capital = replace(
+            candidate.capital,
+            included_cash_effective_at=datetime(2025, 12, 31, 23, 59, 59, tzinfo=UTC),
+        )
+        workflow = ValuationSnapshotWorkflow(
+            evidence_bundle_repository=bundle_repository,
+            valuation_snapshot_repository=InMemoryValuationSnapshotRepository(),
+            market_calendar=FixedCalendar(),
+            input_source=FixedValuationSource(
+                replace(candidate, capital=mismatched_capital)
+            ),
+            clock=lambda: datetime(2026, 5, 7, 2, 0, tzinfo=UTC),
+        )
+
+        with self.assertRaisesRegex(
+            ValuationSnapshotError,
+            "restricted cash effective time mismatch",
         ):
             workflow.materialize(
                 AuthenticatedOperator(bundle.operator_id),

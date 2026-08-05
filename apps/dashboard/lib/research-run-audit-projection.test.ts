@@ -29,7 +29,9 @@ const run = JSON.parse(
     ),
     "utf8",
   ),
-) as ResearchRun;
+) as ResearchRun & {
+  thesis_contract_id: "biotech_moonshot_catalyst_assessment";
+};
 
 function contractFixture<T>(path: string): T {
   return JSON.parse(

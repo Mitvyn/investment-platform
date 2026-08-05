@@ -8,12 +8,48 @@ import {
   HistogramSeries,
   type Time,
 } from "lightweight-charts";
-import { useEffect, useRef } from "react";
+import { useEffect, useId, useRef } from "react";
 
-import { marketPriceFormat } from "@/lib/market-price-presentation";
+import {
+  marketDataRecency,
+  marketHistoryRows,
+  marketPriceFormat,
+} from "@/lib/market-price-presentation";
 
-export function MarketPriceChart({ bars }: { bars: MarketBarContext[] }) {
+type MarketPriceChartProps = {
+  bars: MarketBarContext[];
+  currency: string;
+  recencyCheckedAt: string;
+  retrievedAt: string;
+  sessionEnd: string;
+};
+
+function formatPrice(value: number, currency: string) {
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency,
+    minimumFractionDigits: 2,
+    maximumFractionDigits: value < 1 ? 4 : 2,
+  }).format(value);
+}
+
+function formatVolume(value: number | null) {
+  return value === null
+    ? "Unavailable"
+    : new Intl.NumberFormat("en-US").format(value);
+}
+
+export function MarketPriceChart({
+  bars,
+  currency,
+  recencyCheckedAt,
+  retrievedAt,
+  sessionEnd,
+}: MarketPriceChartProps) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const noteId = useId();
+  const historyRows = marketHistoryRows(bars);
+  const recency = marketDataRecency(retrievedAt, new Date(recencyCheckedAt));
 
   useEffect(() => {
     const container = containerRef.current;
@@ -77,10 +113,92 @@ export function MarketPriceChart({ bars }: { bars: MarketBarContext[] }) {
   }, [bars]);
 
   return (
-    <div
-      aria-label="Unadjusted daily price and volume chart"
-      className="min-h-[420px] w-full"
-      ref={containerRef}
-    />
+    <>
+      <div
+        aria-describedby={noteId}
+        aria-label="Unadjusted daily price and volume chart"
+        className="min-h-[420px] w-full"
+        ref={containerRef}
+        role="img"
+      />
+      <div
+        className={`mt-4 rounded-lg border px-4 py-3 text-sm ${
+          recency.state === "refresh_due"
+            ? "border-warning/35 bg-warning-muted text-warning-muted-foreground"
+            : "border-border bg-muted/30 text-muted-foreground"
+        }`}
+        id={noteId}
+      >
+        <p>
+          Last stored session: <time dateTime={sessionEnd}>{sessionEnd}</time>.{" "}
+          {recency.label}.
+        </p>
+        {recency.state === "refresh_due" ? (
+          <p className="mt-1">
+            Refresh may be needed. Recency warning uses elapsed retrieval time,
+            not exchange-calendar validation.
+          </p>
+        ) : null}
+      </div>
+      <details className="mt-4 rounded-lg border border-border">
+        <summary className="cursor-pointer px-4 py-3 text-sm font-medium">
+          View {historyRows.length} recent OHLCV sessions
+        </summary>
+        <div className="overflow-x-auto border-t border-border">
+          <table className="w-full min-w-[48rem] text-left text-sm">
+            <caption className="sr-only">
+              {historyRows.length} most recent stored completed sessions, newest
+              first. Prices in {currency}. No interpolation.
+            </caption>
+            <thead className="bg-muted/40 text-xs uppercase tracking-wide text-muted-foreground">
+              <tr>
+                <th className="px-4 py-3" scope="col">
+                  Session
+                </th>
+                <th className="px-4 py-3 text-right" scope="col">
+                  Open
+                </th>
+                <th className="px-4 py-3 text-right" scope="col">
+                  High
+                </th>
+                <th className="px-4 py-3 text-right" scope="col">
+                  Low
+                </th>
+                <th className="px-4 py-3 text-right" scope="col">
+                  Close
+                </th>
+                <th className="px-4 py-3 text-right" scope="col">
+                  Volume
+                </th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-border font-mono tabular-nums">
+              {historyRows.map((bar) => (
+                <tr key={bar.barId}>
+                  <th className="px-4 py-3 font-medium" scope="row">
+                    <time dateTime={bar.sessionDate}>{bar.sessionDate}</time>
+                  </th>
+                  <td className="px-4 py-3 text-right">
+                    {formatPrice(bar.open, currency)}
+                  </td>
+                  <td className="px-4 py-3 text-right">
+                    {formatPrice(bar.high, currency)}
+                  </td>
+                  <td className="px-4 py-3 text-right">
+                    {formatPrice(bar.low, currency)}
+                  </td>
+                  <td className="px-4 py-3 text-right">
+                    {formatPrice(bar.close, currency)}
+                  </td>
+                  <td className="px-4 py-3 text-right">
+                    {formatVolume(bar.volume)}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </details>
+    </>
   );
 }

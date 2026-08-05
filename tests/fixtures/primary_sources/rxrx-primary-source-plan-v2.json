@@ -1,0 +1,198 @@
+{
+  "contract_version": "primary_source_plan.v2",
+  "plan_id": "f1b00477-fd34-5e00-82fe-b49242915511",
+  "revision": 2,
+  "effective_at": "2026-05-06T23:59:59Z",
+  "question_type": "biotech_moonshot_catalyst_assessment",
+  "workflow_config_version": "biotech-moonshot-catalyst-v1",
+  "security": {
+    "security_id": "a657d245-6bda-5476-930a-911667ea6c64",
+    "cik": "0001601830",
+    "issuer_name": "Recursion Pharmaceuticals, Inc.",
+    "primary_listing_exchange": "NASDAQ"
+  },
+  "sec_passages": [
+    {
+      "reference_key": "sec-required-2026-q1-10q",
+      "role": "required_filing",
+      "selected_form": "10-Q",
+      "selected_accession_number": "0001601830-26-000078",
+      "exact_text": "FORM 10-Q (Mark One) ☒ QUARTERLY REPORT PURSUANT TO SECTION 13 OR 15(d) OF THE SECURITIES EXCHANGE ACT OF 1934 For the quarterly period ended March 31, 2026"
+    },
+    {
+      "reference_key": "sec-identity-rxrx-nasdaq",
+      "role": "identity_listing",
+      "selected_form": "10-Q",
+      "selected_accession_number": "0001601830-26-000078",
+      "exact_text": "Securities registered pursuant to Section 12(b) of the Act: Title of each class Trading symbol(s) Name of each exchange on which registered Class A Common Stock, par value $0.00001 RXRX Nasdaq Global Select Market"
+    },
+    {
+      "reference_key": "financing:basic_shares",
+      "role": "financing",
+      "selected_form": "10-Q",
+      "selected_accession_number": "0001601830-26-000078",
+      "exact_text": "Common stock, $ 0.00001 par value; 2,000,000,000 shares (Class A 1,989,032,117 and Class B 10,967,883 ) authorized as of March 31, 2026 and December 31, 2025; 530,628,653 shares (Class A 524,464,320 , Class B 5,307,334 and Exchangeable 856,999 ) and 528,182,693 shares (Class A 521,831,046 , Class B 5,547,334 and Exchangeable 804,313 ) issued and outstanding as of March 31, 2026 and December 31, 2025, respectively"
+    },
+    {
+      "reference_key": "financing:options",
+      "role": "financing",
+      "selected_form": "10-K",
+      "selected_accession_number": "0001601830-26-000039",
+      "exact_text": "Stock Options Stock options are primarily granted to executive leaders at the Company, generally vest over four years and expire no later than 10 years from the date of grant. Stock option activity during the year ended December 31, 2025 was as follows: (in thousands except share and per share amounts) Shares Weighted-Average Exercise Price Weighted-Average Remaining Contractual Life (in years) Aggregate Intrinsic Value Outstanding as of December 31, 2024 21,941,495 $ 5.40 7.9 $ 62,685 Granted 3,510,673 6.98 Cancelled ( 3,056,772 ) 9.16 Exercised ( 5,079,675 ) 1.03 26,874 Outstanding as of December 31, 2025 17,315,721 $ 6.53 7.3 $ 13,713 Exercisable as of December 31, 2025 10,053,299 $ 6.53 6.3 $ 10,431"
+    },
+    {
+      "reference_key": "financing:rsus",
+      "role": "financing",
+      "selected_form": "10-Q",
+      "selected_accession_number": "0001601830-26-000078",
+      "exact_text": "RSUs Equity awards granted to employees primarily consist of RSUs and generally vest over four years . The weighted-average grant-date fair value of RSUs generally is determined based on the number of units granted and the quoted price of Recursion’s common stock on the date of grant. The following table summarizes Recursion’s RSU activity during the three months ended March 31, 2026: Stock units Weighted-average grant date fair value Outstanding as of December 31, 2025 27,489,925 $ 6.55 Granted 6,154,778 3.98 Vested ( 2,703,740 ) 6.69 Forfeited ( 2,375,565 ) 6.46 Outstanding as of March 31, 2026 28,565,398 $ 5.99"
+    },
+    {
+      "reference_key": "financing:atm_shelf_capacity",
+      "role": "financing",
+      "selected_form": "10-Q",
+      "selected_accession_number": "0001601830-26-000078",
+      "exact_text": "At-The-Market Offerings In February 2026 , the Company entered into a Sales Agreement (the TD Cowen Sales Agreement) with TD Securities (USA), LLC (the TD Cowen Sales Agent), to provide for the offering, issuance and sale of up to an aggregate amount of $ 300 million of its Class A common stock from time to time in at-the-market offerings (the TD Cowen ATM Offering). The TD Cowen ATM Offering was made under a prospectus supplement dated February 24, 2026 and related prospectus filed with the Securities and Exchange Commission pursuant to the Company’s automatically effective shelf registration statement on Form S-3 (Registration No. 333-284878). For the three months ended March 31, 2026, the Company sold no shares. As of March 31, 2026, an amount of $ 300.0 million remained available for future sales under the Sales Agreement."
+    },
+    {
+      "reference_key": "financing:valence-s3asr-2023",
+      "role": "financing",
+      "selected_form": "S-3ASR",
+      "selected_accession_number": "0001601830-23-000036",
+      "exact_text": "up to 5,904,827 shares of Class A common stock (the “Exchange Shares”), that we may issue upon exchange, retraction or redemption of exchangeable shares of 14998685 Canada Inc., a corporation governed by the laws of Canada and an indirect wholly-owned subsidiary of ours that is referred to in this prospectus as “Exchangeco.”"
+    },
+    {
+      "reference_key": "financing:cyclica-424b5-2023",
+      "role": "financing",
+      "selected_form": "424B5",
+      "selected_accession_number": "0001601830-23-000042",
+      "exact_text": "We are also registering up to 203,124 shares of Class A Common Stock issuable upon the exercise of options (the “Options”) by current or former service providers of Cyclica Inc. (“Cyclica”) under Cyclica’s Second Amended and Restated Stock Option Plan."
+    },
+    {
+      "reference_key": "financing:jefferies-atm-2023",
+      "role": "financing",
+      "selected_form": "424B5",
+      "selected_accession_number": "0001601830-23-000059",
+      "exact_text": "In accordance with the terms of the sales agreement, we may offer and sell shares of our Class A Common Stock having an aggregate offering price of up to $300,000,000 from time to time through Jefferies acting as our sales agent."
+    },
+    {
+      "reference_key": "financing:preliminary-offering-2024",
+      "role": "financing",
+      "selected_form": "424B5",
+      "selected_accession_number": "0001601830-24-000088",
+      "exact_text": "We are offering $200.0 million of shares of our Class A common stock, $0.00001 par value per share, or Class A Common Stock, in this offering."
+    },
+    {
+      "reference_key": "financing:final-offering-2024",
+      "role": "financing",
+      "selected_form": "424B5",
+      "selected_accession_number": "0001601830-24-000093",
+      "exact_text": "We are offering 30,769,230 shares of our Class A common stock, $0.00001 par value per share, or Class A Common Stock, in this offering."
+    },
+    {
+      "reference_key": "financing:shelf-s3asr-2025",
+      "role": "financing",
+      "selected_form": "S-3ASR",
+      "selected_accession_number": "0001193125-25-025185",
+      "exact_text": "We may offer or sell Class A Common Stock, preferred stock, depositary shares, debt securities, warrants, subscription rights, purchase contracts and units in one or more offerings and in any combination, and the selling stockholders to be named in a supplement to this prospectus may from time to time offer and sell shares of our Class A Common Stock."
+    },
+    {
+      "reference_key": "financing:citigroup-atm-2025",
+      "role": "financing",
+      "selected_form": "424B5",
+      "selected_accession_number": "0001193125-25-040678",
+      "exact_text": "In accordance with the terms of the sales agreement, we may offer and sell shares of our Class A Common Stock having an aggregate offering price of up to $500,000,000 from time to time through Citigroup acting as our sales agent."
+    },
+    {
+      "reference_key": "financing:td-cowen-atm-2026",
+      "role": "financing",
+      "selected_form": "424B5",
+      "selected_accession_number": "0001601830-26-000041",
+      "exact_text": "In accordance with the terms of the sales agreement, we may offer and sell shares of our Class A Common Stock having an aggregate offering price of up to $300,000,000 from time to time through or to TD Cowen acting as our agent or principal."
+    }
+  ],
+  "issuer_sources": [
+    {
+      "source_key": "rxrx-q1-2026-results",
+      "requirement_id": "issuer_pipeline",
+      "title": "Recursion Q1 2026 financial results and business update",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1601830/000160183026000077/exhibit991-q0126.htm",
+      "publication_time": "2026-05-06T10:30:00Z",
+      "effective_date": "2026-05-06",
+      "coverage_role": "required",
+      "coverage_mode": "all",
+      "passages": [
+        {
+          "passage_key": "rec-4881-program",
+          "locator": "Exhibit 99.1 > Continued Momentum for REC-4881",
+          "exact_text": "REC-4881 is an allosteric MEK1&#47;2 inhibitor being developed for familial adenomatous polyposis (FAP), a genetically defined disease driven by APC loss."
+        },
+        {
+          "passage_key": "rec-4881-fda-engagement",
+          "locator": "Exhibit 99.1 > Continued Momentum for REC-4881",
+          "exact_text": "Recursion has initiated FDA engagement to align on a potential registrational study design, with an update expected in the second half of 2026."
+        },
+        {
+          "passage_key": "rec-4881-catalyst",
+          "locator": "Exhibit 99.1 > REC-4881 programme bullets",
+          "exact_text": "Regulatory update expected in 2H26"
+        }
+      ]
+    }
+  ],
+  "clinical_trial_search": {
+    "program_name": "REC-4881",
+    "search_terms": [
+      "REC-4881"
+    ],
+    "allowed_sponsor_names": [
+      "Recursion Pharmaceuticals"
+    ]
+  },
+  "regulatory_sources": [
+    {
+      "source_key": "fda-gsrs-rec-4881-bridge",
+      "requirement_id": "us_regulatory",
+      "title": "FDA GSRS REC-4881 substance and orphan-designation bridge",
+      "source_url": "https://precision.fda.gov/ginas/app/api/v1/substances(5J61HSP0QJ)?view=internal",
+      "publication_time": "2026-03-03T21:32:33.713Z",
+      "effective_date": "2026-03-03",
+      "coverage_role": "required",
+      "coverage_mode": "all",
+      "passages": [
+        {
+          "passage_key": "rec-4881-name",
+          "locator": "$.names[?(@.name == REC-4881)]",
+          "exact_text": "\"name\":\"REC-4881\""
+        },
+        {
+          "passage_key": "orphan-817621-bridge",
+          "locator": "$.codes[?(@.codeSystem == FDA ORPHAN DRUG && @.code == 817621)]",
+          "exact_text": "\"codeSystem\":\"FDA ORPHAN DRUG\",\"code\":\"817621\",\"comments\":\"ORPHAN DRUG|Designated|Treatment of familial adenomatous polyposis\",\"type\":\"PRIMARY\",\"url\":\"https://www.accessdata.fda.gov/scripts/opdlisting/oopd/detailedIndex.cfm?cfgridkey=817621\""
+        }
+      ]
+    },
+    {
+      "source_key": "fda-oopd-817621",
+      "requirement_id": "us_regulatory",
+      "title": "FDA orphan designation record 817621",
+      "source_url": "https://www.accessdata.fda.gov/scripts/opdlisting/oopd/detailedIndex.cfm?cfgridkey=817621",
+      "publication_time": "2021-09-28",
+      "effective_date": "2021-09-28",
+      "coverage_role": "required",
+      "coverage_mode": "all",
+      "passages": [
+        {
+          "passage_key": "orphan-indication",
+          "locator": "Orphan designation for Record Number 1",
+          "exact_text": "Treatment of familial adenomatous polyposis"
+        },
+        {
+          "passage_key": "designation-date",
+          "locator": "Date designated for Record Number 1",
+          "exact_text": "09/28/2021"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,58 @@
+{
+  "studies": [
+    {
+      "protocolSection": {
+        "identificationModule": {
+          "nctId": "NCT07000001",
+          "briefTitle": "A Pivotal Phase 3 Study of Lead-901",
+          "officialTitle": "A Randomized Phase 3 Study of Lead-901"
+        },
+        "statusModule": {
+          "overallStatus": "ACTIVE_NOT_RECRUITING",
+          "startDateStruct": {
+            "date": "2024-06-01",
+            "type": "ACTUAL"
+          },
+          "primaryCompletionDateStruct": {
+            "date": "2026-08",
+            "type": "ESTIMATED"
+          },
+          "completionDateStruct": {
+            "date": "2026-11",
+            "type": "ESTIMATED"
+          },
+          "studyFirstPostDateStruct": {
+            "date": "2024-05-15",
+            "type": "ACTUAL"
+          },
+          "studyFirstPostDateType": "ACTUAL",
+          "lastUpdatePostDateStruct": {
+            "date": "2026-04-10",
+            "type": "ACTUAL"
+          },
+          "lastUpdatePostDateType": "ACTUAL"
+        },
+        "designModule": {
+          "phases": [
+            "PHASE3"
+          ]
+        },
+        "armsInterventionsModule": {
+          "interventions": [
+            {
+              "type": "DRUG",
+              "name": "Lead-901"
+            }
+          ]
+        },
+        "sponsorCollaboratorsModule": {
+          "leadSponsor": {
+            "name": "Single Asset Therapeutics",
+            "class": "INDUSTRY"
+          }
+        }
+      }
+    }
+  ],
+  "totalCount": 1
+}

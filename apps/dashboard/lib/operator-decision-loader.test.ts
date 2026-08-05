@@ -100,3 +100,84 @@ test("loads strict append-only history, derived current state, and separate effe
     { source: "effects", values: [owner, security, contract] },
   ]);
 });
+
+test("loads personal-research decisions without portfolio handoff markers", async () => {
+  const personalContract =
+    "biotech_moonshot_catalyst_personal_research_v1";
+  const personalDecision = {
+    ...decision,
+    thesis_contract_id: personalContract,
+    operator_action: "no_action",
+    relationship: "defer",
+    rationale: "Reviewed for personal research only.",
+    idempotency_key: "personal-research:no-action",
+  };
+  const personalThesis = {
+    ...thesis,
+    thesis_contract_id: personalContract,
+    question_type_version:
+      "biotech_moonshot_catalyst_personal_research_assessment.v1",
+    workflow_config_version:
+      "biotech-moonshot-catalyst-personal-research-v1",
+    readiness_gate_policy_version: "biotech-personal-readiness.v1",
+  };
+  const personalReadiness = {
+    ...readiness,
+    thesis_contract_id: personalContract,
+    gate_policy_version: "biotech-personal-readiness.v1",
+  };
+  const history = {
+    contract_version: "operator_decision_history.v1",
+    operator_id: owner,
+    security_id: security,
+    thesis_contract_id: personalContract,
+    events: [personalDecision],
+    generated_at: personalDecision.created_at,
+  };
+  const current = {
+    contract_version: "operator_decision_current_state.v1",
+    operator_id: owner,
+    security_id: security,
+    thesis_contract_id: personalContract,
+    current_operator_decision_id: personalDecision.operator_decision_id,
+    current_operator_action: personalDecision.operator_action,
+    current_relationship: personalDecision.relationship,
+    supersession_depth: 0,
+    derived_at: personalDecision.created_at,
+  };
+  const load = createOperatorDecisionLoader(
+    async () => [{
+      operator_id: owner,
+      security_id: security,
+      thesis_contract_id: personalContract,
+      canonical_history: history,
+    }],
+    async () => [{
+      operator_id: owner,
+      security_id: security,
+      thesis_contract_id: personalContract,
+      current_operator_decision_id: personalDecision.operator_decision_id,
+      canonical_current_state: current,
+    }],
+    async () => [{
+      operator_id: owner,
+      security_id: security,
+      thesis_contract_id: personalContract,
+      operator_decision_id: personalDecision.operator_decision_id,
+      thesis_version_id: personalDecision.thesis_version_id,
+      committee_result_id: personalDecision.committee_result_id,
+      readiness_gate_result_id: personalDecision.readiness_gate_result_id,
+      canonical_decision: personalDecision,
+      canonical_thesis: personalThesis,
+      canonical_readiness: personalReadiness,
+      canonical_command: null,
+      canonical_marker: null,
+    }],
+  );
+
+  const result = await load(owner, security, personalContract);
+
+  assert.equal(result.history?.thesis_contract_id, personalContract);
+  assert.equal(result.current?.current_operator_action, "no_action");
+  assert.deepEqual(result.handoffMarkers, []);
+});

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from datetime import UTC, date, datetime, time
+from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 import re
 from typing import Callable, Protocol
@@ -47,6 +47,7 @@ class PriceObservation:
     corporate_action_adjustment_status: str
     provider: str
     source_reference: str
+    halt_verification_status: str = "verified_not_halted"
 
 
 @dataclass(frozen=True, slots=True)
@@ -63,23 +64,37 @@ class CapitalStructureInput:
     basic_shares_outstanding: str
     fully_diluted_shares: str
     cash: str
+    restricted_cash: str
+    restricted_cash_treatment: str
     debt: str
     other_included_claims: str
     included_cash: str
     currency: str
-    effective_date: date
+    basic_shares_effective_at: datetime
+    fully_diluted_shares_effective_at: datetime
+    cash_effective_at: datetime
+    restricted_cash_effective_at: datetime
+    included_cash_effective_at: datetime
+    debt_effective_at: datetime
+    other_included_claims_effective_at: datetime
     basic_shares_evidence_ids: tuple[str, ...]
     diluted_shares_evidence_ids: tuple[str, ...]
     cash_evidence_ids: tuple[str, ...]
+    restricted_cash_evidence_ids: tuple[str, ...]
     debt_evidence_ids: tuple[str, ...]
+    other_included_claims_evidence_ids: tuple[str, ...]
     basic_shares_freshness_state: str = "current"
     basic_shares_freshness_reason_code: str = "current_at_cutoff"
     diluted_shares_freshness_state: str = "current"
     diluted_shares_freshness_reason_code: str = "current_at_cutoff"
     cash_freshness_state: str = "current"
     cash_freshness_reason_code: str = "current_at_cutoff"
+    restricted_cash_freshness_state: str = "current"
+    restricted_cash_freshness_reason_code: str = "current_at_cutoff"
     debt_freshness_state: str = "current"
     debt_freshness_reason_code: str = "current_at_cutoff"
+    other_included_claims_freshness_state: str = "current"
+    other_included_claims_freshness_reason_code: str = "current_at_cutoff"
     freshness_policy_version: str = "biotech-valuation-freshness-v1"
     dilution_instruments: tuple[DilutionInstrument, ...] = ()
 
@@ -114,6 +129,56 @@ class ValuationSourceReference:
     published_at: datetime | None
     retrieved_at: datetime
     effective_at: datetime | None
+    provider_plan_id: str | None = None
+    response_sha256: str | None = None
+    provider_contract_status: str | None = None
+    provider_limitation_codes: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class ValuationAssurance:
+    level: str
+    usage_scope: str
+    rights_assurance: str
+    limitation_codes: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class ValuationContract:
+    contract_version: str
+    price_type: str
+    missing_price_reason_code: str
+    snapshot_id_namespace: str
+    required_policy_version: str | None
+    assurance: ValuationAssurance | None
+
+
+STRICT_VALUATION_CONTRACT = ValuationContract(
+    contract_version="valuation_snapshot.v1",
+    price_type="official_unadjusted_close",
+    missing_price_reason_code="official_close_unavailable",
+    snapshot_id_namespace="valuation-snapshot",
+    required_policy_version=None,
+    assurance=None,
+)
+
+PERSONAL_RESEARCH_VALUATION_CONTRACT = ValuationContract(
+    contract_version="valuation_snapshot.personal_research.v1",
+    price_type="verified_consolidated_end_of_day_close",
+    missing_price_reason_code="consolidated_close_unavailable",
+    snapshot_id_namespace="personal-research-valuation-snapshot",
+    required_policy_version="personal_research_valuation_v1",
+    assurance=ValuationAssurance(
+        level="personal_research",
+        usage_scope="private_personal_research",
+        rights_assurance="not_independently_verified",
+        limitation_codes=(
+            "not_primary_venue_official_close",
+            "not_institutional_grade",
+            "not_for_trade_execution",
+        ),
+    ),
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -129,6 +194,10 @@ class DerivedValuation:
 
 @dataclass(frozen=True, slots=True)
 class ValuationInputCandidate:
+    security_id: str
+    evidence_bundle_id: str
+    evidence_bundle_hash: str
+    market_session: MarketSession
     prices: tuple[PriceObservation, ...]
     capital: CapitalStructureInput
     corporate_action: CorporateActionReconciliation
@@ -165,6 +234,8 @@ class ValuationSnapshot:
     freshness_policy_version: str
     materiality_policy_version: str
     created_at: datetime
+    contract_version: str = "valuation_snapshot.v1"
+    valuation_assurance: ValuationAssurance | None = None
 
     def as_dict(self) -> dict[str, object]:
         return _snapshot_wire(self)
@@ -181,8 +252,8 @@ class MarketCalendar(Protocol):
 class ValuationInputSource(Protocol):
     def load(
         self,
-        security_id: str,
-        cutoff: datetime,
+        bundle: EvidenceBundle,
+        session: MarketSession,
     ) -> ValuationInputCandidate: ...
 
 
@@ -212,9 +283,7 @@ class InMemoryValuationSnapshotRepository:
         existing = self._snapshots.get(key)
         if existing is not None:
             if existing != snapshot:
-                raise ValuationSnapshotError(
-                    "conflicting immutable valuation snapshot"
-                )
+                raise ValuationSnapshotError("conflicting immutable valuation snapshot")
             return existing
         run_key = (snapshot.operator_id, snapshot.research_run_id)
         existing_id = self._snapshot_ids_by_run.get(run_key)
@@ -238,9 +307,7 @@ class InMemoryValuationSnapshotRepository:
         operator_id: str,
         research_run_id: str,
     ) -> ValuationSnapshot | None:
-        snapshot_id = self._snapshot_ids_by_run.get(
-            (operator_id, research_run_id)
-        )
+        snapshot_id = self._snapshot_ids_by_run.get((operator_id, research_run_id))
         if snapshot_id is None:
             return None
         return self.get(operator_id, snapshot_id)
@@ -255,12 +322,14 @@ class ValuationSnapshotWorkflow:
         market_calendar: MarketCalendar,
         input_source: ValuationInputSource,
         clock: Callable[[], datetime],
+        _contract: ValuationContract = STRICT_VALUATION_CONTRACT,
     ) -> None:
         self._evidence_bundle_repository = evidence_bundle_repository
         self._valuation_snapshot_repository = valuation_snapshot_repository
         self._market_calendar = market_calendar
         self._input_source = input_source
         self._clock = clock
+        self._contract = _contract
 
     def materialize(
         self,
@@ -299,10 +368,18 @@ class ValuationSnapshotWorkflow:
         ):
             raise ValuationSnapshotError("calendar returned incomplete session")
         candidate = self._input_source.load(
-            bundle.security_id,
-            bundle.as_of_cutoff,
+            bundle,
+            session,
         )
-        _validate_candidate(candidate, bundle)
+        _validate_candidate(candidate, bundle, session)
+        if (
+            self._contract.required_policy_version is not None
+            and candidate.valuation_policy_version
+            != self._contract.required_policy_version
+        ):
+            raise ValuationSnapshotError("valuation policy does not match contract")
+        if self._contract.assurance is not None:
+            _validate_personal_contract_candidate(candidate)
         materiality_assessments, price_information_state = _align_materiality(
             candidate.materiality_assessments,
             session.closes_at,
@@ -315,11 +392,10 @@ class ValuationSnapshotWorkflow:
         matches = tuple(
             observation
             for observation in candidate.prices
-            if observation.price_type == "official_unadjusted_close"
+            if observation.price_type == self._contract.price_type
             and observation.session_type == "regular_us_trading_session"
             and observation.session_date == session.session_date
-            and observation.primary_listing_exchange
-            == session.primary_listing_exchange
+            and observation.primary_listing_exchange == session.primary_listing_exchange
             and observation.official_close_timestamp == session.closes_at
         )
         created_at = self._clock()
@@ -340,9 +416,10 @@ class ValuationSnapshotWorkflow:
                     candidate,
                     session,
                     None,
-                    "official_close_unavailable",
+                    self._contract.missing_price_reason_code,
                     "indeterminate",
                     created_at,
+                    self._contract,
                 )
             )
         if matches[0].currency != candidate.capital.currency:
@@ -356,6 +433,7 @@ class ValuationSnapshotWorkflow:
                     "currency_mismatch",
                     price_information_state,
                     created_at,
+                    self._contract,
                 )
             )
         if candidate.corporate_action.reconciliation_result not in {
@@ -377,6 +455,7 @@ class ValuationSnapshotWorkflow:
                     reason,
                     price_information_state,
                     created_at,
+                    self._contract,
                 )
             )
         if matches[0].corporate_action_adjustment_status != "unadjusted":
@@ -390,9 +469,18 @@ class ValuationSnapshotWorkflow:
                     "price_adjustment_status_invalid",
                     price_information_state,
                     created_at,
+                    self._contract,
                 )
             )
-        if matches[0].market_status != "closed":
+        if (
+            self._contract.assurance is not None
+            and matches[0].halt_verification_status != "verified_not_halted"
+        ):
+            market_reason = (
+                "market_halted"
+                if matches[0].halt_verification_status == "halted"
+                else "market_halt_status_indeterminate"
+            )
             return self._valuation_snapshot_repository.save(
                 _invalid_snapshot(
                     operator.id,
@@ -400,16 +488,38 @@ class ValuationSnapshotWorkflow:
                     candidate,
                     session,
                     matches[0],
-                    "market_halted",
+                    market_reason,
                     price_information_state,
                     created_at,
+                    self._contract,
+                )
+            )
+        if matches[0].market_status != "closed":
+            market_reason = (
+                "market_halt_status_indeterminate"
+                if matches[0].market_status == "indeterminate"
+                else "market_halted"
+            )
+            return self._valuation_snapshot_repository.save(
+                _invalid_snapshot(
+                    operator.id,
+                    bundle,
+                    candidate,
+                    session,
+                    matches[0],
+                    market_reason,
+                    price_information_state,
+                    created_at,
+                    self._contract,
                 )
             )
         freshness_states = (
             candidate.capital.basic_shares_freshness_state,
             candidate.capital.diluted_shares_freshness_state,
             candidate.capital.cash_freshness_state,
+            candidate.capital.restricted_cash_freshness_state,
             candidate.capital.debt_freshness_state,
+            candidate.capital.other_included_claims_freshness_state,
         )
         if any(state != "current" for state in freshness_states):
             reason = (
@@ -427,6 +537,7 @@ class ValuationSnapshotWorkflow:
                     reason,
                     price_information_state,
                     created_at,
+                    self._contract,
                 )
             )
         expected_diluted_shares = _decimal(
@@ -456,6 +567,7 @@ class ValuationSnapshotWorkflow:
                     "diluted_share_reconciliation_mismatch",
                     price_information_state,
                     created_at,
+                    self._contract,
                 )
             )
         market_capitalization, enterprise_value = _calculate_values(
@@ -467,7 +579,7 @@ class ValuationSnapshotWorkflow:
         snapshot = ValuationSnapshot(
             id=stable_id(
                 operator.id,
-                "valuation-snapshot",
+                self._contract.snapshot_id_namespace,
                 bundle.id,
             ),
             operator_id=operator.id,
@@ -492,15 +604,35 @@ class ValuationSnapshotWorkflow:
             snapshot_status="valid",
             invalid_reason_codes=(),
             price_information_state=price_information_state,
-            market_relative_analysis_permitted=(
-                price_information_state == "aligned"
-            ),
+            market_relative_analysis_permitted=(price_information_state == "aligned"),
             valuation_policy_version=candidate.valuation_policy_version,
             freshness_policy_version=candidate.freshness_policy_version,
             materiality_policy_version=candidate.materiality_policy_version,
             created_at=created_at,
+            contract_version=self._contract.contract_version,
+            valuation_assurance=self._contract.assurance,
         )
         return self._valuation_snapshot_repository.save(snapshot)
+
+
+class PersonalResearchValuationSnapshotWorkflow(ValuationSnapshotWorkflow):
+    def __init__(
+        self,
+        *,
+        evidence_bundle_repository: EvidenceBundleRepository,
+        valuation_snapshot_repository: ValuationSnapshotRepository,
+        market_calendar: MarketCalendar,
+        input_source: ValuationInputSource,
+        clock: Callable[[], datetime],
+    ) -> None:
+        super().__init__(
+            evidence_bundle_repository=evidence_bundle_repository,
+            valuation_snapshot_repository=valuation_snapshot_repository,
+            market_calendar=market_calendar,
+            input_source=input_source,
+            clock=clock,
+            _contract=PERSONAL_RESEARCH_VALUATION_CONTRACT,
+        )
 
 
 def _align_materiality(
@@ -542,7 +674,15 @@ def _align_materiality(
 def _validate_candidate(
     candidate: ValuationInputCandidate,
     bundle: EvidenceBundle,
+    session: MarketSession,
 ) -> None:
+    if (
+        candidate.security_id != bundle.security_id
+        or candidate.evidence_bundle_id != bundle.id
+        or candidate.evidence_bundle_hash != bundle.content_hash
+        or candidate.market_session != session
+    ):
+        raise ValuationSnapshotError("valuation candidate identity mismatch")
     capital = candidate.capital
     if not re.fullmatch(r"[A-Z]{3}", capital.currency):
         raise ValuationSnapshotError("invalid valuation currency")
@@ -550,24 +690,64 @@ def _validate_candidate(
         (capital.basic_shares_outstanding, "basic shares outstanding"),
         (capital.fully_diluted_shares, "fully diluted shares"),
         (capital.cash, "cash"),
+        (capital.restricted_cash, "restricted cash"),
         (capital.debt, "debt"),
         (capital.other_included_claims, "other included claims"),
         (capital.included_cash, "included cash"),
     ):
         _decimal(value, label)
-    if capital.effective_date > bundle.as_of_cutoff.date():
-        raise ValuationSnapshotError("capital input occurs after cutoff")
+    effective_timestamps = (
+        capital.basic_shares_effective_at,
+        capital.fully_diluted_shares_effective_at,
+        capital.cash_effective_at,
+        capital.restricted_cash_effective_at,
+        capital.included_cash_effective_at,
+        capital.debt_effective_at,
+        capital.other_included_claims_effective_at,
+    )
+    if any(
+        value.tzinfo is None or value.utcoffset() is None or value > bundle.as_of_cutoff
+        for value in effective_timestamps
+    ):
+        raise ValuationSnapshotError("capital input timestamp is invalid")
+    cash = _decimal(capital.cash, "cash")
+    restricted_cash = _decimal(capital.restricted_cash, "restricted cash")
+    included_cash = _decimal(capital.included_cash, "included cash")
+    if (
+        len(
+            {
+                capital.cash_effective_at,
+                capital.restricted_cash_effective_at,
+                capital.included_cash_effective_at,
+            }
+        )
+        != 1
+    ):
+        raise ValuationSnapshotError("restricted cash effective time mismatch")
+    if capital.restricted_cash_treatment == "none":
+        expected_included_cash = cash
+        valid_restricted_cash = restricted_cash == 0
+    elif capital.restricted_cash_treatment == "included":
+        expected_included_cash = cash
+        valid_restricted_cash = restricted_cash <= cash
+    elif capital.restricted_cash_treatment == "excluded":
+        expected_included_cash = cash - restricted_cash
+        valid_restricted_cash = restricted_cash <= cash
+    else:
+        raise ValuationSnapshotError("restricted cash treatment is invalid")
+    if not valid_restricted_cash or included_cash != expected_included_cash:
+        raise ValuationSnapshotError("restricted cash reconciliation mismatch")
     if candidate.freshness_policy_version != capital.freshness_policy_version:
         raise ValuationSnapshotError("freshness policy mismatch")
 
     evidence_ids = {item.evidence_id for item in bundle.manifest}
     materiality_ids = [
-        assessment.evidence_id
-        for assessment in candidate.materiality_assessments
+        assessment.evidence_id for assessment in candidate.materiality_assessments
     ]
-    if len(materiality_ids) != len(set(materiality_ids)) or set(
-        materiality_ids
-    ) != evidence_ids:
+    if (
+        len(materiality_ids) != len(set(materiality_ids))
+        or set(materiality_ids) != evidence_ids
+    ):
         raise ValuationSnapshotError(
             "materiality assessments must cover bundle evidence exactly"
         )
@@ -575,13 +755,17 @@ def _validate_candidate(
         if assessment.policy_version != candidate.materiality_policy_version:
             raise ValuationSnapshotError("materiality policy mismatch")
 
-    source_ids = {
-        source.source_reference_id for source in candidate.source_references
-    }
+    source_ids = {source.source_reference_id for source in candidate.source_references}
     if len(source_ids) != len(candidate.source_references):
         raise ValuationSnapshotError("duplicate valuation source reference")
     for price in candidate.prices:
         _decimal(price.price, "share price")
+        if price.halt_verification_status not in {
+            "verified_not_halted",
+            "halted",
+            "indeterminate",
+        }:
+            raise ValuationSnapshotError("invalid halt verification status")
         if price.source_reference not in source_ids:
             raise ValuationSnapshotError("unresolved price source reference")
         if (
@@ -597,15 +781,29 @@ def _validate_candidate(
             "dilution instrument increment",
         )
         if instrument.effective_at > bundle.as_of_cutoff:
-            raise ValuationSnapshotError(
-                "dilution instrument occurs after cutoff"
-            )
+            raise ValuationSnapshotError("dilution instrument occurs after cutoff")
 
+    required_evidence_groups = (
+        capital.basic_shares_evidence_ids,
+        capital.diluted_shares_evidence_ids,
+        capital.cash_evidence_ids,
+        capital.restricted_cash_evidence_ids,
+        capital.debt_evidence_ids,
+        capital.other_included_claims_evidence_ids,
+        *(
+            instrument.supporting_evidence_ids
+            for instrument in capital.dilution_instruments
+        ),
+    )
+    if any(not evidence_ids for evidence_ids in required_evidence_groups):
+        raise ValuationSnapshotError("capital input evidence is incomplete")
     supported_evidence = (
         *capital.basic_shares_evidence_ids,
         *capital.diluted_shares_evidence_ids,
         *capital.cash_evidence_ids,
+        *capital.restricted_cash_evidence_ids,
         *capital.debt_evidence_ids,
+        *capital.other_included_claims_evidence_ids,
         *(
             evidence_id
             for instrument in capital.dilution_instruments
@@ -614,6 +812,49 @@ def _validate_candidate(
     )
     if any(evidence_id not in evidence_ids for evidence_id in supported_evidence):
         raise ValuationSnapshotError("unresolved valuation evidence")
+
+
+def _validate_personal_contract_candidate(
+    candidate: ValuationInputCandidate,
+) -> None:
+    sources = {
+        source.source_reference_id: source for source in candidate.source_references
+    }
+    for price in candidate.prices:
+        if price.price_type != PERSONAL_RESEARCH_VALUATION_CONTRACT.price_type:
+            continue
+        source = sources[price.source_reference]
+        if (
+            source.source_type != "personal_market_data"
+            or source.provider_plan_id is None
+            or not source.provider_plan_id.strip()
+            or source.response_sha256 is None
+            or re.fullmatch(r"[0-9a-f]{64}", source.response_sha256) is None
+            or source.provider_contract_status is None
+            or not source.provider_contract_status.strip()
+            or not source.provider_limitation_codes
+            or len(set(source.provider_limitation_codes))
+            != len(source.provider_limitation_codes)
+            or any(
+                re.fullmatch(r"[a-z][a-z0-9_]{0,127}", code) is None
+                for code in source.provider_limitation_codes
+            )
+        ):
+            raise ValuationSnapshotError(
+                "personal market source provenance is incomplete"
+            )
+    for source in candidate.source_references:
+        if source.source_type not in {"personal_market_data", "primary_filing"}:
+            raise ValuationSnapshotError("personal valuation source type is invalid")
+        if source.source_type == "primary_filing" and (
+            source.provider_plan_id is not None
+            or source.response_sha256 is not None
+            or source.provider_contract_status is not None
+            or source.provider_limitation_codes
+        ):
+            raise ValuationSnapshotError(
+                "primary filing cannot carry market provider provenance"
+            )
 
 
 def _invalid_snapshot(
@@ -625,6 +866,7 @@ def _invalid_snapshot(
     reason: str,
     price_information_state: str,
     created_at: datetime,
+    contract: ValuationContract,
 ) -> ValuationSnapshot:
     calculation_ids = (
         ()
@@ -632,7 +874,7 @@ def _invalid_snapshot(
         else (_fully_diluted_calculation_id(operator_id, bundle.id),)
     )
     return ValuationSnapshot(
-        id=stable_id(operator_id, "valuation-snapshot", bundle.id),
+        id=stable_id(operator_id, contract.snapshot_id_namespace, bundle.id),
         operator_id=operator_id,
         research_run_id=bundle.research_run_id,
         evidence_bundle_id=bundle.id,
@@ -656,6 +898,8 @@ def _invalid_snapshot(
         freshness_policy_version=candidate.freshness_policy_version,
         materiality_policy_version=candidate.materiality_policy_version,
         created_at=created_at,
+        contract_version=contract.contract_version,
+        valuation_assurance=contract.assurance,
     )
 
 
@@ -683,6 +927,7 @@ def _capital_measure_wire(
     input_name: str,
     value: str,
     unit: str,
+    effective_at: datetime,
     evidence_ids: tuple[str, ...],
     freshness_state: str,
     freshness_reason_code: str,
@@ -702,16 +947,10 @@ def _capital_measure_wire(
         "input_id": _input_id(snapshot, input_name),
         "value": value,
         "unit": unit,
-        "effective_at": datetime.combine(
-            capital.effective_date,
-            time(23, 59, 59),
-            tzinfo=UTC,
-        ).isoformat(),
+        "effective_at": effective_at.isoformat(),
         "calculation_method": "calculated" if calculated else "reported",
         "formula": (
-            "basic shares outstanding + dilution instruments"
-            if calculated
-            else None
+            "basic shares outstanding + dilution instruments" if calculated else None
         ),
         "calculation_id": calculation_id,
         "input_ids": (
@@ -748,17 +987,16 @@ def _derived_wire(value: DerivedValuation | None) -> dict[str, object] | None:
 
 def _snapshot_wire(snapshot: ValuationSnapshot) -> dict[str, object]:
     price = snapshot.price
-    price_basis = (
-        None
-        if price is None
-        else {
+    if price is None:
+        price_basis = None
+    else:
+        price_basis = {
             "input_id": _input_id(snapshot, "share_price"),
             "price_type": price.price_type,
             "session_type": price.session_type,
             "session_date": price.session_date.isoformat(),
             "primary_listing_exchange": price.primary_listing_exchange,
             "share_price": price.price,
-            "official_close_timestamp": price.official_close_timestamp.isoformat(),
             "market_calendar_version": snapshot.session.calendar_version,
             "market_status": price.market_status,
             "corporate_action_adjustment_status": (
@@ -766,16 +1004,22 @@ def _snapshot_wire(snapshot: ValuationSnapshot) -> dict[str, object]:
             ),
             "provider_source_reference_id": price.source_reference,
         }
-    )
+        if snapshot.valuation_assurance is None:
+            price_basis["official_close_timestamp"] = (
+                price.official_close_timestamp.isoformat()
+            )
+        else:
+            price_basis["price_timestamp"] = price.official_close_timestamp.isoformat()
+            price_basis["timestamp_basis"] = "market_calendar_session_close"
+            price_basis["halt_verification_status"] = price.halt_verification_status
     capital = snapshot.capital
     evidence_ids = tuple(
         dict.fromkeys(
-            assessment.evidence_id
-            for assessment in snapshot.materiality_assessments
+            assessment.evidence_id for assessment in snapshot.materiality_assessments
         )
     )
-    return {
-        "contract_version": "valuation_snapshot.v1",
+    wire = {
+        "contract_version": snapshot.contract_version,
         "id": snapshot.id,
         "operator_id": snapshot.operator_id,
         "research_run_id": snapshot.research_run_id,
@@ -792,6 +1036,7 @@ def _snapshot_wire(snapshot: ValuationSnapshot) -> dict[str, object]:
             "basic_shares_outstanding",
             capital.basic_shares_outstanding,
             "shares",
+            capital.basic_shares_effective_at,
             capital.basic_shares_evidence_ids,
             capital.basic_shares_freshness_state,
             capital.basic_shares_freshness_reason_code,
@@ -802,9 +1047,7 @@ def _snapshot_wire(snapshot: ValuationSnapshot) -> dict[str, object]:
                 "instrument_type": instrument.instrument_type,
                 "diluted_share_increment": instrument.diluted_share_increment,
                 "effective_at": instrument.effective_at.isoformat(),
-                "supporting_evidence_ids": list(
-                    instrument.supporting_evidence_ids
-                ),
+                "supporting_evidence_ids": list(instrument.supporting_evidence_ids),
             }
             for instrument in capital.dilution_instruments
         ],
@@ -813,6 +1056,7 @@ def _snapshot_wire(snapshot: ValuationSnapshot) -> dict[str, object]:
             "fully_diluted_shares",
             capital.fully_diluted_shares,
             "shares",
+            capital.fully_diluted_shares_effective_at,
             capital.diluted_shares_evidence_ids,
             capital.diluted_shares_freshness_state,
             capital.diluted_shares_freshness_reason_code,
@@ -829,6 +1073,7 @@ def _snapshot_wire(snapshot: ValuationSnapshot) -> dict[str, object]:
             "included_cash",
             capital.included_cash,
             capital.currency,
+            capital.included_cash_effective_at,
             capital.cash_evidence_ids,
             capital.cash_freshness_state,
             capital.cash_freshness_reason_code,
@@ -838,13 +1083,45 @@ def _snapshot_wire(snapshot: ValuationSnapshot) -> dict[str, object]:
             "included_debt",
             capital.debt,
             capital.currency,
+            capital.debt_effective_at,
             capital.debt_evidence_ids,
             capital.debt_freshness_state,
             capital.debt_freshness_reason_code,
         ),
-        "market_capitalization": _derived_wire(
-            snapshot.market_capitalization
+        "cash_treatment": {
+            "reported_cash": _capital_measure_wire(
+                snapshot,
+                "reported_cash",
+                capital.cash,
+                capital.currency,
+                capital.cash_effective_at,
+                capital.cash_evidence_ids,
+                capital.cash_freshness_state,
+                capital.cash_freshness_reason_code,
+            ),
+            "restricted_cash": _capital_measure_wire(
+                snapshot,
+                "restricted_cash",
+                capital.restricted_cash,
+                capital.currency,
+                capital.restricted_cash_effective_at,
+                capital.restricted_cash_evidence_ids,
+                capital.restricted_cash_freshness_state,
+                capital.restricted_cash_freshness_reason_code,
+            ),
+            "restricted_cash_treatment": (capital.restricted_cash_treatment),
+        },
+        "other_included_claims": _capital_measure_wire(
+            snapshot,
+            "other_included_claims",
+            capital.other_included_claims,
+            capital.currency,
+            capital.other_included_claims_effective_at,
+            capital.other_included_claims_evidence_ids,
+            capital.other_included_claims_freshness_state,
+            capital.other_included_claims_freshness_reason_code,
         ),
+        "market_capitalization": _derived_wire(snapshot.market_capitalization),
         "enterprise_value": _derived_wire(snapshot.enterprise_value),
         "source_references": [
             {
@@ -862,6 +1139,31 @@ def _snapshot_wire(snapshot: ValuationSnapshot) -> dict[str, object]:
                     source.effective_at.isoformat()
                     if source.effective_at is not None
                     else None
+                ),
+                **(
+                    {
+                        "provider_plan_id": source.provider_plan_id,
+                        "response_sha256": source.response_sha256,
+                        "provider_contract_status": (
+                            source.provider_contract_status
+                        ),
+                        "provider_limitation_codes": list(
+                            source.provider_limitation_codes
+                        ),
+                    }
+                    if snapshot.valuation_assurance is not None
+                    else {
+                        **(
+                            {"provider_plan_id": source.provider_plan_id}
+                            if source.provider_plan_id is not None
+                            else {}
+                        ),
+                        **(
+                            {"response_sha256": source.response_sha256}
+                            if source.response_sha256 is not None
+                            else {}
+                        ),
+                    }
                 ),
             }
             for source in snapshot.source_references
@@ -882,9 +1184,7 @@ def _snapshot_wire(snapshot: ValuationSnapshot) -> dict[str, object]:
             "share_count_adjustment_status": (
                 snapshot.corporate_action.share_count_adjustment_status
             ),
-            "reconciliation_result": (
-                snapshot.corporate_action.reconciliation_result
-            ),
+            "reconciliation_result": (snapshot.corporate_action.reconciliation_result),
         },
         "evidence_materiality": [
             {
@@ -896,9 +1196,7 @@ def _snapshot_wire(snapshot: ValuationSnapshot) -> dict[str, object]:
                 ),
                 "timing_state": assessment.timing_state,
                 "market_materiality": assessment.market_materiality,
-                "materiality_reason_code": (
-                    assessment.materiality_reason_code
-                ),
+                "materiality_reason_code": (assessment.materiality_reason_code),
                 "materiality_policy_version": assessment.policy_version,
                 "affected_domains": list(assessment.affected_domains),
             }
@@ -913,6 +1211,14 @@ def _snapshot_wire(snapshot: ValuationSnapshot) -> dict[str, object]:
         "materiality_policy_version": snapshot.materiality_policy_version,
         "created_at": snapshot.created_at.isoformat(),
     }
+    if snapshot.valuation_assurance is not None:
+        wire["valuation_assurance"] = {
+            "level": snapshot.valuation_assurance.level,
+            "usage_scope": snapshot.valuation_assurance.usage_scope,
+            "rights_assurance": snapshot.valuation_assurance.rights_assurance,
+            "limitation_codes": list(snapshot.valuation_assurance.limitation_codes),
+        }
+    return wire
 
 
 def _decimal(value: str, label: str) -> Decimal:
@@ -939,9 +1245,13 @@ def _calculate_values(
         "fully diluted shares",
     )
     debt = _decimal(capital.debt, "debt")
+    other_included_claims = _decimal(
+        capital.other_included_claims,
+        "other included claims",
+    )
     included_cash = _decimal(capital.included_cash, "included cash")
     market_cap_value = share_price * fully_diluted_shares
-    enterprise_value = market_cap_value + debt - included_cash
+    enterprise_value = market_cap_value + debt + other_included_claims - included_cash
     if enterprise_value < 0:
         raise ValuationSnapshotError("enterprise value cannot be negative")
 
@@ -959,6 +1269,11 @@ def _calculate_values(
         operator_id,
         "valuation-input",
         f"{evidence_bundle_id}:included_debt",
+    )
+    other_claims_input_id = stable_id(
+        operator_id,
+        "valuation-input",
+        f"{evidence_bundle_id}:other_included_claims",
     )
     cash_input_id = stable_id(
         operator_id,
@@ -987,15 +1302,23 @@ def _calculate_values(
     return market_capitalization, DerivedValuation(
         value=format(enterprise_value, "f"),
         unit=capital.currency,
-        formula="market_capitalization + debt - cash",
+        formula=(
+            "market_capitalization + debt + other_included_claims - included_cash"
+        ),
         formula_version="enterprise-value-v1",
-        input_ids=(market_cap_id, debt_input_id, cash_input_id),
+        input_ids=(
+            market_cap_id,
+            debt_input_id,
+            other_claims_input_id,
+            cash_input_id,
+        ),
         calculation_id=enterprise_value_id,
         supporting_evidence_ids=tuple(
             dict.fromkeys(
                 (
                     *capital.diluted_shares_evidence_ids,
                     *capital.debt_evidence_ids,
+                    *capital.other_included_claims_evidence_ids,
                     *capital.cash_evidence_ids,
                 )
             )
@@ -1011,7 +1334,12 @@ __all__ = [
     "InMemoryValuationSnapshotRepository",
     "MarketSession",
     "MaterialityAssessment",
+    "PERSONAL_RESEARCH_VALUATION_CONTRACT",
+    "PersonalResearchValuationSnapshotWorkflow",
     "PriceObservation",
+    "STRICT_VALUATION_CONTRACT",
+    "ValuationAssurance",
+    "ValuationContract",
     "ValuationInputCandidate",
     "ValuationSnapshot",
     "ValuationSnapshotError",

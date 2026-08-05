@@ -490,6 +490,8 @@ def _bundle_from_wire(payload: Mapping[str, Any]) -> EvidenceBundle:
                 source_class=item["source_class"],
                 blocking=True,
                 explanation=item["explanation"],
+                requirement_id=item.get("requirement_id"),
+                reason_code=item.get("reason_code"),
             )
             for item in payload["gaps"]
         ),

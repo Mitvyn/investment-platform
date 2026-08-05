@@ -162,3 +162,12 @@ export {
   type ValuationSnapshot,
   type ValuationSourceReference,
 } from "./valuation-snapshot";
+export {
+  parsePersonalResearchValuationSnapshot,
+  parseResearchValuationSnapshot,
+  type PersonalResearchPriceBasis,
+  type PersonalResearchValuationAssurance,
+  type PersonalResearchValuationSnapshot,
+  type PersonalResearchValuationSourceReference,
+  type ResearchValuationSnapshot,
+} from "./personal-research-valuation-snapshot";

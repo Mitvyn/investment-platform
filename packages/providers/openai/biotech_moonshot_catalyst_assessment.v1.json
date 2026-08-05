@@ -1,0 +1,250 @@
+{
+  "contract_version": "openai_execution_contract_registry.v1",
+  "question_type_version": "biotech_moonshot_catalyst_assessment.v1",
+  "workflow_config_version": "biotech-moonshot-catalyst-v1",
+  "execution_roles": [
+    "grader:moonshot",
+    "grader:catalyst",
+    "grader:biotech",
+    "grader:risk_dilution",
+    "grader:valuation",
+    "synthesizer"
+  ],
+  "contracts": [
+    {
+      "contract_version": "openai_execution_contract.v1",
+      "execution_role": "grader:moonshot",
+      "execution_contract_version": "moonshot-grader-contract-v1",
+      "owned_decision_question": "Is the opportunity meaningfully asymmetric?",
+      "eligibility_rule_version": "moonshot-eligibility-v1",
+      "eligibility_rules": [
+        "The security passed the workflow security-eligibility policy using evidence available on or before the cutoff.",
+        "The frozen bundle contains an active therapeutic programme and an identifiable clinical or regulatory catalyst.",
+        "The grader executes only when the router records Moonshot as eligible for this research run."
+      ],
+      "rubric_version": "moonshot-rubric-v1",
+      "rubric": [
+        "Assess mission relevance without treating mission value as proof of commercial success.",
+        "Identify asymmetric upside drivers and the assumptions required for them to become material.",
+        "Classify evidence maturity and distinguish clinical support from preclinical promise.",
+        "Assess whether success could create material strategic or societal value.",
+        "Map the domain conclusion to the shared proposition without voting on disposition."
+      ],
+      "abstention_rule_version": "moonshot-abstention-v1",
+      "abstention_rules": [
+        "Abstain when the frozen evidence cannot identify the claimed asymmetric outcome or its material drivers.",
+        "Abstain when evidence maturity cannot be classified from cited bundle evidence.",
+        "Record the exact missing evidence required for a defensible conclusion and produce no stance."
+      ],
+      "authority_rules": [
+        "Use only the frozen bundle and deterministic calculation results supplied in the request.",
+        "Do not inspect another grader opinion or infer portfolio action, trade direction, target price, or position size.",
+        "Every material claim must cite one or more evidence IDs from the frozen bundle."
+      ],
+      "prompt_id": "moonshot_grader_v1",
+      "prompt_version": "moonshot_grader_v1",
+      "prompt_content_sha256": "c44aff2da6de9cd8f74a24d48a65754bd703f4db5ff3596b56c29691ec78205b",
+      "input_schema_version": "grader-input-v1",
+      "output_schema_version": "moonshot_grader_payload.v1",
+      "output_schema_name": "moonshot_grader_payload_v1",
+      "output_schema_content_sha256": "24744811a54e8b64b8e092fdf7c1b4dc64502c0aee36eeca386631d9adfa85b1",
+      "content_sha256": "139cc1c2fdc0da3798935922310de542dc30295074aa361da87f661617703c93"
+    },
+    {
+      "contract_version": "openai_execution_contract.v1",
+      "execution_role": "grader:catalyst",
+      "execution_contract_version": "catalyst-grader-contract-v1",
+      "owned_decision_question": "What event resolves uncertainty, when, and with what outcomes?",
+      "eligibility_rule_version": "catalyst-eligibility-v1",
+      "eligibility_rules": [
+        "The security passed the workflow security-eligibility policy using evidence available on or before the cutoff.",
+        "The frozen bundle identifies a defined clinical or regulatory event, relevant programme, bounded timing window, and primary-source support.",
+        "The grader executes only when the router records Catalyst as eligible for this research run."
+      ],
+      "rubric_version": "catalyst-rubric-v1",
+      "rubric": [
+        "Define the catalyst precisely and identify the thesis-critical uncertainty it can resolve.",
+        "Assess probability using cited evidence and disclose assumptions rather than relying on a generic base rate.",
+        "Assess timing and date confidence using a bounded window supported by primary evidence.",
+        "Describe success, delay, partial-success, and failure outcomes separately.",
+        "Map the domain conclusion to the shared proposition without treating probability as disposition."
+      ],
+      "abstention_rule_version": "catalyst-abstention-v1",
+      "abstention_rules": [
+        "Abstain when no defined catalyst with a relevant programme and bounded timing window can be supported.",
+        "Abstain when the outcome states or probability basis cannot be defended from the frozen evidence.",
+        "Record the exact missing evidence required for a defensible conclusion and produce no stance."
+      ],
+      "authority_rules": [
+        "Use only the frozen bundle and deterministic calculation results supplied in the request.",
+        "Do not inspect another grader opinion or infer portfolio action, trade direction, target price, or position size.",
+        "Every material claim and numeric probability must retain evidence or calculation provenance."
+      ],
+      "prompt_id": "catalyst_grader_v1",
+      "prompt_version": "catalyst_grader_v1",
+      "prompt_content_sha256": "94ea632087eeb24a5760560902c0f0d9ed66f5872373ca0dfe1c6ef7833590e9",
+      "input_schema_version": "grader-input-v1",
+      "output_schema_version": "catalyst_grader_payload.v1",
+      "output_schema_name": "catalyst_grader_payload_v1",
+      "output_schema_content_sha256": "8bba00d9e3166b88420e2f03569a3c7999a1bce7fd82f18fe52e4d4fb9ebc246",
+      "content_sha256": "b82be829d8ff7fe58f122b3ec9b0544c366ab77a88902980a2a6d899183cf3ee"
+    },
+    {
+      "contract_version": "openai_execution_contract.v1",
+      "execution_role": "grader:biotech",
+      "execution_contract_version": "biotech-grader-contract-v1",
+      "owned_decision_question": "Is the scientific and clinical evidence credible?",
+      "eligibility_rule_version": "biotech-eligibility-v1",
+      "eligibility_rules": [
+        "The security passed the workflow security-eligibility policy using evidence available on or before the cutoff.",
+        "The frozen bundle contains primary evidence for an active therapeutic programme and its clinical or regulatory basis.",
+        "The grader executes only when the router records Biotech as eligible for this research run."
+      ],
+      "rubric_version": "biotech-rubric-v1",
+      "rubric": [
+        "Assess mechanism plausibility while distinguishing biological rationale from demonstrated human benefit.",
+        "Assess preclinical and clinical evidence quality separately.",
+        "Evaluate trial design, comparator, population, sample size, and endpoint relevance when available.",
+        "Assess regulatory credibility without inferring agency conclusions absent primary evidence.",
+        "Identify where issuer claims exceed the evidence and preserve material limitations."
+      ],
+      "abstention_rule_version": "biotech-abstention-v1",
+      "abstention_rules": [
+        "Abstain when the mechanism, trial design, or clinical evidence cannot be identified reliably from the frozen bundle.",
+        "Abstain when blocking regulatory or endpoint evidence is missing or internally irreconcilable.",
+        "Record the exact missing evidence required for a defensible conclusion and produce no stance."
+      ],
+      "authority_rules": [
+        "Use only the frozen bundle and deterministic calculation results supplied in the request.",
+        "Do not inspect another grader opinion or infer portfolio action, trade direction, target price, or position size.",
+        "Every material scientific, clinical, or regulatory claim must cite bundle evidence."
+      ],
+      "prompt_id": "biotech_grader_v1",
+      "prompt_version": "biotech_grader_v1",
+      "prompt_content_sha256": "ccaa944db5e6547e3a5c2729fe724869868c46e254879d1c5ca6f248ad53d49a",
+      "input_schema_version": "grader-input-v1",
+      "output_schema_version": "biotech_grader_payload.v1",
+      "output_schema_name": "biotech_grader_payload_v1",
+      "output_schema_content_sha256": "a89eea753e264fcaf66ab83fabf479b2ec40bb180afbb6c804ed30104c43ae77",
+      "content_sha256": "f83d9753572af7d7668cad2ec3d2a6afd07b76ce10428c9456024f5da521176d"
+    },
+    {
+      "contract_version": "openai_execution_contract.v1",
+      "execution_role": "grader:risk_dilution",
+      "execution_contract_version": "risk_dilution-grader-contract-v1",
+      "owned_decision_question": "Can shareholders survive financially until the thesis resolves?",
+      "eligibility_rule_version": "risk_dilution-eligibility-v1",
+      "eligibility_rules": [
+        "The security passed the workflow security-eligibility policy using evidence available on or before the cutoff.",
+        "The frozen bundle contains primary financing, share-capital, cash, burn, and catalyst-timing evidence required by policy.",
+        "The grader executes only when the router records Risk/Dilution as eligible for this research run."
+      ],
+      "rubric_version": "risk_dilution-rubric-v1",
+      "rubric": [
+        "Assess cash runway and burn using normalized values with dates, units, methods, assumptions, and provenance.",
+        "Assess going-concern risk and financing required before the next meaningful catalyst.",
+        "Identify ATM, shelf, warrant, convertible, equity-award, and share-count-growth mechanisms.",
+        "Explain downside and permanent-capital-loss mechanisms at the per-share level.",
+        "Map the domain conclusion to the shared proposition without making a portfolio decision."
+      ],
+      "abstention_rule_version": "risk_dilution-abstention-v1",
+      "abstention_rules": [
+        "Abstain when runway or burn cannot be reconstructed from compatible primary evidence and deterministic calculations.",
+        "Abstain when material dilution instruments or catalyst timing are unavailable or internally inconsistent.",
+        "Record the exact missing evidence required for a defensible conclusion and produce no stance."
+      ],
+      "authority_rules": [
+        "Use only the frozen bundle and deterministic calculation results supplied in the request.",
+        "Do not perform hidden arithmetic or inspect another grader opinion.",
+        "Do not infer portfolio action, trade direction, target price, or position size."
+      ],
+      "prompt_id": "risk_dilution_grader_v1",
+      "prompt_version": "risk_dilution_grader_v1",
+      "prompt_content_sha256": "0b28eeb4d66f018e90bd50174839a90b6d33a6cc05a8fdb3a60aeb22b40ed2d7",
+      "input_schema_version": "grader-input-v1",
+      "output_schema_version": "risk_dilution_grader_payload.v1",
+      "output_schema_name": "risk_dilution_grader_payload_v1",
+      "output_schema_content_sha256": "8472075c1ab6a202c83a1c0409b92e4a60e1440f70631502fa99f2bf3ba1783a",
+      "content_sha256": "70137e6c1892030106e86bfc831a88dcbf0bd7e51f25f3a35499c00875b42b5d"
+    },
+    {
+      "contract_version": "openai_execution_contract.v1",
+      "execution_role": "grader:valuation",
+      "execution_contract_version": "valuation-grader-contract-v1",
+      "owned_decision_question": "What outcomes and assumptions justify the current or implied value?",
+      "eligibility_rule_version": "valuation-eligibility-v1",
+      "eligibility_rules": [
+        "The security passed the workflow security-eligibility policy using evidence available on or before the cutoff.",
+        "The valuation snapshot is valid, corporate-action reconciled, fresh by session policy, and information-set aligned.",
+        "The grader executes only when the router records Valuation as eligible for this research run."
+      ],
+      "rubric_version": "valuation-rubric-v1",
+      "rubric": [
+        "Select and explain a valuation method appropriate to the available evidence.",
+        "Use fully diluted shares and normalized point-in-time market, cash, and debt inputs.",
+        "Provide conservative, base, bull, and failure scenarios with assumptions and deterministic calculation provenance.",
+        "Explain sensitivity and probability-weighted logic without hiding unsupported arithmetic.",
+        "Assess market-relative asymmetry only when price information alignment is valid."
+      ],
+      "abstention_rule_version": "valuation-abstention-v1",
+      "abstention_rules": [
+        "Abstain when the point-in-time valuation snapshot is missing, invalid, stale by policy, corporate-action mismatched, pre-material-evidence, or indeterminate.",
+        "Abstain when fully diluted shares or scenario inputs cannot support a defensible model.",
+        "Record the exact missing evidence required for a defensible conclusion and produce no stance."
+      ],
+      "authority_rules": [
+        "Use only the frozen bundle and validated deterministic calculation results supplied in the request.",
+        "Do not perform hidden arithmetic, introduce an unsupported probability, or inspect another grader opinion.",
+        "Do not recommend a target price, trade action, or position size."
+      ],
+      "prompt_id": "valuation_grader_v1",
+      "prompt_version": "valuation_grader_v1",
+      "prompt_content_sha256": "69f89ade22d287028790a617ac4ff0eecf80d07a027778ce690e7832fbce10db",
+      "input_schema_version": "grader-input-v1",
+      "output_schema_version": "valuation_grader_payload.v1",
+      "output_schema_name": "valuation_grader_payload_v1",
+      "output_schema_content_sha256": "8e72964ea50dcc0389bfdc21acb99828479c7733d5882f443c31bc4e0145ee89",
+      "content_sha256": "a507f6f4e89ca94d4c89572bff684914e6420908e57401fdb34114393f2570b2"
+    },
+    {
+      "contract_version": "openai_execution_contract.v1",
+      "execution_role": "synthesizer",
+      "execution_contract_version": "committee-synthesis-contract-v1",
+      "owned_decision_question": "How do the persisted validated specialist opinions reconcile into an auditable research disposition?",
+      "eligibility_rule_version": "committee-synthesis-eligibility-v1",
+      "eligibility_rules": [
+        "A persisted committee result exists and references the identical frozen evidence bundle hash.",
+        "Every grader has an explicit terminal execution state and only validated accepted opinions are supplied.",
+        "The supplied deterministic calculation IDs belong to the research run."
+      ],
+      "rubric_version": "committee-synthesis-rubric-v1",
+      "rubric": [
+        "Identify common ground without changing any grader stance or conclusion.",
+        "Preserve material disagreement, disputed assumptions, and the evidence that could resolve them.",
+        "Classify every statement by provenance and reference all contributing evidence, opinion, or calculation IDs.",
+        "Disclose abstained, failed, and not-eligible states exactly.",
+        "Propose only a permitted research disposition for deterministic validation."
+      ],
+      "abstention_rule_version": "committee-synthesis-failure-v1",
+      "abstention_rules": [
+        "The Synthesizer never abstains or repairs missing analytical work.",
+        "Unsupported reconciliation output is rejected as a contract failure rather than converted into an opinion.",
+        "Insufficient committee inputs remain explicit workflow state and are not concealed."
+      ],
+      "authority_rules": [
+        "Use only persisted schema-valid and citation-valid opinions, supplied deterministic calculation IDs, and explicit execution states.",
+        "Do not access evidence outside the frozen bundle, research, calculate, invent, strengthen, soften, omit, or override grader conclusions.",
+        "Do not recommend a target price, trade action, position size, or readiness-gate bypass."
+      ],
+      "prompt_id": "committee_reconcile_v1",
+      "prompt_version": "committee_reconcile_v1",
+      "prompt_content_sha256": "bb2c90264cf56a6950abf635ef6ff348c6bdfd21c6772480ffc9bb4b10000ba2",
+      "input_schema_version": "committee-synthesis-input-v1",
+      "output_schema_version": "committee_memo_payload.v1",
+      "output_schema_name": "committee_memo_payload_v1",
+      "output_schema_content_sha256": "a41f7c999c05906259d37453e2666edddb5284c466a8b1c921d1844e22666c8a",
+      "content_sha256": "44a37eeac514904e61d7ba32030e737af459824ae143845470cba624822fb997"
+    }
+  ],
+  "content_sha256": "a3014ee09a4be1c4afcbcf981209ae73b90d12364f4eea91b55de3e0a677618a"
+}

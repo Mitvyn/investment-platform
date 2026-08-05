@@ -1,4 +1,4 @@
-import type { ValuationSnapshot } from "@iros/types";
+import type { ResearchValuationSnapshot } from "@iros/types";
 
 export type ValuationSnapshotViewRow = {
   canonical_snapshot: unknown;
@@ -9,7 +9,7 @@ type FetchValuationSnapshotRow = (
   researchRunId: string,
 ) => Promise<ValuationSnapshotViewRow | null>;
 
-type ParseValuationSnapshot = (value: unknown) => ValuationSnapshot;
+type ParseValuationSnapshot = (value: unknown) => ResearchValuationSnapshot;
 
 export function createValuationSnapshotLoader(
   fetchRow: FetchValuationSnapshotRow,
@@ -18,7 +18,7 @@ export function createValuationSnapshotLoader(
   return async function loadValuationSnapshot(
     operatorId: string,
     researchRunId: string,
-  ): Promise<ValuationSnapshot | null> {
+  ): Promise<ResearchValuationSnapshot | null> {
     const row = await fetchRow(operatorId, researchRunId);
     if (row === null) return null;
     const snapshot = parseSnapshot(row.canonical_snapshot);

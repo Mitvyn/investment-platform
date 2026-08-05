@@ -12,7 +12,10 @@ from investment_research_os.readiness_and_theses import (
     ReadinessGateResult,
     ThesisVersion,
 )
-from investment_research_os.research_runs import AuthenticatedOperator
+from investment_research_os.research_runs import (
+    AuthenticatedOperator,
+    PERSONAL_RESEARCH_THESIS_CONTRACT_ID,
+)
 
 
 class OperatorDecisionError(ValueError):
@@ -74,9 +77,7 @@ class OperatorDecisionEvent:
             "operator_action": self.operator_action,
             "relationship": self.relationship,
             "rationale": self.rationale,
-            "supersedes_operator_decision_id": (
-                self.supersedes_operator_decision_id
-            ),
+            "supersedes_operator_decision_id": (self.supersedes_operator_decision_id),
             "decision_policy_version": self.decision_policy_version,
             "idempotency_key": self.idempotency_key,
             "created_at": self.created_at.isoformat(),
@@ -220,7 +221,9 @@ def derive_operator_decision_relationship(
         "deep_research": "request_deep_research",
         "decision_ready": "mark_for_future_portfolio_review",
     }
-    return "accept" if accepted.get(system_disposition) == operator_action else "override"
+    return (
+        "accept" if accepted.get(system_disposition) == operator_action else "override"
+    )
 
 
 class InMemoryOperatorDecisionRepository:
@@ -268,8 +271,7 @@ class InMemoryOperatorDecisionRepository:
                 )
         elif (
             current is None
-            or event.supersedes_operator_decision_id
-            != current.operator_decision_id
+            or event.supersedes_operator_decision_id != current.operator_decision_id
         ):
             raise OperatorDecisionError("invalid decision supersession")
         self._history[event.ownership_key] = (*history, event)
@@ -417,9 +419,7 @@ class OperatorDecisionWorkflow:
             operator_action=request.operator_action,
             relationship=relationship,
             rationale=request.rationale,
-            supersedes_operator_decision_id=(
-                request.supersedes_operator_decision_id
-            ),
+            supersedes_operator_decision_id=(request.supersedes_operator_decision_id),
             decision_policy_version=request.decision_policy_version,
             idempotency_key=request.idempotency_key,
             created_at=created_at,
@@ -431,8 +431,7 @@ class OperatorDecisionWorkflow:
         )
         marker = (
             _portfolio_marker(event)
-            if request.operator_action
-            == "mark_for_future_portfolio_review"
+            if request.operator_action == "mark_for_future_portfolio_review"
             else None
         )
         return self._repository.save(
@@ -450,6 +449,10 @@ def _validate_portfolio_handoff(
     readiness: ReadinessGateResult,
     relationship: str,
 ) -> None:
+    if thesis.thesis_contract_id == PERSONAL_RESEARCH_THESIS_CONTRACT_ID:
+        raise OperatorDecisionError(
+            "personal research thesis cannot create portfolio handoff"
+        )
     if not (
         thesis.thesis_status == "canonical"
         and thesis.final_disposition == "decision_ready"
@@ -516,9 +519,7 @@ def _request_hash(request: OperatorDecisionRequest) -> str:
         "thesis_version_id": request.thesis_version_id,
         "operator_action": request.operator_action,
         "rationale": request.rationale,
-        "supersedes_operator_decision_id": (
-            request.supersedes_operator_decision_id
-        ),
+        "supersedes_operator_decision_id": (request.supersedes_operator_decision_id),
         "idempotency_key": request.idempotency_key,
         "decision_policy_version": request.decision_policy_version,
     }

@@ -20,6 +20,9 @@ export async function launchResearchRun(formData: FormData) {
   const securityId = String(formData.get("securityId") ?? "").trim();
   const cutoffInput = String(formData.get("asOfCutoff") ?? "").trim();
   const operatorFocus = String(formData.get("operatorFocus") ?? "");
+  const researchContract = String(
+    formData.get("researchContract") ?? "",
+  ) as "personal_research" | "licensed_official";
   let commandId: string;
   try {
     const receipt = await enqueueResearchRunCommand(
@@ -29,6 +32,7 @@ export async function launchResearchRun(formData: FormData) {
         securityId,
         asOfCutoff: cutoffInput,
         operatorFocus,
+        researchContract,
       }),
       new Date(),
     );

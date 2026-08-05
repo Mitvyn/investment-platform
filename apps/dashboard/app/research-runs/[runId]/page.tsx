@@ -21,6 +21,7 @@ import { GraderCommitteePanel } from "@/components/grader-committee-panel";
 import { GraderExecutionPanel } from "@/components/grader-execution-panel";
 import { OperatorDecisionPanel } from "@/components/operator-decision-panel";
 import { ReadinessThesisPanel } from "@/components/readiness-thesis-panel";
+import { SystemModelCostsPanel } from "@/components/system-model-costs-panel";
 import {
   Card,
   CardContent,
@@ -34,6 +35,8 @@ import { loadExistingThesisChain } from "../../../lib/existing-thesis-chains";
 import { loadCommitteeMemo } from "../../../lib/committee-memos";
 import { loadGraderCommittee } from "../../../lib/grader-committees";
 import { loadGraderExecutions } from "../../../lib/grader-executions";
+import { presentModelCostWorkspace } from "../../../lib/model-cost-workspace";
+import { loadModelCosts } from "../../../lib/model-costs";
 import { loadOperatorDecisions } from "../../../lib/operator-decisions";
 import { projectResearchRunAuditWorkspace } from "../../../lib/research-run-audit-projection";
 import { loadResearchRun } from "../../../lib/research-runs";
@@ -103,6 +106,8 @@ export default async function ResearchRunWorkspace({
   if (resolution.kind === "not_found") notFound();
 
   const run = resolution.run;
+  const modelCosts = await loadModelCosts(run.operator_id, run.id);
+  const modelCostPresentation = presentModelCostWorkspace(modelCosts);
   const bundle = await loadEvidenceBundle(run.operator_id, run.id);
   const valuationSnapshot = await loadValuationSnapshot(run.operator_id, run.id);
   const graderExecutions =
@@ -644,6 +649,41 @@ export default async function ResearchRunWorkspace({
                 </div>
               ) : null}
 
+              {valuationPresentation.assurance !== null ? (
+                <Card
+                  aria-label="Personal research valuation assurance"
+                  className="border-warning/35 bg-warning-muted/10"
+                >
+                  <CardHeader>
+                    <CardTitle>{valuationPresentation.assurance.label}</CardTitle>
+                    <CardDescription>
+                      {valuationPresentation.assurance.description}
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent>
+                    <AuditFieldList
+                      fields={[
+                        {
+                          label: "Usage scope",
+                          value: valuationPresentation.assurance.usageScope,
+                        },
+                        {
+                          label: "Rights assurance",
+                          value: valuationPresentation.assurance.rightsAssurance,
+                        },
+                        {
+                          label: "Limitations",
+                          value:
+                            valuationPresentation.assurance.limitationCodes.join(
+                              ", ",
+                            ),
+                        },
+                      ]}
+                    />
+                  </CardContent>
+                </Card>
+              ) : null}
+
               <div className="grid gap-4 xl:grid-cols-2">
                 <Card aria-label="Valuation Snapshot identity">
                   <CardHeader>
@@ -658,19 +698,32 @@ export default async function ResearchRunWorkspace({
                   </CardContent>
                 </Card>
 
-                <Card aria-label="Official close price basis">
+                <Card
+                  aria-label={
+                    valuationPresentation.assurance === null
+                      ? "Official close price basis"
+                      : "Consolidated EOD price basis"
+                  }
+                >
                   <CardHeader>
-                    <CardTitle>Official close</CardTitle>
+                    <CardTitle>
+                      {valuationPresentation.assurance === null
+                        ? "Official close"
+                        : "Consolidated EOD price"}
+                    </CardTitle>
                     <CardDescription>
-                      Latest completed regular US trading session permitted by
-                      policy.
+                      {valuationPresentation.assurance === null
+                        ? "Latest completed regular US trading session permitted by policy."
+                        : "Verified personal-research close for latest completed regular US trading session."}
                     </CardDescription>
                   </CardHeader>
                   <CardContent>
                     {valuationPresentation.priceBasis === null ? (
                       <div className="rounded-lg border border-challenge/35 bg-challenge-muted/10 p-4">
                         <p className="text-sm text-challenge-muted-foreground">
-                          No valid official close is available for this snapshot.
+                          {valuationPresentation.assurance === null
+                            ? "No valid official close is available for this snapshot."
+                            : "No valid consolidated EOD price is available for this snapshot."}
                         </p>
                       </div>
                     ) : (
@@ -828,13 +881,27 @@ export default async function ResearchRunWorkspace({
                   <CardHeader>
                     <CardTitle>Source references</CardTitle>
                     <CardDescription>
-                      Licensed market source and primary filing provenance.
+                      {valuationPresentation.assurance === null
+                        ? "Licensed market source and primary filing provenance."
+                        : "Personal market source and primary filing provenance."}
                     </CardDescription>
                   </CardHeader>
                   <CardContent className="grid gap-4">
                     {valuationPresentation.sourceReferences.map((source) => (
-                      <div className="rounded-lg border border-border p-4" key={source.id}>
-                        <p className="text-sm font-medium">{source.provider}</p>
+                      <div
+                        className={
+                          "providerProvenanceVariant" in source
+                            ? "rounded-lg border border-warning/35 bg-warning-muted/10 p-4"
+                            : "rounded-lg border border-border p-4"
+                        }
+                        key={source.id}
+                      >
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <p className="text-sm font-medium">{source.provider}</p>
+                          {"providerProvenanceVariant" in source ? (
+                            <Badge variant="attention">Provider caveat</Badge>
+                          ) : null}
+                        </div>
                         <p className="mt-1 font-mono text-[11px] text-muted-foreground [overflow-wrap:anywhere]">
                           {source.type} · {source.id}
                         </p>
@@ -860,6 +927,39 @@ export default async function ResearchRunWorkspace({
                               {source.effective}
                             </dd>
                           </div>
+                          {"providerPlan" in source ? (
+                            <div>
+                              <dt>Provider plan</dt>
+                              <dd className="mt-1 font-mono [overflow-wrap:anywhere]">
+                                {source.providerPlan}
+                              </dd>
+                            </div>
+                          ) : null}
+                          {"providerContractStatus" in source ? (
+                            <div>
+                              <dt>Provider contract status</dt>
+                              <dd className="mt-1 font-mono text-warning-muted-foreground [overflow-wrap:anywhere]">
+                                {source.providerContractStatus}
+                              </dd>
+                            </div>
+                          ) : null}
+                          {"providerLimitationCodes" in source ? (
+                            <div className="sm:col-span-3">
+                              <dt>Provider limitations</dt>
+                              <dd className="mt-1 font-mono text-warning-muted-foreground [overflow-wrap:anywhere]">
+                                {source.providerLimitationCodes?.join(", ") ??
+                                  "None declared"}
+                              </dd>
+                            </div>
+                          ) : null}
+                          {"responseSha256" in source ? (
+                            <div>
+                              <dt>Response hash</dt>
+                              <dd className="mt-1 font-mono [overflow-wrap:anywhere]">
+                                {source.responseSha256}
+                              </dd>
+                            </div>
+                          ) : null}
                         </dl>
                       </div>
                     ))}
@@ -922,6 +1022,8 @@ export default async function ResearchRunWorkspace({
         <OperatorDecisionPanel presentation={operatorDecisionPresentation} />
 
         <GraderExecutionPanel presentation={graderPresentation} />
+
+        <SystemModelCostsPanel presentation={modelCostPresentation} />
       </div>
     </main>
   );

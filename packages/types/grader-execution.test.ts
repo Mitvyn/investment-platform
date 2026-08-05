@@ -87,6 +87,19 @@ function specialistCandidate(overlay: Record<string, any>) {
   return candidate;
 }
 
+function personalResearchCandidate() {
+  const candidate = structuredClone(fixture) as Record<string, any>;
+  candidate.question_type_id =
+    "biotech_moonshot_catalyst_personal_research_assessment";
+  candidate.question_type_version =
+    "biotech_moonshot_catalyst_personal_research_assessment.v1";
+  candidate.workflow_config_version =
+    "biotech-moonshot-catalyst-personal-research-v1";
+  candidate.thesis_contract_id =
+    "biotech_moonshot_catalyst_personal_research_v1";
+  return candidate;
+}
+
 function notExecutedCandidate() {
   const candidate = structuredClone(fixture) as Record<string, any>;
   candidate.execution_state = "not_executed";
@@ -204,6 +217,22 @@ function exhaustedFailureCandidate() {
 
 test("accepts one isolated Moonshot grader execution against frozen bundle", () => {
   assert.deepEqual(parseGraderExecution(fixture, bundleContext), fixture);
+});
+
+test("accepts personal-research execution under exact separate contract identity", () => {
+  const candidate = personalResearchCandidate();
+
+  assert.deepEqual(parseGraderExecution(candidate, bundleContext), candidate);
+});
+
+test("rejects mixed strict and personal-research contract identities", () => {
+  const candidate = personalResearchCandidate();
+  candidate.workflow_config_version = "biotech-moonshot-catalyst-v1";
+
+  assert.throws(
+    () => parseGraderExecution(candidate, bundleContext),
+    /research contract identity/,
+  );
 });
 
 test("accepts one isolated Catalyst grader execution with Catalyst-owned payload", () => {
@@ -398,5 +427,34 @@ test("publishes Grader Execution v1 through package root and strict JSON Schema"
     "risk_dilution",
     "valuation",
   ]);
+  assert.deepEqual(
+    schema.allOf[0].oneOf.map(
+      (entry: Record<string, any>) =>
+        Object.fromEntries(
+          Object.entries(entry.properties).map(([key, value]) => [
+            key,
+            (value as Record<string, string>).const,
+          ]),
+        ),
+    ),
+    [
+      {
+        question_type_id: "biotech_moonshot_catalyst_assessment",
+        question_type_version: "biotech_moonshot_catalyst_assessment.v1",
+        workflow_config_version: "biotech-moonshot-catalyst-v1",
+        thesis_contract_id: "biotech_moonshot_catalyst_assessment",
+      },
+      {
+        question_type_id:
+          "biotech_moonshot_catalyst_personal_research_assessment",
+        question_type_version:
+          "biotech_moonshot_catalyst_personal_research_assessment.v1",
+        workflow_config_version:
+          "biotech-moonshot-catalyst-personal-research-v1",
+        thesis_contract_id:
+          "biotech_moonshot_catalyst_personal_research_v1",
+      },
+    ],
+  );
   assert.doesNotMatch(JSON.stringify(schema), /reasoning_content|raw_request|raw_response/);
 });

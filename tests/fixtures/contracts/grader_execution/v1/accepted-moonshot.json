@@ -8,7 +8,7 @@
   "execution_key": "9bc55b229b99e86b24c3dbb51627c9660168249c4827e8238685045832b787ef",
   "question_type_id": "biotech_moonshot_catalyst_assessment",
   "question_type_version": "biotech_moonshot_catalyst_assessment.v1",
-  "workflow_config_version": "biotech_committee.v1",
+  "workflow_config_version": "biotech-moonshot-catalyst-v1",
   "thesis_contract_id": "biotech_moonshot_catalyst_assessment",
   "grader_id": "moonshot",
   "grader_version": "moonshot.v1",

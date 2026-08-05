@@ -27,6 +27,13 @@ from investment_research_os.research_committees import (
     InMemoryResearchCommitteeRepository,
     ResearchCommitteeWorkflow,
 )
+from investment_research_os.research_runs import (
+    PERSONAL_RESEARCH_QUESTION_TYPE,
+    PERSONAL_RESEARCH_QUESTION_TYPE_VERSION,
+    PERSONAL_RESEARCH_THESIS_CONTRACT_ID,
+    PERSONAL_RESEARCH_WORKFLOW_CONFIG_VERSION,
+    THESIS_CONTRACT_ID,
+)
 from investment_research_os.readiness_and_theses import (
     InMemoryReadinessAndThesisRepository,
     ReadinessAndThesisResult,
@@ -35,6 +42,8 @@ from investment_research_os.readiness_and_theses import (
 )
 from investment_research_os.valuation_snapshots import (
     InMemoryValuationSnapshotRepository,
+    PERSONAL_RESEARCH_VALUATION_CONTRACT,
+    PersonalResearchValuationSnapshotWorkflow,
     ValuationSnapshotWorkflow,
 )
 from tests.test_committee_memo_workflow import (
@@ -49,6 +58,7 @@ from tests.test_valuation_snapshot_workflow import (
     FixedCalendar,
     FixedValuationSource,
     input_candidate,
+    personal_input_candidate,
 )
 
 
@@ -207,7 +217,147 @@ def synthesized_terminal_fixture(*, terminal_state: str):
     )
 
 
+class FixedCommitteeRepository:
+    def __init__(self, committee) -> None:
+        self.committee = committee
+
+    def get_by_id(self, operator_id: str, committee_id: str):
+        if (
+            operator_id == self.committee.operator_id
+            and committee_id == self.committee.committee_id
+        ):
+            return self.committee
+        return None
+
+
+class FixedValuationSnapshotRepository:
+    def __init__(self, snapshot) -> None:
+        self.snapshot = snapshot
+
+    def get_for_run(self, operator_id: str, research_run_id: str):
+        if (
+            operator_id == self.snapshot.operator_id
+            and research_run_id == self.snapshot.research_run_id
+        ):
+            return self.snapshot
+        return None
+
+
 class ReadinessAndThesisWorkflowTests(unittest.TestCase):
+    def test_personal_research_readiness_uses_separate_thesis_chain(self) -> None:
+        fixture = synthesized_fixture(requested_disposition="decision_ready")
+        bundle, committee, bundle_repository, _, memo_repository, _ = fixture
+        personal_committee = replace(
+            committee,
+            question_type_id=PERSONAL_RESEARCH_QUESTION_TYPE,
+            question_type_version=PERSONAL_RESEARCH_QUESTION_TYPE_VERSION,
+            workflow_config_version=PERSONAL_RESEARCH_WORKFLOW_CONFIG_VERSION,
+        )
+        committee_repository = FixedCommitteeRepository(personal_committee)
+        valuation_repository = InMemoryValuationSnapshotRepository()
+        PersonalResearchValuationSnapshotWorkflow(
+            evidence_bundle_repository=bundle_repository,
+            valuation_snapshot_repository=valuation_repository,
+            market_calendar=FixedCalendar(),
+            input_source=FixedValuationSource(personal_input_candidate()),
+            clock=lambda: datetime(2026, 5, 7, 2, 0, tzinfo=UTC),
+        ).materialize(AuthenticatedOperator(bundle.operator_id), bundle.id)
+        repository = InMemoryReadinessAndThesisRepository()
+
+        result = ReadinessAndThesisWorkflow(
+            committee_repository=committee_repository,
+            evidence_bundle_repository=bundle_repository,
+            valuation_snapshot_repository=valuation_repository,
+            memo_repository=memo_repository,
+            repository=repository,
+            clock=lambda: datetime(2026, 7, 22, 5, 0, tzinfo=UTC),
+        ).execute(
+            AuthenticatedOperator(bundle.operator_id),
+            ReadinessRequest(
+                committee_id=personal_committee.committee_id,
+                gate_policy_version="biotech-personal-readiness.v1",
+            ),
+        )
+
+        self.assertEqual(
+            result.readiness.thesis_contract_id,
+            PERSONAL_RESEARCH_THESIS_CONTRACT_ID,
+        )
+        self.assertEqual(
+            result.thesis.thesis_contract_id,
+            PERSONAL_RESEARCH_THESIS_CONTRACT_ID,
+        )
+        self.assertEqual(
+            repository.get_chain(
+                bundle.operator_id,
+                bundle.security_id,
+                PERSONAL_RESEARCH_THESIS_CONTRACT_ID,
+            ).active_canonical_thesis_version_id,
+            result.thesis.thesis_version_id,
+        )
+        self.assertIsNone(
+            repository.get_chain(
+                bundle.operator_id,
+                bundle.security_id,
+                THESIS_CONTRACT_ID,
+            ).active_canonical_thesis_version_id,
+        )
+
+    def test_personal_readiness_rejects_noncanonical_assurance_and_policy(self) -> None:
+        fixture = synthesized_fixture(requested_disposition="decision_ready")
+        bundle, committee, bundle_repository, _, memo_repository, _ = fixture
+        personal_committee = replace(
+            committee,
+            question_type_id=PERSONAL_RESEARCH_QUESTION_TYPE,
+            question_type_version=PERSONAL_RESEARCH_QUESTION_TYPE_VERSION,
+            workflow_config_version=PERSONAL_RESEARCH_WORKFLOW_CONFIG_VERSION,
+        )
+        materialized = InMemoryValuationSnapshotRepository()
+        snapshot = PersonalResearchValuationSnapshotWorkflow(
+            evidence_bundle_repository=bundle_repository,
+            valuation_snapshot_repository=materialized,
+            market_calendar=FixedCalendar(),
+            input_source=FixedValuationSource(personal_input_candidate()),
+            clock=lambda: datetime(2026, 5, 7, 2, 0, tzinfo=UTC),
+        ).materialize(AuthenticatedOperator(bundle.operator_id), bundle.id)
+
+        mutations = (
+            replace(
+                snapshot,
+                valuation_assurance=replace(
+                    PERSONAL_RESEARCH_VALUATION_CONTRACT.assurance,
+                    rights_assurance="self_asserted",
+                ),
+            ),
+            replace(snapshot, valuation_policy_version="unapproved-policy-v9"),
+            replace(
+                snapshot,
+                price=replace(snapshot.price, halt_verification_status="indeterminate"),
+            ),
+        )
+        for mutated in mutations:
+            with self.subTest(mutated=mutated):
+                result = ReadinessAndThesisWorkflow(
+                    committee_repository=FixedCommitteeRepository(personal_committee),
+                    evidence_bundle_repository=bundle_repository,
+                    valuation_snapshot_repository=FixedValuationSnapshotRepository(mutated),
+                    memo_repository=memo_repository,
+                    repository=InMemoryReadinessAndThesisRepository(),
+                    clock=lambda: datetime(2026, 7, 22, 5, 0, tzinfo=UTC),
+                ).execute(
+                    AuthenticatedOperator(bundle.operator_id),
+                    ReadinessRequest(
+                        committee_id=personal_committee.committee_id,
+                        gate_policy_version="biotech-personal-readiness.v1",
+                    ),
+                )
+
+                self.assertEqual(result.readiness.final_disposition, "deep_research")
+                self.assertIn(
+                    "aligned_valuation_snapshot_required",
+                    tuple(check.check_id for check in result.readiness.failed_checks),
+                )
+
     def _workflow(self, fixture, repository, *, include_valuation=True):
         (
             _,

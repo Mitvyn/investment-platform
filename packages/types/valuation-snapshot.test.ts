@@ -130,6 +130,36 @@ test("Valuation Snapshot rejects stale required capital input as valid", () => {
   assert.throws(() => parseValuationSnapshot(stale), TypeError);
 });
 
+test("Valuation Snapshot fails closed on incomplete or mismatched cash and claims inputs", () => {
+  const candidate = () => structuredClone(fixture) as Record<string, any>;
+
+  const missingTreatment = candidate();
+  delete missingTreatment.cash_treatment;
+
+  const mismatchedCash = candidate();
+  mismatchedCash.cash.value = "660200001";
+
+  const mismatchedEffectiveAt = candidate();
+  mismatchedEffectiveAt.cash_treatment.restricted_cash.effective_at =
+    "2026-02-28T23:59:59+00:00";
+
+  const missingClaims = candidate();
+  missingClaims.other_included_claims = null;
+
+  for (const [label, invalid] of Object.entries({
+    missingTreatment,
+    mismatchedCash,
+    mismatchedEffectiveAt,
+    missingClaims,
+  })) {
+    assert.throws(
+      () => parseValuationSnapshot(invalid),
+      TypeError,
+      `${label} must fail closed`,
+    );
+  }
+});
+
 test("Valuation Snapshot preserves non-aligned and invalid outcomes without permitting market-relative analysis", () => {
   const preMaterial = structuredClone(fixture) as Record<string, any>;
   preMaterial.evidence_materiality[0].publication_at =
@@ -191,4 +221,5 @@ test("Valuation Snapshot contract is published through package root and strict J
     "official_unadjusted_close",
   );
   assert.equal(schema.$defs.capital_measure.additionalProperties, false);
+  assert.equal(schema.$defs.cash_treatment.additionalProperties, false);
 });

@@ -111,6 +111,50 @@ class SnapshotSecuritySource(EligibleSecuritySource):
 
 
 class ResearchRunWorkflowTests(unittest.TestCase):
+    def test_personal_research_config_uses_separate_thesis_contract(self) -> None:
+        workflow = ResearchRunWorkflow(
+            repository=InMemoryResearchRunRepository(),
+            eligibility_source=EligibleSecuritySource(),
+            clock=lambda: EVALUATED_AT,
+        )
+
+        strict = workflow.create(
+            AuthenticatedOperator(OPERATOR_ID),
+            {
+                "question_type": "biotech_moonshot_catalyst_assessment",
+                "security_id": SECURITY_ID,
+                "as_of_cutoff": CUTOFF.isoformat(),
+                "workflow_config_version": "biotech-moonshot-catalyst-v1",
+            },
+        )
+        personal = workflow.create(
+            AuthenticatedOperator(OPERATOR_ID),
+            {
+                "question_type": (
+                    "biotech_moonshot_catalyst_personal_research_assessment"
+                ),
+                "security_id": SECURITY_ID,
+                "as_of_cutoff": CUTOFF.isoformat(),
+                "workflow_config_version": (
+                    "biotech-moonshot-catalyst-personal-research-v1"
+                ),
+            },
+        )
+
+        self.assertEqual(
+            personal.question_type_version,
+            "biotech_moonshot_catalyst_personal_research_assessment.v1",
+        )
+        self.assertEqual(
+            personal.thesis_contract_id,
+            "biotech_moonshot_catalyst_personal_research_v1",
+        )
+        self.assertEqual(
+            personal.workflow_config_version,
+            "biotech-moonshot-catalyst-personal-research-v1",
+        )
+        self.assertNotEqual(personal.id, strict.id)
+
     def test_authenticated_operator_can_create_and_retrieve_eligible_run(self) -> None:
         repository = InMemoryResearchRunRepository()
         source = EligibleSecuritySource()

@@ -19,6 +19,7 @@ classifiers = [
 ]
 dependencies = [
   "certifi>=2024.2.2",
+  "curl_cffi>=0.15,<1",
   "yfinance==1.5.1",
 ]
 
@@ -30,3 +31,6 @@ desktop-build = [
 [tool.setuptools.packages.find]
 where = ["src"]
 include = ["investment_research_os*"]
+
+[tool.setuptools.package-data]
+"investment_research_os.valuation_snapshots.data" = ["*.json"]

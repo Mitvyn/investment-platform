@@ -21,7 +21,9 @@
     "dilution_instruments",
     "fully_diluted_shares",
     "cash",
+    "cash_treatment",
     "debt",
+    "other_included_claims",
     "market_capitalization",
     "enterprise_value",
     "source_references",
@@ -64,7 +66,13 @@
     "cash": {
       "oneOf": [{ "$ref": "#/$defs/capital_measure" }, { "type": "null" }]
     },
+    "cash_treatment": {
+      "oneOf": [{ "$ref": "#/$defs/cash_treatment" }, { "type": "null" }]
+    },
     "debt": {
+      "oneOf": [{ "$ref": "#/$defs/capital_measure" }, { "type": "null" }]
+    },
+    "other_included_claims": {
       "oneOf": [{ "$ref": "#/$defs/capital_measure" }, { "type": "null" }]
     },
     "market_capitalization": {
@@ -105,7 +113,9 @@
           "basic_shares_outstanding": { "$ref": "#/$defs/capital_measure" },
           "fully_diluted_shares": { "$ref": "#/$defs/capital_measure" },
           "cash": { "$ref": "#/$defs/capital_measure" },
+          "cash_treatment": { "$ref": "#/$defs/cash_treatment" },
           "debt": { "$ref": "#/$defs/capital_measure" },
+          "other_included_claims": { "$ref": "#/$defs/capital_measure" },
           "market_capitalization": { "$ref": "#/$defs/derived_valuation" },
           "enterprise_value": { "$ref": "#/$defs/derived_valuation" }
         }
@@ -212,6 +222,22 @@
         "freshness_state": { "enum": ["current", "stale", "indeterminate"] },
         "freshness_reason_code": { "$ref": "#/$defs/non_empty_string" },
         "freshness_policy_version": { "$ref": "#/$defs/non_empty_string" }
+      }
+    },
+    "cash_treatment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "reported_cash",
+        "restricted_cash",
+        "restricted_cash_treatment"
+      ],
+      "properties": {
+        "reported_cash": { "$ref": "#/$defs/capital_measure" },
+        "restricted_cash": { "$ref": "#/$defs/capital_measure" },
+        "restricted_cash_treatment": {
+          "enum": ["none", "included", "excluded"]
+        }
       }
     },
     "dilution_instrument": {

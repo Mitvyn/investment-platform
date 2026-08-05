@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from datetime import datetime
 import hashlib
 import json
-from typing import Callable, Iterable
+from collections.abc import Callable, Iterable
+from dataclasses import dataclass
+from datetime import datetime
+from typing import Protocol
 
 from investment_research_os.evidence_bundles import EvidenceBundleRepository
 from investment_research_os.grader_executions import (
@@ -158,6 +159,7 @@ class ResearchCommitteeResult:
     committee_key: str
     operator_id: str
     research_run_id: str
+    security_id: str
     evidence_bundle_id: str
     evidence_bundle_hash: str
     question_type_id: str
@@ -208,34 +210,81 @@ class ResearchCommitteeResult:
                 "challenges": self.accounting.challenges_count,
             },
             "stance_matrix": stance_matrix,
-            "grader_results": [
-                item.as_dict() for item in self.grader_results
-            ],
+            "grader_results": [item.as_dict() for item in self.grader_results],
             "derived_at": self.created_at.isoformat(),
         }
 
 
+class ResearchCommitteeRepository(Protocol):
+    def begin_committee(
+        self,
+        result: ResearchCommitteeResult,
+    ) -> ResearchCommitteeResult: ...
+
+    def save_grader_state(
+        self,
+        committee: ResearchCommitteeResult,
+        result: CommitteeGraderResult,
+    ) -> CommitteeGraderResult: ...
+
+    def finalize_committee(
+        self,
+        result: ResearchCommitteeResult,
+    ) -> ResearchCommitteeResult: ...
+
+    def get(
+        self,
+        operator_id: str,
+        committee_key: str,
+    ) -> ResearchCommitteeResult | None: ...
+
+    def get_by_id(
+        self,
+        operator_id: str,
+        committee_id: str,
+    ) -> ResearchCommitteeResult | None: ...
+
+
 class InMemoryResearchCommitteeRepository:
     def __init__(self) -> None:
-        self._grader_states: dict[
-            tuple[str, str, str], CommitteeGraderResult
-        ] = {}
-        self._committees: dict[
-            tuple[str, str], ResearchCommitteeResult
-        ] = {}
+        self._grader_states: dict[tuple[str, str, str], CommitteeGraderResult] = {}
+        self._committees: dict[tuple[str, str], ResearchCommitteeResult] = {}
+        self._drafts: dict[tuple[str, str], ResearchCommitteeResult] = {}
         self._persistence_order: list[str] = []
 
     @property
     def persistence_order(self) -> tuple[str, ...]:
         return tuple(self._persistence_order)
 
+    def begin_committee(
+        self,
+        result: ResearchCommitteeResult,
+    ) -> ResearchCommitteeResult:
+        key = (result.operator_id, result.committee_key)
+        existing = self._committees.get(key) or self._drafts.get(key)
+        if existing is not None:
+            if existing != result:
+                raise ResearchCommitteeError("conflicting immutable committee draft")
+            return existing
+        self._drafts[key] = result
+        self._persistence_order.append("committee_draft")
+        return result
+
     def save_grader_state(
         self,
-        operator_id: str,
-        committee_key: str,
+        committee: ResearchCommitteeResult,
         result: CommitteeGraderResult,
     ) -> CommitteeGraderResult:
-        key = (operator_id, committee_key, result.grader_id)
+        draft_key = (committee.operator_id, committee.committee_key)
+        if self._drafts.get(draft_key) != committee:
+            raise ResearchCommitteeError(
+                "committee draft must persist before grader state"
+            )
+        key = (
+            committee.operator_id,
+            committee.committee_key,
+            result.grader_id,
+        )
         existing = self._grader_states.get(key)
         if existing is not None:
             if existing != result:
@@ -247,10 +296,16 @@ class InMemoryResearchCommitteeRepository:
         self._persistence_order.append(result.grader_id)
         return result
 
-    def save_committee(
+    def finalize_committee(
         self,
         result: ResearchCommitteeResult,
     ) -> ResearchCommitteeResult:
+        key = (result.operator_id, result.committee_key)
+        draft = self._drafts.get(key)
+        if draft is None or draft != result:
+            raise ResearchCommitteeError(
+                "committee draft must persist before grader states"
+            )
         expected_ids = {item.grader_id for item in MVP_GRADER_ROSTER}
         persisted_ids = {
             grader_id
@@ -262,7 +317,6 @@ class InMemoryResearchCommitteeRepository:
             raise ResearchCommitteeError(
                 "all terminal grader states must persist before committee"
             )
-        key = (result.operator_id, result.committee_key)
         existing = self._committees.get(key)
         if existing is not None:
             if existing != result:
@@ -288,8 +342,7 @@ class InMemoryResearchCommitteeRepository:
             (
                 result
                 for (owner_id, _), result in self._committees.items()
-                if owner_id == operator_id
-                and result.committee_id == committee_id
+                if owner_id == operator_id and result.committee_id == committee_id
             ),
             None,
         )
@@ -301,7 +354,7 @@ class ResearchCommitteeWorkflow:
         *,
         grader_workflow: GraderExecutionWorkflow,
         evidence_bundle_repository: EvidenceBundleRepository,
-        repository: InMemoryResearchCommitteeRepository,
+        repository: ResearchCommitteeRepository,
         clock: Callable[[], datetime],
     ) -> None:
         self._grader_workflow = grader_workflow
@@ -348,12 +401,6 @@ class ResearchCommitteeWorkflow:
             )
             for request in ordered_requests
         )
-        for result in results:
-            self._repository.save_grader_state(
-                operator.id,
-                committee_key,
-                result,
-            )
         created_at = self._clock()
         if created_at <= persisted_at:
             raise ResearchCommitteeError(
@@ -370,24 +417,27 @@ class ResearchCommitteeWorkflow:
             committee_key=committee_key,
             operator_id=operator.id,
             research_run_id=bundle.research_run_id,
+            security_id=bundle.security_id,
             evidence_bundle_id=bundle.id,
             evidence_bundle_hash=bundle.content_hash,
             question_type_id=ordered_requests[0].question_type_id,
             question_type_version=ordered_requests[0].question_type_version,
-            workflow_config_version=(
-                ordered_requests[0].workflow_config_version
-            ),
+            workflow_config_version=(ordered_requests[0].workflow_config_version),
             proposition_id=ordered_requests[0].proposition_id,
             proposition_version=ordered_requests[0].proposition_version,
-            rendered_proposition_text=(
-                ordered_requests[0].rendered_proposition
-            ),
+            rendered_proposition_text=(ordered_requests[0].rendered_proposition),
             grader_results=results,
             status=status,
             accounting=accounting,
             created_at=created_at,
         )
-        return self._repository.save_committee(committee)
+        self._repository.begin_committee(committee)
+        for result in results:
+            self._repository.save_grader_state(
+                committee,
+                result,
+            )
+        return self._repository.finalize_committee(committee)
 
 
 def _committee_grader_result(
@@ -401,13 +451,9 @@ def _committee_grader_result(
         return CommitteeGraderResult(
             grader_id=request.grader.grader_id,
             grader_version=request.grader.grader_version,
-            grader_contract_version=(
-                request.grader.grader_contract_version
-            ),
+            grader_contract_version=(request.grader.grader_contract_version),
             output_schema_version=request.grader.output_schema_version,
-            eligibility_rule_version=(
-                request.grader.eligibility_rule_version
-            ),
+            eligibility_rule_version=(request.grader.eligibility_rule_version),
             owned_decision_question=request.grader.owned_decision_question,
             required=request.grader.required,
             eligible=False,
@@ -434,9 +480,7 @@ def _committee_grader_result(
         opinion=execution.opinion,
         execution=execution,
         reason_code=(
-            execution.blocking_reasons[0]
-            if execution.blocking_reasons
-            else None
+            execution.blocking_reasons[0] if execution.blocking_reasons else None
         ),
         persisted_at=persisted_at,
     )
@@ -493,9 +537,7 @@ def _committee_opinion(
             ),
         },
         "domain_payload": dict(opinion.domain_payload),
-        "abstention": (
-            opinion.abstention.as_dict() if opinion.abstention else None
-        ),
+        "abstention": (opinion.abstention.as_dict() if opinion.abstention else None),
         "execution_metadata": {
             "execution_id": execution.execution_id,
             "grader_execution_contract_version": "grader_execution.v1",
@@ -618,12 +660,13 @@ def _derive_status(
 
 
 __all__ = [
+    "MVP_GRADER_ROSTER",
     "CommitteeAccounting",
     "CommitteeGraderDefinition",
     "CommitteeGraderResult",
     "InMemoryResearchCommitteeRepository",
-    "MVP_GRADER_ROSTER",
     "ResearchCommitteeError",
+    "ResearchCommitteeRepository",
     "ResearchCommitteeResult",
     "ResearchCommitteeWorkflow",
 ]

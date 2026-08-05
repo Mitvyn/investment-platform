@@ -1,0 +1,75 @@
+{
+  "cik": 1900001,
+  "entityName": "Single Asset Therapeutics, Inc.",
+  "facts": {
+    "dei": {
+      "EntityCommonStockSharesOutstanding": {
+        "label": "Entity Common Stock Shares Outstanding",
+        "units": {
+          "shares": [
+            {
+              "end": "2026-03-31",
+              "val": 90000000,
+              "accn": "0001900001-26-000010",
+              "fy": 2026,
+              "fp": "Q1",
+              "form": "10-Q",
+              "filed": "2026-05-04"
+            }
+          ]
+        }
+      }
+    },
+    "us-gaap": {
+      "CashAndCashEquivalentsAtCarryingValue": {
+        "label": "Cash and Cash Equivalents",
+        "units": {
+          "USD": [
+            {
+              "end": "2026-03-31",
+              "val": 85000000,
+              "accn": "0001900001-26-000010",
+              "fy": 2026,
+              "fp": "Q1",
+              "form": "10-Q",
+              "filed": "2026-05-04"
+            }
+          ]
+        }
+      },
+      "LongTermDebtCurrent": {
+        "label": "Current Portion of Long-term Debt",
+        "units": {
+          "USD": [
+            {
+              "end": "2026-03-31",
+              "val": 0,
+              "accn": "0001900001-26-000010",
+              "fy": 2026,
+              "fp": "Q1",
+              "form": "10-Q",
+              "filed": "2026-05-04"
+            }
+          ]
+        }
+      },
+      "NetCashUsedInOperatingActivities": {
+        "label": "Net Cash Used in Operating Activities",
+        "units": {
+          "USD": [
+            {
+              "start": "2026-01-01",
+              "end": "2026-03-31",
+              "val": 45000000,
+              "accn": "0001900001-26-000010",
+              "fy": 2026,
+              "fp": "Q1",
+              "form": "10-Q",
+              "filed": "2026-05-04"
+            }
+          ]
+        }
+      }
+    }
+  }
+}

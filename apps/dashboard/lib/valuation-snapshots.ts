@@ -1,4 +1,4 @@
-import { parseValuationSnapshot } from "@iros/types";
+import { parseResearchValuationSnapshot } from "@iros/types";
 
 import {
   createValuationSnapshotLoader,
@@ -29,5 +29,5 @@ async function fetchValuationSnapshotRow(
 
 export const loadValuationSnapshot = createValuationSnapshotLoader(
   fetchValuationSnapshotRow,
-  parseValuationSnapshot,
+  parseResearchValuationSnapshot,
 );

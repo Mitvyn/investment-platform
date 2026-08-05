@@ -32,6 +32,12 @@ export type CapitalMeasure = {
   freshness_policy_version: string;
 };
 
+export type CashTreatment = {
+  reported_cash: CapitalMeasure;
+  restricted_cash: CapitalMeasure;
+  restricted_cash_treatment: "none" | "included" | "excluded";
+};
+
 export type DilutionInstrument = {
   instrument_id: string;
   instrument_type:
@@ -137,7 +143,9 @@ export type ValuationSnapshot = {
   dilution_instruments: DilutionInstrument[];
   fully_diluted_shares: CapitalMeasure | null;
   cash: CapitalMeasure | null;
+  cash_treatment: CashTreatment | null;
   debt: CapitalMeasure | null;
+  other_included_claims: CapitalMeasure | null;
   market_capitalization: DerivedValuation | null;
   enterprise_value: DerivedValuation | null;
   source_references: ValuationSourceReference[];
@@ -170,7 +178,9 @@ const SNAPSHOT_KEYS = [
   "dilution_instruments",
   "fully_diluted_shares",
   "cash",
+  "cash_treatment",
   "debt",
+  "other_included_claims",
   "market_capitalization",
   "enterprise_value",
   "source_references",
@@ -213,6 +223,12 @@ const CAPITAL_MEASURE_KEYS = [
   "freshness_state",
   "freshness_reason_code",
   "freshness_policy_version",
+] as const;
+
+const CASH_TREATMENT_KEYS = [
+  "reported_cash",
+  "restricted_cash",
+  "restricted_cash_treatment",
 ] as const;
 
 const DILUTION_INSTRUMENT_KEYS = [
@@ -319,6 +335,53 @@ function decimal(value: unknown, label: string) {
   ) {
     throw new TypeError(`invalid ${label}`);
   }
+}
+
+function decimalParts(value: string): { coefficient: bigint; scale: number } {
+  const [integer, fraction = ""] = value.split(".");
+  const sign = integer.startsWith("-") ? -BigInt(1) : BigInt(1);
+  const digits = `${integer.replace("-", "")}${fraction}`;
+  return {
+    coefficient: sign * BigInt(digits),
+    scale: fraction.length,
+  };
+}
+
+function compareDecimalValues(
+  left: string,
+  right: string,
+): -1 | 0 | 1 {
+  const leftParts = decimalParts(left);
+  const rightParts = decimalParts(right);
+  const scale = Math.max(leftParts.scale, rightParts.scale);
+  const leftCoefficient =
+    leftParts.coefficient * BigInt(10) ** BigInt(scale - leftParts.scale);
+  const rightCoefficient =
+    rightParts.coefficient * BigInt(10) ** BigInt(scale - rightParts.scale);
+  return leftCoefficient === rightCoefficient
+    ? 0
+    : leftCoefficient < rightCoefficient
+      ? -1
+      : 1;
+}
+
+function subtractDecimalValues(left: string, right: string): string {
+  const leftParts = decimalParts(left);
+  const rightParts = decimalParts(right);
+  const scale = Math.max(leftParts.scale, rightParts.scale);
+  const coefficient =
+    leftParts.coefficient * BigInt(10) ** BigInt(scale - leftParts.scale) -
+    rightParts.coefficient * BigInt(10) ** BigInt(scale - rightParts.scale);
+  if (scale === 0) return coefficient.toString();
+  const sign = coefficient < BigInt(0) ? "-" : "";
+  const digits = (coefficient < BigInt(0) ? -coefficient : coefficient)
+    .toString()
+    .padStart(scale + 1, "0");
+  const integer = digits.slice(0, -scale);
+  const fraction = digits.slice(-scale).replace(/0+$/, "");
+  return fraction.length === 0
+    ? `${sign}${integer}`
+    : `${sign}${integer}.${fraction}`;
 }
 
 function stringArray(value: unknown, label: string) {
@@ -460,6 +523,63 @@ function parseCapitalMeasure(
     }
   }
   return measure as CapitalMeasure;
+}
+
+function parseCashTreatment(
+  value: unknown,
+  cutoff: string,
+  includedCash: CapitalMeasure | null,
+): CashTreatment {
+  const treatment = record(value, "cash_treatment");
+  exactKeys(treatment, CASH_TREATMENT_KEYS, "cash_treatment");
+  const reportedCash = parseCapitalMeasure(
+    treatment.reported_cash,
+    "cash_treatment.reported_cash",
+    cutoff,
+  );
+  const restrictedCash = parseCapitalMeasure(
+    treatment.restricted_cash,
+    "cash_treatment.restricted_cash",
+    cutoff,
+  );
+  oneOf(
+    treatment.restricted_cash_treatment,
+    ["none", "included", "excluded"],
+    "cash_treatment.restricted_cash_treatment",
+  );
+  if (includedCash === null) {
+    throw new TypeError("cash treatment requires included cash");
+  }
+  if (
+    reportedCash.unit !== includedCash.unit ||
+    restrictedCash.unit !== includedCash.unit
+  ) {
+    throw new TypeError("cash treatment unit mismatch");
+  }
+  if (
+    reportedCash.effective_at !== includedCash.effective_at ||
+    restrictedCash.effective_at !== includedCash.effective_at
+  ) {
+    throw new TypeError("cash treatment effective time mismatch");
+  }
+  const restrictedComparison = compareDecimalValues(
+    restrictedCash.value,
+    reportedCash.value,
+  );
+  const treatmentName = treatment.restricted_cash_treatment as CashTreatment["restricted_cash_treatment"];
+  const expectedIncludedCash =
+    treatmentName === "excluded"
+      ? subtractDecimalValues(reportedCash.value, restrictedCash.value)
+      : reportedCash.value;
+  if (
+    restrictedComparison > 0 ||
+    (treatmentName === "none" &&
+      compareDecimalValues(restrictedCash.value, "0") !== 0) ||
+    compareDecimalValues(includedCash.value, expectedIncludedCash) !== 0
+  ) {
+    throw new TypeError("restricted cash reconciliation mismatch");
+  }
+  return treatment as CashTreatment;
 }
 
 function parseDilutionInstrument(
@@ -656,14 +776,19 @@ function parseMateriality(
   return item as MarketMateriality;
 }
 
-export function parseValuationSnapshot(value: unknown): ValuationSnapshot {
-  const snapshot = record(value, "Valuation Snapshot");
-  exactKeys(snapshot, SNAPSHOT_KEYS, "Valuation Snapshot");
-  oneOf(
-    snapshot.contract_version,
-    ["valuation_snapshot.v1"],
-    "contract_version",
-  );
+export type ParsedValuationPriceContext = {
+  input_id: string;
+  timestamp: string;
+  market_status: "closed" | "halted";
+  corporate_action_adjustment_status: "unadjusted" | "indeterminate";
+  provider_source_reference_id: string;
+};
+
+export function validateValuationSnapshotStructure(
+  snapshot: Record<string, unknown>,
+  price: ParsedValuationPriceContext | null,
+  sourceReferenceIds: string[],
+): void {
   for (const key of [
     "id",
     "operator_id",
@@ -680,15 +805,12 @@ export function parseValuationSnapshot(value: unknown): ValuationSnapshot {
   if (typeof snapshot.currency !== "string" || !/^[A-Z]{3}$/.test(snapshot.currency)) {
     throw new TypeError("invalid currency");
   }
-  const price =
-    snapshot.price_basis === null
-      ? null
-      : parsePriceBasis(snapshot.price_basis, snapshot.as_of_cutoff as string);
   const measures = [
     "basic_shares_outstanding",
     "fully_diluted_shares",
     "cash",
     "debt",
+    "other_included_claims",
   ] as const;
   const parsedMeasures = new Map<string, CapitalMeasure>();
   for (const label of measures) {
@@ -703,6 +825,14 @@ export function parseValuationSnapshot(value: unknown): ValuationSnapshot {
       );
     }
   }
+  const cashTreatment =
+    snapshot.cash_treatment === null
+      ? null
+      : parseCashTreatment(
+          snapshot.cash_treatment,
+          snapshot.as_of_cutoff as string,
+          parsedMeasures.get("cash") ?? null,
+        );
   if (!Array.isArray(snapshot.dilution_instruments)) {
     throw new TypeError("invalid dilution_instruments");
   }
@@ -720,22 +850,26 @@ export function parseValuationSnapshot(value: unknown): ValuationSnapshot {
     snapshot.enterprise_value === null
       ? null
       : parseDerivedValuation(snapshot.enterprise_value, "enterprise_value");
-  if (!Array.isArray(snapshot.source_references)) {
-    throw new TypeError("invalid source_references");
-  }
-  const sources = snapshot.source_references.map(parseSourceReference);
   stringArray(snapshot.evidence_ids, "evidence_ids");
   stringArray(snapshot.calculation_ids, "calculation_ids");
   uniqueStrings(snapshot.evidence_ids as string[], "evidence_ids");
   uniqueStrings(snapshot.calculation_ids as string[], "calculation_ids");
-  const sourceIds = sources.map((source) => source.source_reference_id);
-  uniqueStrings(sourceIds, "source_reference_id");
-  if (price !== null && !sourceIds.includes(price.provider_source_reference_id)) {
+  uniqueStrings(sourceReferenceIds, "source_reference_id");
+  if (
+    price !== null &&
+    !sourceReferenceIds.includes(price.provider_source_reference_id)
+  ) {
     throw new TypeError("unresolved price source reference");
   }
   const inputIds = [
     ...(price === null ? [] : [price.input_id]),
     ...[...parsedMeasures.values()].map((measure) => measure.input_id),
+    ...(cashTreatment === null
+      ? []
+      : [
+          cashTreatment.reported_cash.input_id,
+          cashTreatment.restricted_cash.input_id,
+        ]),
     ...dilution.map((instrument) => instrument.instrument_id),
   ];
   uniqueStrings(inputIds, "valuation input ID");
@@ -743,6 +877,12 @@ export function parseValuationSnapshot(value: unknown): ValuationSnapshot {
     ...[...parsedMeasures.values()]
       .map((measure) => measure.calculation_id)
       .filter((id): id is string => id !== null),
+    ...(cashTreatment === null
+      ? []
+      : [
+          cashTreatment.reported_cash.calculation_id,
+          cashTreatment.restricted_cash.calculation_id,
+        ].filter((id): id is string => id !== null)),
     ...(marketCapitalization === null
       ? []
       : [marketCapitalization.calculation_id]),
@@ -761,6 +901,12 @@ export function parseValuationSnapshot(value: unknown): ValuationSnapshot {
     ...[...parsedMeasures.values()].filter(
       (measure) => measure.calculation_method === "calculated",
     ),
+    ...(cashTreatment === null
+      ? []
+      : [
+          cashTreatment.reported_cash,
+          cashTreatment.restricted_cash,
+        ].filter((measure) => measure.calculation_method === "calculated")),
     ...(marketCapitalization === null ? [] : [marketCapitalization]),
     ...(enterpriseValue === null ? [] : [enterpriseValue]),
   ]) {
@@ -771,6 +917,9 @@ export function parseValuationSnapshot(value: unknown): ValuationSnapshot {
   const declaredEvidence = new Set(snapshot.evidence_ids as string[]);
   for (const item of [
     ...parsedMeasures.values(),
+    ...(cashTreatment === null
+      ? []
+      : [cashTreatment.reported_cash, cashTreatment.restricted_cash]),
     ...dilution,
     ...(marketCapitalization === null ? [] : [marketCapitalization]),
     ...(enterpriseValue === null ? [] : [enterpriseValue]),
@@ -796,7 +945,7 @@ export function parseValuationSnapshot(value: unknown): ValuationSnapshot {
     parseMateriality(
       item,
       snapshot.as_of_cutoff as string,
-      price?.official_close_timestamp ?? null,
+      price?.timestamp ?? null,
       snapshot.materiality_policy_version as string,
       declaredEvidence,
     ),
@@ -843,10 +992,17 @@ export function parseValuationSnapshot(value: unknown): ValuationSnapshot {
     if (
       price === null ||
       parsedMeasures.size !== measures.length ||
+      cashTreatment === null ||
       marketCapitalization === null ||
       enterpriseValue === null ||
-      sources.length === 0 ||
+      sourceReferenceIds.length === 0 ||
       [...parsedMeasures.values()].some(
+        (measure) =>
+          measure.freshness_state !== "current" ||
+          measure.freshness_policy_version !==
+            snapshot.freshness_policy_version,
+      ) ||
+      [cashTreatment.reported_cash, cashTreatment.restricted_cash].some(
         (measure) =>
           measure.freshness_state !== "current" ||
           measure.freshness_policy_version !==
@@ -871,7 +1027,7 @@ export function parseValuationSnapshot(value: unknown): ValuationSnapshot {
     throw new TypeError("market-relative analysis permission mismatch");
   }
   timestamp(snapshot.created_at, "created_at");
-  if (snapshot.price_basis !== null) {
+  if (price !== null) {
     if (
       snapshot.snapshot_status === "valid" &&
       (price?.market_status !== "closed" ||
@@ -880,5 +1036,38 @@ export function parseValuationSnapshot(value: unknown): ValuationSnapshot {
       throw new TypeError("invalid official close for valid snapshot");
     }
   }
+}
+
+export function parseValuationSnapshot(value: unknown): ValuationSnapshot {
+  const snapshot = record(value, "Valuation Snapshot");
+  exactKeys(snapshot, SNAPSHOT_KEYS, "Valuation Snapshot");
+  oneOf(
+    snapshot.contract_version,
+    ["valuation_snapshot.v1"],
+    "contract_version",
+  );
+  const priceBasis =
+    snapshot.price_basis === null
+      ? null
+      : parsePriceBasis(snapshot.price_basis, snapshot.as_of_cutoff as string);
+  if (!Array.isArray(snapshot.source_references)) {
+    throw new TypeError("invalid source_references");
+  }
+  const sources = snapshot.source_references.map(parseSourceReference);
+  validateValuationSnapshotStructure(
+    snapshot,
+    priceBasis === null
+      ? null
+      : {
+          input_id: priceBasis.input_id,
+          timestamp: priceBasis.official_close_timestamp,
+          market_status: priceBasis.market_status,
+          corporate_action_adjustment_status:
+            priceBasis.corporate_action_adjustment_status,
+          provider_source_reference_id:
+            priceBasis.provider_source_reference_id,
+        },
+    sources.map((source) => source.source_reference_id),
+  );
   return snapshot as ValuationSnapshot;
 }

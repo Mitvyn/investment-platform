@@ -10,8 +10,12 @@ export type ResearchRunCommandReceipt = {
   command_id: string;
   operator_id: string;
   security_id: string;
-  question_type_version: "biotech_moonshot_catalyst_assessment.v1";
-  workflow_config_version: "biotech-moonshot-catalyst-v1";
+  question_type_version:
+    | "biotech_moonshot_catalyst_assessment.v1"
+    | "biotech_moonshot_catalyst_personal_research_assessment.v1";
+  workflow_config_version:
+    | "biotech-moonshot-catalyst-v1"
+    | "biotech-moonshot-catalyst-personal-research-v1";
   as_of_cutoff: string;
   operator_focus_normalized: string | null;
   idempotency_key: string;
@@ -48,6 +52,30 @@ const RECEIPT_KEYS = [
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const REASON_CODE_PATTERN = /^[a-z][a-z0-9_]{0,127}$/;
+const BLOCKED_REASON_CODES = [
+  "generic_primary_source_pipeline_unavailable",
+  "persistent_committee_worker_unavailable",
+  "model_execution_inactive",
+  "licensed_valuation_unavailable",
+  "hosted_isolation_unverified",
+] as const;
+const PERSONAL_RESEARCH_BLOCKED_REASON_CODES = [
+  "generic_primary_source_pipeline_unavailable",
+  "persistent_committee_worker_unavailable",
+  "model_execution_inactive",
+  "personal_research_valuation_pipeline_unavailable",
+  "hosted_isolation_unverified",
+] as const;
+const COMMAND_CONTRACTS = [
+  [
+    "biotech_moonshot_catalyst_assessment.v1",
+    "biotech-moonshot-catalyst-v1",
+  ],
+  [
+    "biotech_moonshot_catalyst_personal_research_assessment.v1",
+    "biotech-moonshot-catalyst-personal-research-v1",
+  ],
+] as const;
 
 function isTimestamp(value: unknown): value is string {
   return (
@@ -86,10 +114,13 @@ export function parseResearchRunCommandReceipt(
       throw new TypeError(`invalid Research Run command ${field}`);
     }
   }
+  const contractIdentityValid = COMMAND_CONTRACTS.some(
+    ([questionTypeVersion, workflowConfigVersion]) =>
+      receipt.question_type_version === questionTypeVersion &&
+      receipt.workflow_config_version === workflowConfigVersion,
+  );
   if (
-    receipt.question_type_version !==
-      "biotech_moonshot_catalyst_assessment.v1" ||
-    receipt.workflow_config_version !== "biotech-moonshot-catalyst-v1" ||
+    !contractIdentityValid ||
     !isTimestamp(receipt.as_of_cutoff) ||
     !isTimestamp(receipt.created_at) ||
     !isTimestamp(receipt.updated_at) ||
@@ -135,9 +166,28 @@ export function parseResearchRunCommandReceipt(
   const completed = receipt.state === "completed";
   const queued = receipt.state === "queued";
   const running = receipt.state === "running";
+  const expectedBlockedReasonCodes =
+    receipt.question_type_version ===
+    "biotech_moonshot_catalyst_personal_research_assessment.v1"
+      ? PERSONAL_RESEARCH_BLOCKED_REASON_CODES
+      : BLOCKED_REASON_CODES;
+  const createdAt = Date.parse(receipt.created_at as string);
+  const updatedAt = Date.parse(receipt.updated_at as string);
+  const startedAt =
+    receipt.started_at === null
+      ? null
+      : Date.parse(receipt.started_at as string);
+  const finishedAt =
+    receipt.finished_at === null
+      ? null
+      : Date.parse(receipt.finished_at as string);
   if (
     (blocked &&
-      (receipt.blocking_reason_codes.length === 0 ||
+      (receipt.blocking_reason_codes.length !==
+        expectedBlockedReasonCodes.length ||
+        receipt.blocking_reason_codes.some(
+          (reason, index) => reason !== expectedBlockedReasonCodes[index],
+        ) ||
         receipt.error_code !== null ||
         receipt.research_run_id !== null ||
         receipt.started_at !== null ||
@@ -145,12 +195,13 @@ export function parseResearchRunCommandReceipt(
     (failed &&
       (receipt.error_code === null ||
         receipt.blocking_reason_codes.length !== 0 ||
-        receipt.research_run_id !== null ||
+        receipt.started_at === null ||
         receipt.finished_at === null)) ||
     (completed &&
       (receipt.research_run_id === null ||
         receipt.blocking_reason_codes.length !== 0 ||
         receipt.error_code !== null ||
+        receipt.started_at === null ||
         receipt.finished_at === null)) ||
     (queued &&
       (receipt.blocking_reason_codes.length !== 0 ||
@@ -163,7 +214,10 @@ export function parseResearchRunCommandReceipt(
         receipt.error_code !== null ||
         receipt.research_run_id !== null ||
         receipt.started_at === null ||
-        receipt.finished_at !== null))
+        receipt.finished_at !== null)) ||
+    updatedAt < createdAt ||
+    (startedAt !== null && startedAt < createdAt) ||
+    (finishedAt !== null && finishedAt < (startedAt ?? createdAt))
   ) {
     throw new TypeError("contradictory Research Run command state");
   }

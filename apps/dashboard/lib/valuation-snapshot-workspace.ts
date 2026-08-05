@@ -1,8 +1,9 @@
 import type {
   CapitalMeasure,
   DerivedValuation,
+  PersonalResearchValuationSnapshot,
+  ResearchValuationSnapshot,
   ResearchRun,
-  ValuationSnapshot,
 } from "@iros/types";
 
 type StateVariant = "verified" | "attention" | "destructive";
@@ -53,7 +54,13 @@ function presentDerivedValue(
   };
 }
 
-function alignmentPresentation(snapshot: ValuationSnapshot): {
+function isPersonalResearchSnapshot(
+  snapshot: ResearchValuationSnapshot,
+): snapshot is PersonalResearchValuationSnapshot {
+  return snapshot.contract_version === "valuation_snapshot.personal_research.v1";
+}
+
+function alignmentPresentation(snapshot: ResearchValuationSnapshot): {
   label: string;
   variant: StateVariant;
   description: string;
@@ -63,7 +70,9 @@ function alignmentPresentation(snapshot: ValuationSnapshot): {
       label: "Aligned",
       variant: "verified",
       description:
-        "Official close reflects all market-material evidence in this Research Run.",
+        isPersonalResearchSnapshot(snapshot)
+          ? "Consolidated EOD price reflects all market-material evidence in this Research Run."
+          : "Official close reflects all market-material evidence in this Research Run.",
     };
   }
   if (snapshot.price_information_state === "pre_material_evidence") {
@@ -71,18 +80,22 @@ function alignmentPresentation(snapshot: ValuationSnapshot): {
       label: "Price predates material evidence",
       variant: "attention",
       description:
-        "Official close predates market-material evidence used by this Research Run.",
+        isPersonalResearchSnapshot(snapshot)
+          ? "Consolidated EOD price predates market-material evidence used by this Research Run."
+          : "Official close predates market-material evidence used by this Research Run.",
     };
   }
   return {
     label: "Indeterminate",
     variant: "attention",
     description:
-      "Evidence timing or materiality cannot be aligned reliably to the official close.",
+      isPersonalResearchSnapshot(snapshot)
+        ? "Evidence timing or materiality cannot be aligned reliably to the consolidated EOD price."
+        : "Evidence timing or materiality cannot be aligned reliably to the official close.",
   };
 }
 
-function marketRelativePresentation(snapshot: ValuationSnapshot) {
+function marketRelativePresentation(snapshot: ResearchValuationSnapshot) {
   if (snapshot.market_relative_analysis_permitted) {
     return {
       label: "Market-relative analysis permitted" as const,
@@ -100,7 +113,7 @@ function marketRelativePresentation(snapshot: ValuationSnapshot) {
 
 export function presentValuationSnapshotWorkspace(
   run: ResearchRun,
-  snapshot: ValuationSnapshot | null,
+  snapshot: ResearchValuationSnapshot | null,
 ) {
   if (snapshot === null) {
     return {
@@ -120,13 +133,38 @@ export function presentValuationSnapshotWorkspace(
       "Valuation Snapshot is outside Research Run valuation boundary",
     );
   }
+  const personalResearch = isPersonalResearchSnapshot(snapshot);
+  if (
+    personalResearch !==
+    (run.thesis_contract_id ===
+      "biotech_moonshot_catalyst_personal_research_v1")
+  ) {
+    throw new TypeError(
+      "Valuation Snapshot is outside Research Run valuation contract",
+    );
+  }
 
   const priceBasis = snapshot.price_basis;
+  const cashTreatment = snapshot.cash_treatment;
   const capitalInputs = [
     presentCapitalInput("Basic shares", snapshot.basic_shares_outstanding),
     presentCapitalInput("Fully diluted shares", snapshot.fully_diluted_shares),
-    presentCapitalInput("Cash", snapshot.cash),
+    presentCapitalInput(
+      "Reported cash",
+      cashTreatment?.reported_cash ?? null,
+    ),
+    presentCapitalInput(
+      cashTreatment === null
+        ? "Restricted cash"
+        : `Restricted cash (${cashTreatment.restricted_cash_treatment})`,
+      cashTreatment?.restricted_cash ?? null,
+    ),
+    presentCapitalInput("Included cash", snapshot.cash),
     presentCapitalInput("Debt", snapshot.debt),
+    presentCapitalInput(
+      "Other included claims",
+      snapshot.other_included_claims,
+    ),
   ].filter((value) => value !== null);
   const derivedValues = [
     presentDerivedValue("Market capitalization", snapshot.market_capitalization),
@@ -142,6 +180,17 @@ export function presentValuationSnapshotWorkspace(
         : { label: "Invalid snapshot" as const, variant: "destructive" as const },
     alignment: alignmentPresentation(snapshot),
     marketRelativeAnalysis: marketRelativePresentation(snapshot),
+    assurance: personalResearch
+      ? {
+          label: "Personal research" as const,
+          variant: "attention" as const,
+          description:
+            "Consolidated end-of-day price is not a primary-venue official close and is not institutional-grade.",
+          usageScope: snapshot.valuation_assurance.usage_scope,
+          rightsAssurance: snapshot.valuation_assurance.rights_assurance,
+          limitationCodes: snapshot.valuation_assurance.limitation_codes,
+        }
+      : null,
     summary: [
       { label: "Snapshot ID", value: snapshot.id },
       { label: "Evidence Bundle ID", value: snapshot.evidence_bundle_id },
@@ -163,8 +212,25 @@ export function presentValuationSnapshotWorkspace(
               { label: "Session", value: priceBasis.session_date },
               { label: "Session type", value: priceBasis.session_type },
               { label: "Exchange", value: priceBasis.primary_listing_exchange },
-              { label: "Official close", value: priceBasis.official_close_timestamp },
+              {
+                label:
+                  "price_timestamp" in priceBasis
+                    ? "Price timestamp"
+                    : "Official close",
+                value:
+                  "price_timestamp" in priceBasis
+                    ? priceBasis.price_timestamp
+                    : priceBasis.official_close_timestamp,
+              },
               { label: "Market status", value: priceBasis.market_status },
+              ...("halt_verification_status" in priceBasis
+                ? [
+                    {
+                      label: "Halt verification",
+                      value: priceBasis.halt_verification_status,
+                    },
+                  ]
+                : []),
               {
                 label: "Price adjustment",
                 value: priceBasis.corporate_action_adjustment_status,
@@ -206,10 +272,28 @@ export function presentValuationSnapshotWorkspace(
       id: source.source_reference_id,
       type: source.source_type,
       provider: source.provider,
+      ...("provider_plan_id" in source
+        ? {
+            providerPlan: source.provider_plan_id ?? "Not applicable",
+          }
+        : {}),
+      ...(personalResearch && source.source_type === "personal_market_data"
+        ? {
+            providerContractStatus:
+              source.provider_contract_status ?? "Not available",
+            providerLimitationCodes: source.provider_limitation_codes,
+            providerProvenanceVariant: "attention" as const,
+          }
+        : {}),
       locator: source.locator,
       published: source.published_at ?? "Not available",
       retrieved: source.retrieved_at,
       effective: source.effective_at ?? "Not applicable",
+      ...("response_sha256" in source
+        ? {
+            responseSha256: source.response_sha256 ?? "Not applicable",
+          }
+        : {}),
     })),
     materiality: snapshot.evidence_materiality.map((item) => ({
       evidenceId: item.evidence_id,

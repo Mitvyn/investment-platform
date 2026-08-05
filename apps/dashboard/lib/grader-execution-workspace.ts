@@ -399,6 +399,16 @@ export function presentGraderExecutionWorkspace(
 
   for (const execution of executions) {
     if (
+      execution.question_type_id !== run.question_type ||
+      execution.question_type_version !== run.question_type_version ||
+      execution.workflow_config_version !== run.workflow_config_version ||
+      execution.thesis_contract_id !== run.thesis_contract_id
+    ) {
+      throw new TypeError(
+        "Grader Execution is outside Research Run research contract boundary",
+      );
+    }
+    if (
       execution.operator_id !== run.operator_id ||
       execution.research_run_id !== run.id ||
       execution.evidence_bundle_id !== bundle.id ||

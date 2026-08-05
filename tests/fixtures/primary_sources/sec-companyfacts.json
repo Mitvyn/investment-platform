@@ -1,0 +1,84 @@
+{
+  "cik": 1601830,
+  "entityName": "Example Therapeutics, Inc.",
+  "facts": {
+    "dei": {
+      "EntityCommonStockSharesOutstanding": {
+        "label": "Entity Common Stock Shares Outstanding",
+        "units": {
+          "shares": [
+            {
+              "end": "2026-03-31",
+              "val": 312500000,
+              "accn": "0001601830-26-000040",
+              "fy": 2026,
+              "fp": "Q1",
+              "form": "10-Q",
+              "filed": "2026-05-05"
+            }
+          ]
+        }
+      }
+    },
+    "us-gaap": {
+      "CashAndCashEquivalentsAtCarryingValue": {
+        "label": "Cash and Cash Equivalents",
+        "units": {
+          "USD": [
+            {
+              "end": "2025-12-31",
+              "val": 510000000,
+              "accn": "0001601830-26-000010",
+              "fy": 2025,
+              "fp": "FY",
+              "form": "10-K",
+              "filed": "2026-02-20"
+            },
+            {
+              "end": "2026-03-31",
+              "val": 474300000,
+              "accn": "0001601830-26-000040",
+              "fy": 2026,
+              "fp": "Q1",
+              "form": "10-Q",
+              "filed": "2026-05-05"
+            }
+          ]
+        }
+      },
+      "LongTermDebtCurrent": {
+        "label": "Current Portion of Long-term Debt",
+        "units": {
+          "USD": [
+            {
+              "end": "2026-03-31",
+              "val": 12500000,
+              "accn": "0001601830-26-000040",
+              "fy": 2026,
+              "fp": "Q1",
+              "form": "10-Q",
+              "filed": "2026-05-05"
+            }
+          ]
+        }
+      },
+      "NetCashUsedInOperatingActivities": {
+        "label": "Net Cash Used in Operating Activities",
+        "units": {
+          "USD": [
+            {
+              "start": "2026-01-01",
+              "end": "2026-03-31",
+              "val": 118700000,
+              "accn": "0001601830-26-000040",
+              "fy": 2026,
+              "fp": "Q1",
+              "form": "10-Q",
+              "filed": "2026-05-05"
+            }
+          ]
+        }
+      }
+    }
+  }
+}

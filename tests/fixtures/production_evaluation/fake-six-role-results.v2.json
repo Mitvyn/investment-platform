@@ -1,0 +1,143 @@
+{
+  "contract_version": "frozen_evaluation_results.v1",
+  "corpus_id": "biotech_committee_offline_v1",
+  "corpus_version": "biotech_committee_offline_v1",
+  "corpus_content_sha256": "54336b11da0e63fa433c8434def8bc3b710d008a75b85dc1ff8ad7ca6252cf4f",
+  "case_id": "existing_grader_ready_bundle_v1",
+  "execution_results": [
+    {
+      "execution_role": "grader:moonshot",
+      "evaluation_identity_sha256": "b1eab4d1f12d7811c1e7a440d1161c111fd78ddfa16deee3e5b7c046c76538f9",
+      "checks": {
+        "schema_valid": true,
+        "citation_valid": true
+      },
+      "token_caps": {
+        "input_tokens": 16000,
+        "output_tokens": 2000
+      },
+      "usage": {
+        "input_tokens": 100,
+        "cached_input_tokens": 10,
+        "cache_write_tokens": 0,
+        "output_tokens": 20,
+        "reasoning_tokens": 5,
+        "total_tokens": 120
+      },
+      "estimated_cost_usd": "0.001",
+      "hard_budget_usd": "0.25"
+    },
+    {
+      "execution_role": "grader:catalyst",
+      "evaluation_identity_sha256": "b07dec99cec0756521750e2d374cfdc3f307a8be16975b638e3975be8cafdea1",
+      "checks": {
+        "schema_valid": true,
+        "citation_valid": true
+      },
+      "token_caps": {
+        "input_tokens": 16000,
+        "output_tokens": 2000
+      },
+      "usage": {
+        "input_tokens": 100,
+        "cached_input_tokens": 10,
+        "cache_write_tokens": 0,
+        "output_tokens": 20,
+        "reasoning_tokens": 5,
+        "total_tokens": 120
+      },
+      "estimated_cost_usd": "0.001",
+      "hard_budget_usd": "0.25"
+    },
+    {
+      "execution_role": "grader:biotech",
+      "evaluation_identity_sha256": "725dc10e3f3b229a5762eccfc2f45138146f406874508b1a1dd7754c31bbb90e",
+      "checks": {
+        "schema_valid": true,
+        "citation_valid": true
+      },
+      "token_caps": {
+        "input_tokens": 16000,
+        "output_tokens": 2000
+      },
+      "usage": {
+        "input_tokens": 100,
+        "cached_input_tokens": 10,
+        "cache_write_tokens": 0,
+        "output_tokens": 20,
+        "reasoning_tokens": 5,
+        "total_tokens": 120
+      },
+      "estimated_cost_usd": "0.001",
+      "hard_budget_usd": "0.25"
+    },
+    {
+      "execution_role": "grader:risk_dilution",
+      "evaluation_identity_sha256": "29182567af3560ee3ad6125ebc8cb630e355587725172ae3004026226807999c",
+      "checks": {
+        "schema_valid": true,
+        "citation_valid": true
+      },
+      "token_caps": {
+        "input_tokens": 16000,
+        "output_tokens": 2000
+      },
+      "usage": {
+        "input_tokens": 100,
+        "cached_input_tokens": 10,
+        "cache_write_tokens": 0,
+        "output_tokens": 20,
+        "reasoning_tokens": 5,
+        "total_tokens": 120
+      },
+      "estimated_cost_usd": "0.001",
+      "hard_budget_usd": "0.25"
+    },
+    {
+      "execution_role": "grader:valuation",
+      "evaluation_identity_sha256": "4f6889a08665365c532d6f1a18a66a0f7db94b9d74ec5c78408a275feb5bd699",
+      "checks": {
+        "schema_valid": true,
+        "citation_valid": true
+      },
+      "token_caps": {
+        "input_tokens": 16000,
+        "output_tokens": 2000
+      },
+      "usage": {
+        "input_tokens": 100,
+        "cached_input_tokens": 10,
+        "cache_write_tokens": 0,
+        "output_tokens": 20,
+        "reasoning_tokens": 5,
+        "total_tokens": 120
+      },
+      "estimated_cost_usd": "0.001",
+      "hard_budget_usd": "0.25"
+    },
+    {
+      "execution_role": "synthesizer",
+      "evaluation_identity_sha256": "12d55da304a89e75749b3bb1069e0253c16615815615fc3a7f4e350da4ca7c0b",
+      "checks": {
+        "schema_valid": true,
+        "provenance_valid": true,
+        "authority_valid": true
+      },
+      "token_caps": {
+        "input_tokens": 32000,
+        "output_tokens": 4000
+      },
+      "usage": {
+        "input_tokens": 100,
+        "cached_input_tokens": 10,
+        "cache_write_tokens": 0,
+        "output_tokens": 20,
+        "reasoning_tokens": 5,
+        "total_tokens": 120
+      },
+      "estimated_cost_usd": "0.001",
+      "hard_budget_usd": "0.50"
+    }
+  ],
+  "content_sha256": "e7246d395e60bde1acbce8787c0b9f3fffd1c62ac93036e54c768a0e23df0a08"
+}

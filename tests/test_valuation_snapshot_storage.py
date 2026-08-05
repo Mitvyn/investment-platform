@@ -11,6 +11,7 @@ from investment_research_os.evidence_bundles import (
 )
 from investment_research_os.valuation_snapshots import (
     InMemoryValuationSnapshotRepository,
+    PersonalResearchValuationSnapshotWorkflow,
     ValuationSnapshotWorkflow,
 )
 from investment_research_os.valuation_snapshots.storage import (
@@ -21,6 +22,7 @@ from tests.test_valuation_snapshot_workflow import (
     FixedCalendar,
     FixedValuationSource,
     input_candidate,
+    personal_input_candidate,
 )
 from workers.sec.storage import JsonResponse, SupabaseStorageSettings
 from workers.sec.storage import EvidenceStorageError
@@ -71,9 +73,20 @@ def materialized_invalid_snapshot():
         evidence_bundle_repository=bundle_repository,
         valuation_snapshot_repository=InMemoryValuationSnapshotRepository(),
         market_calendar=FixedCalendar(),
-        input_source=FixedValuationSource(
-            replace(input_candidate(), prices=())
-        ),
+        input_source=FixedValuationSource(replace(input_candidate(), prices=())),
+        clock=lambda: datetime(2026, 5, 7, 2, 0, tzinfo=UTC),
+    ).materialize(AuthenticatedOperator(bundle.operator_id), bundle.id)
+
+
+def materialized_personal_snapshot():
+    bundle = materialized_bundle()
+    bundle_repository = InMemoryEvidenceBundleRepository()
+    bundle_repository.save(bundle)
+    return PersonalResearchValuationSnapshotWorkflow(
+        evidence_bundle_repository=bundle_repository,
+        valuation_snapshot_repository=InMemoryValuationSnapshotRepository(),
+        market_calendar=FixedCalendar(),
+        input_source=FixedValuationSource(personal_input_candidate()),
         clock=lambda: datetime(2026, 5, 7, 2, 0, tzinfo=UTC),
     ).materialize(AuthenticatedOperator(bundle.operator_id), bundle.id)
 
@@ -91,6 +104,55 @@ def repository(
 
 
 class SupabaseValuationSnapshotRepositoryTests(unittest.TestCase):
+    def test_personal_research_snapshot_round_trips_separate_contract(self) -> None:
+        snapshot = materialized_personal_snapshot()
+        wire = snapshot.as_dict()
+        transport = RecordingTransport(
+            [
+                JsonResponse(
+                    payload=[{"canonical_snapshot": wire}],
+                    status=200,
+                    headers={},
+                )
+            ]
+        )
+
+        loaded = repository(transport).get_for_run(
+            snapshot.operator_id,
+            snapshot.research_run_id,
+        )
+
+        self.assertIsNotNone(loaded)
+        self.assertEqual(loaded.as_dict(), wire)
+        self.assertEqual(
+            loaded.contract_version,
+            "valuation_snapshot.personal_research.v1",
+        )
+        self.assertEqual(
+            loaded.valuation_assurance.level,
+            "personal_research",
+        )
+
+    def test_personal_research_persistence_keeps_generic_and_legacy_timestamp_columns_aligned(
+        self,
+    ) -> None:
+        snapshot = materialized_personal_snapshot()
+
+        _, _, record = SupabaseValuationSnapshotRepository._records(snapshot)[0]
+
+        self.assertEqual(
+            record["price_timestamp"],
+            snapshot.as_dict()["price_basis"]["price_timestamp"],
+        )
+        self.assertEqual(
+            record["official_close_timestamp"],
+            record["price_timestamp"],
+        )
+        self.assertNotIn(
+            "official_close_timestamp",
+            snapshot.as_dict()["price_basis"],
+        )
+
     def test_persists_components_finalizes_and_verifies_contract(self) -> None:
         snapshot = materialized_snapshot()
         wire = snapshot.as_dict()
@@ -130,8 +192,7 @@ class SupabaseValuationSnapshotRepositoryTests(unittest.TestCase):
                 "iros_valuation_snapshots",
                 *["iros_valuation_capital_inputs"]
                 * (4 + len(wire["dilution_instruments"])),
-                *["iros_valuation_calculation_results"]
-                * len(wire["calculation_ids"]),
+                *["iros_valuation_calculation_results"] * len(wire["calculation_ids"]),
                 *["iros_valuation_materiality_assessments"]
                 * len(wire["evidence_materiality"]),
             ],

@@ -3,8 +3,8 @@ import type {
   CommitteeState,
   EvidenceBundle,
   GraderExecution,
+  ResearchValuationSnapshot,
   ResearchRun,
-  ValuationSnapshot,
 } from "@iros/types";
 
 import { presentCommitteeMemoWorkspace } from "./committee-memo-workspace.ts";
@@ -28,7 +28,7 @@ import { presentValuationSnapshotWorkspace } from "./valuation-snapshot-workspac
 export type ResearchRunAuditArtifacts = {
   run: ResearchRun;
   bundle: EvidenceBundle | null;
-  valuationSnapshot: ValuationSnapshot | null;
+  valuationSnapshot: ResearchValuationSnapshot | null;
   graderExecutions: GraderExecution[];
   committee: CommitteeState | null;
   memo: CommitteeMemo | null;

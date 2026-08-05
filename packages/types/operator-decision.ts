@@ -20,7 +20,7 @@ export type OperatorDecisionEvent = {
   operator_decision_id: string;
   operator_id: string;
   security_id: string;
-  thesis_contract_id: "biotech_moonshot_catalyst_assessment";
+  thesis_contract_id: ThesisVersion["thesis_contract_id"];
   thesis_version_id: string;
   committee_result_id: string;
   readiness_gate_result_id: string;
@@ -43,7 +43,7 @@ export type OperatorDecisionHistory = {
   contract_version: "operator_decision_history.v1";
   operator_id: string;
   security_id: string;
-  thesis_contract_id: "biotech_moonshot_catalyst_assessment";
+  thesis_contract_id: ThesisVersion["thesis_contract_id"];
   events: OperatorDecisionEvent[];
   generated_at: string;
 };
@@ -52,7 +52,7 @@ export type OperatorDecisionCurrentState = {
   contract_version: "operator_decision_current_state.v1";
   operator_id: string;
   security_id: string;
-  thesis_contract_id: "biotech_moonshot_catalyst_assessment";
+  thesis_contract_id: ThesisVersion["thesis_contract_id"];
   current_operator_decision_id: string | null;
   current_operator_action: OperatorAction | null;
   current_relationship: OperatorDecisionRelationship | null;
@@ -70,7 +70,7 @@ export type OperatorWorkflowCommand = {
   operator_decision_id: string;
   operator_id: string;
   security_id: string;
-  thesis_contract_id: "biotech_moonshot_catalyst_assessment";
+  thesis_contract_id: ThesisVersion["thesis_contract_id"];
   thesis_version_id: string;
   committee_result_id: string;
   readiness_gate_result_id: string;
@@ -180,6 +180,14 @@ const DISPOSITIONS = [
   "deep_research",
   "decision_ready",
 ] as const;
+
+const THESIS_CONTRACT_IDS = [
+  "biotech_moonshot_catalyst_assessment",
+  "biotech_moonshot_catalyst_personal_research_v1",
+] as const;
+
+const PERSONAL_RESEARCH_THESIS_CONTRACT_ID =
+  "biotech_moonshot_catalyst_personal_research_v1";
 
 function record(value: unknown, label: string): Record<string, unknown> {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
@@ -311,9 +319,7 @@ export function parseOperatorDecisionEvent(
   uuid(event.operator_decision_id, "operator decision id");
   uuid(event.operator_id, "operator id");
   uuid(event.security_id, "security id");
-  if (event.thesis_contract_id !== "biotech_moonshot_catalyst_assessment") {
-    throw new TypeError("invalid thesis contract id");
-  }
+  enumValue(event.thesis_contract_id, THESIS_CONTRACT_IDS, "thesis contract id");
   uuid(event.thesis_version_id, "thesis version id");
   uuid(event.committee_result_id, "committee result id");
   uuid(event.readiness_gate_result_id, "readiness gate result id");
@@ -323,6 +329,14 @@ export function parseOperatorDecisionEvent(
     "system disposition",
   );
   const action = enumValue(event.operator_action, OPERATOR_ACTIONS, "operator action");
+  if (
+    event.thesis_contract_id === PERSONAL_RESEARCH_THESIS_CONTRACT_ID &&
+    action === "mark_for_future_portfolio_review"
+  ) {
+    throw new TypeError(
+      "personal research thesis cannot create portfolio handoff",
+    );
+  }
   const relationship = enumValue(
     event.relationship,
     ["accept", "override", "defer"] as const,
@@ -373,9 +387,11 @@ export function parseOperatorDecisionHistory(
   }
   const operatorId = uuid(history.operator_id, "operator id");
   const securityId = uuid(history.security_id, "security id");
-  if (history.thesis_contract_id !== "biotech_moonshot_catalyst_assessment") {
-    throw new TypeError("invalid thesis contract id");
-  }
+  enumValue(
+    history.thesis_contract_id,
+    THESIS_CONTRACT_IDS,
+    "thesis contract id",
+  );
   if (!Array.isArray(history.events)) {
     throw new TypeError("invalid operator decision history events");
   }

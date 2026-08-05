@@ -2,20 +2,26 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Callable
+from typing import Callable, Protocol
 
 from investment_research_os.committee_memos import (
     CommitteeMemo,
-    InMemoryCommitteeMemoRepository,
+    CommitteeMemoRepository,
 )
 from investment_research_os.evidence_bundles import EvidenceBundleRepository
 from investment_research_os.ids import stable_id
 from investment_research_os.research_committees import (
-    InMemoryResearchCommitteeRepository,
+    ResearchCommitteeRepository,
     ResearchCommitteeResult,
 )
-from investment_research_os.research_runs import AuthenticatedOperator
+from investment_research_os.research_runs import (
+    AuthenticatedOperator,
+    DEFAULT_WORKFLOW_CONFIG_REGISTRY,
+    PERSONAL_RESEARCH_THESIS_CONTRACT_ID,
+    THESIS_CONTRACT_ID,
+)
 from investment_research_os.valuation_snapshots import (
+    PERSONAL_RESEARCH_VALUATION_CONTRACT,
     ValuationSnapshot,
     ValuationSnapshotRepository,
 )
@@ -290,6 +296,38 @@ class ReadinessAndThesisResult:
     thesis: ThesisVersion | None
 
 
+class ReadinessAndThesisRepository(Protocol):
+    def get_for_run(
+        self,
+        operator_id: str,
+        research_run_id: str,
+    ) -> ReadinessAndThesisResult | None: ...
+
+    def get_readiness_by_id(
+        self,
+        operator_id: str,
+        readiness_gate_result_id: str,
+    ) -> ReadinessGateResult | None: ...
+
+    def get_thesis_by_id(
+        self,
+        operator_id: str,
+        thesis_version_id: str,
+    ) -> ThesisVersion | None: ...
+
+    def get_chain(
+        self,
+        operator_id: str,
+        security_id: str,
+        thesis_contract_id: str,
+    ) -> ThesisChain: ...
+
+    def save(
+        self,
+        result: ReadinessAndThesisResult,
+    ) -> ReadinessAndThesisResult: ...
+
+
 class InMemoryReadinessAndThesisRepository:
     def __init__(self) -> None:
         self._results: dict[
@@ -457,10 +495,10 @@ class ReadinessAndThesisWorkflow:
     def __init__(
         self,
         *,
-        committee_repository: InMemoryResearchCommitteeRepository,
+        committee_repository: ResearchCommitteeRepository,
         evidence_bundle_repository: EvidenceBundleRepository,
-        memo_repository: InMemoryCommitteeMemoRepository,
-        repository: InMemoryReadinessAndThesisRepository,
+        memo_repository: CommitteeMemoRepository,
+        repository: ReadinessAndThesisRepository,
         clock: Callable[[], datetime],
         valuation_snapshot_repository: ValuationSnapshotRepository | None = None,
     ) -> None:
@@ -476,14 +514,33 @@ class ReadinessAndThesisWorkflow:
         operator: AuthenticatedOperator,
         request: ReadinessRequest,
     ) -> ReadinessAndThesisResult:
-        if request.gate_policy_version != "biotech-readiness.v1":
-            raise ReadinessAndThesisError("unsupported readiness policy")
         committee = self._committee_repository.get_by_id(
             operator.id,
             request.committee_id,
         )
         if committee is None:
             raise ReadinessAndThesisError("persisted committee not found")
+        workflow_config = DEFAULT_WORKFLOW_CONFIG_REGISTRY.resolve(
+            committee.question_type_id,
+            committee.workflow_config_version,
+        )
+        if (
+            workflow_config is None
+            or not workflow_config.active
+            or workflow_config.question_type_version
+            != committee.question_type_version
+        ):
+            raise ReadinessAndThesisError(
+                "committee workflow contract is unsupported"
+            )
+        expected_gate_policy = {
+            THESIS_CONTRACT_ID: "biotech-readiness.v1",
+            PERSONAL_RESEARCH_THESIS_CONTRACT_ID: (
+                "biotech-personal-readiness.v1"
+            ),
+        }.get(workflow_config.thesis_contract_id)
+        if request.gate_policy_version != expected_gate_policy:
+            raise ReadinessAndThesisError("unsupported readiness policy")
         existing = self._repository.get_for_run(
             operator.id,
             committee.research_run_id,
@@ -522,6 +579,7 @@ class ReadinessAndThesisWorkflow:
             memo,
             request.gate_policy_version,
             valuation_snapshot,
+            workflow_config.thesis_contract_id,
         )
         passed = tuple(item for item, did_pass in checks if did_pass)
         failed = tuple(item for item, did_pass in checks if not did_pass)
@@ -557,7 +615,7 @@ class ReadinessAndThesisWorkflow:
             readiness_gate_result_id=readiness_id,
             operator_id=operator.id,
             security_id=bundle.security_id,
-            thesis_contract_id=committee.question_type_id,
+            thesis_contract_id=workflow_config.thesis_contract_id,
             research_run_id=committee.research_run_id,
             evidence_bundle_id=bundle.id,
             evidence_bundle_hash=bundle.content_hash,
@@ -578,7 +636,7 @@ class ReadinessAndThesisWorkflow:
         chain = self._repository.get_chain(
             operator.id,
             bundle.security_id,
-            committee.question_type_id,
+            workflow_config.thesis_contract_id,
         )
         thesis, creation = _create_thesis(
             committee,
@@ -602,6 +660,7 @@ def _readiness_checks(
     memo: CommitteeMemo,
     policy_version: str,
     valuation_snapshot: ValuationSnapshot | None,
+    thesis_contract_id: str,
 ) -> tuple[tuple[ReadinessCheck, bool], ...]:
     eligible_accepted = (
         committee.accounting.accepted_count
@@ -620,6 +679,23 @@ def _readiness_checks(
         and memo.invalidation_statement_ids
         and memo.review_trigger.statement_id
     )
+    expected_valuation_contract = (
+        "valuation_snapshot.personal_research.v1"
+        if thesis_contract_id == PERSONAL_RESEARCH_THESIS_CONTRACT_ID
+        else "valuation_snapshot.v1"
+    )
+    personal_valuation_contract_valid = bool(
+        valuation_snapshot is not None
+        and valuation_snapshot.valuation_assurance
+        == PERSONAL_RESEARCH_VALUATION_CONTRACT.assurance
+        and valuation_snapshot.valuation_policy_version
+        == PERSONAL_RESEARCH_VALUATION_CONTRACT.required_policy_version
+        and valuation_snapshot.price is not None
+        and valuation_snapshot.price.price_type
+        == PERSONAL_RESEARCH_VALUATION_CONTRACT.price_type
+        and valuation_snapshot.price.halt_verification_status
+        == "verified_not_halted"
+    )
     valuation_aligned = bool(
         valuation_snapshot is not None
         and valuation_snapshot.research_run_id == committee.research_run_id
@@ -627,6 +703,12 @@ def _readiness_checks(
         and valuation_snapshot.evidence_bundle_hash == bundle.content_hash
         and valuation_snapshot.security_id == bundle.security_id
         and valuation_snapshot.snapshot_status == "valid"
+        and valuation_snapshot.contract_version == expected_valuation_contract
+        and (
+            personal_valuation_contract_valid
+            if thesis_contract_id == PERSONAL_RESEARCH_THESIS_CONTRACT_ID
+            else valuation_snapshot.valuation_assurance is None
+        )
         and valuation_snapshot.price_information_state == "aligned"
         and valuation_snapshot.market_relative_analysis_permitted
     )
@@ -875,6 +957,7 @@ __all__ = [
     "InMemoryReadinessAndThesisRepository",
     "ReadinessAndThesisError",
     "ReadinessAndThesisResult",
+    "ReadinessAndThesisRepository",
     "ReadinessAndThesisWorkflow",
     "ReadinessCheck",
     "ReadinessGateResult",

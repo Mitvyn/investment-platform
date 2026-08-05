@@ -23,7 +23,6 @@ _FINANCING_FORMS = frozenset(
         "424B3",
         "424B4",
         "424B5",
-        "EFFECT",
         "POS AM",
     }
 )
@@ -75,9 +74,7 @@ class RequiredSecFilingSelector:
         ):
             return self._indeterminate(
                 snapshot,
-                reason_code=(
-                    "sec_required_filing_publication_indeterminate"
-                ),
+                reason_code=("sec_required_filing_publication_indeterminate"),
             )
 
         filings = self._deduplicate(snapshot.included_filings)
@@ -168,18 +165,12 @@ class RequiredSecFilingSelector:
         selected = self._canonical_unique(
             (*annual, *periodic, *current_reports, *financing)
         )
-        annual_accessions = tuple(
-            filing.accession_number for filing in annual
-        )
-        periodic_accessions = tuple(
-            filing.accession_number for filing in periodic
-        )
+        annual_accessions = tuple(filing.accession_number for filing in annual)
+        periodic_accessions = tuple(filing.accession_number for filing in periodic)
         current_accessions = tuple(
             filing.accession_number for filing in current_reports
         )
-        financing_accessions = tuple(
-            filing.accession_number for filing in financing
-        )
+        financing_accessions = tuple(filing.accession_number for filing in financing)
         requirements = (
             SecFilingRequirementResult(
                 "sec_latest_annual_report",
@@ -219,9 +210,7 @@ class RequiredSecFilingSelector:
             coverage_state="complete",
             selected=selected,
             requirements=requirements,
-            reason_codes=tuple(
-                requirement.reason_code for requirement in requirements
-            )
+            reason_codes=tuple(requirement.reason_code for requirement in requirements)
             + ("sec_required_filings_complete",),
         )
 
@@ -293,9 +282,7 @@ class RequiredSecFilingSelector:
         days: int,
     ) -> bool:
         return (
-            cutoff.astimezone(UTC) - RequiredSecFilingSelector._publication_time(
-                filing
-            )
+            cutoff.astimezone(UTC) - RequiredSecFilingSelector._publication_time(filing)
         ) <= timedelta(days=days)
 
     @staticmethod
@@ -379,9 +366,7 @@ class RequiredSecFilingSelector:
         annual: tuple[SecSubmissionFiling, ...],
         reason_code: str,
     ) -> SecFilingSelection:
-        annual_accessions = tuple(
-            filing.accession_number for filing in annual
-        )
+        annual_accessions = tuple(filing.accession_number for filing in annual)
         return cls._result(
             snapshot,
             coverage_state="incomplete",

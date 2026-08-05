@@ -1,13 +1,17 @@
 import type {
-  CatalystContext,
   FinancialMetric,
   MarketContext,
   MarketSeriesContext,
-  RiskContext,
   TickerContext,
 } from "@iros/types";
 
 import { createClient } from "./supabase/server";
+import {
+  selectRelevantCatalyst,
+  type CatalystCandidate,
+  selectHighestPriorityActiveRisk,
+  type RiskCandidate,
+} from "./context-selection";
 import { marketSeriesUnavailableReason } from "./market-series-load-error";
 
 type FinancialRow = {
@@ -28,20 +32,6 @@ type FinancialRow = {
   retrieved_at: string;
 };
 
-type CatalystRow = {
-  title: string;
-  status: CatalystContext["status"];
-  window_start: string;
-  window_end: string;
-  locator: string;
-  passage_text: string;
-  passage_sha256: string;
-  source_title: string;
-  published_at: string;
-  source_url: string;
-  retrieved_at: string;
-};
-
 type MarketRow = {
   provider: MarketContext["provider"];
   exchange: string;
@@ -53,20 +43,6 @@ type MarketRow = {
   percent_change: number | string;
   volume: number | string | null;
   is_market_open: boolean;
-  source_url: string;
-  retrieved_at: string;
-};
-
-type RiskRow = {
-  title: string;
-  risk_type: RiskContext["riskType"];
-  severity: RiskContext["severity"];
-  status: RiskContext["status"];
-  locator: string;
-  passage_text: string;
-  passage_sha256: string;
-  source_title: string;
-  published_at: string;
   source_url: string;
   retrieved_at: string;
 };
@@ -124,22 +100,6 @@ function mapFinancial(row: FinancialRow): FinancialMetric {
   };
 }
 
-function mapCatalyst(row: CatalystRow): CatalystContext {
-  return {
-    title: row.title,
-    status: row.status,
-    windowStart: row.window_start,
-    windowEnd: row.window_end,
-    locator: row.locator,
-    passage: row.passage_text,
-    passageSha256: row.passage_sha256,
-    sourceTitle: row.source_title,
-    publishedAt: row.published_at,
-    sourceUrl: row.source_url,
-    retrievedAt: row.retrieved_at,
-  };
-}
-
 function mapMarket(row: MarketRow): MarketContext {
   return {
     provider: row.provider,
@@ -157,24 +117,9 @@ function mapMarket(row: MarketRow): MarketContext {
   };
 }
 
-function mapRisk(row: RiskRow): RiskContext {
-  return {
-    title: row.title,
-    riskType: row.risk_type,
-    severity: row.severity,
-    status: row.status,
-    locator: row.locator,
-    passage: row.passage_text,
-    passageSha256: row.passage_sha256,
-    sourceTitle: row.source_title,
-    publishedAt: row.published_at,
-    sourceUrl: row.source_url,
-    retrievedAt: row.retrieved_at,
-  };
-}
-
 export async function loadTickerContext(securityId: string): Promise<TickerContext> {
   const supabase = await createClient();
+  const asOfDate = new Date().toISOString().slice(0, 10);
   const [financialResult, catalystResult, riskResult, marketResult] =
     await Promise.all([
     supabase
@@ -190,18 +135,16 @@ export async function loadTickerContext(securityId: string): Promise<TickerConte
         "security_id,title,status,window_start,window_end,locator,passage_text,passage_sha256,source_title,published_at,source_url,retrieved_at",
       )
       .eq("security_id", securityId)
-      .order("window_start", { ascending: true })
-      .limit(1)
-      .maybeSingle(),
+      .in("status", ["expected", "delayed"])
+      .gte("window_end", asOfDate)
+      .order("window_start", { ascending: true }),
     supabase
       .from("iros_v_security_risk_context")
       .select(
         "security_id,title,risk_type,severity,status,locator,passage_text,passage_sha256,source_title,published_at,source_url,retrieved_at",
       )
       .eq("security_id", securityId)
-      .eq("status", "active")
-      .limit(1)
-      .maybeSingle(),
+      .eq("status", "active"),
     supabase
       .from("iros_v_security_market_context")
       .select(
@@ -239,10 +182,13 @@ export async function loadTickerContext(securityId: string): Promise<TickerConte
     financialMetrics: financialRows
       .filter((row) => row.published_at === latestPublishedAt)
       .map(mapFinancial),
-    catalyst: catalystResult.data
-      ? mapCatalyst(catalystResult.data as CatalystRow)
-      : null,
-    risk: riskResult.data ? mapRisk(riskResult.data as RiskRow) : null,
+    catalyst: selectRelevantCatalyst(
+      (catalystResult.data ?? []) as CatalystCandidate[],
+      asOfDate,
+    ),
+    risk: selectHighestPriorityActiveRisk(
+      (riskResult.data ?? []) as RiskCandidate[],
+    ),
     market: marketResult.data ? mapMarket(marketResult.data as MarketRow) : null,
     marketSeries: null,
   };

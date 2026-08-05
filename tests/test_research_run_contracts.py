@@ -58,13 +58,20 @@ class ResearchRunContractTests(unittest.TestCase):
             "research_run.v1",
         )
         self.assertEqual(
-            schema["properties"]["question_type"]["const"],
-            "biotech_moonshot_catalyst_assessment",
+            set(schema["properties"]["question_type"]["enum"]),
+            {
+                "biotech_moonshot_catalyst_assessment",
+                "biotech_moonshot_catalyst_personal_research_assessment",
+            },
         )
         self.assertEqual(
-            schema["properties"]["workflow_config_version"]["const"],
-            "biotech-moonshot-catalyst-v1",
+            set(schema["properties"]["workflow_config_version"]["enum"]),
+            {
+                "biotech-moonshot-catalyst-v1",
+                "biotech-moonshot-catalyst-personal-research-v1",
+            },
         )
+        self.assertEqual(len(schema["allOf"][0]["oneOf"]), 2)
         self.assertFalse(schema["properties"]["eligibility"]["additionalProperties"])
         checks = schema["properties"]["eligibility"]["properties"]["checks"]
         self.assertEqual(len(checks["prefixItems"]), 9)
