@@ -35,6 +35,14 @@ from investment_research_os.valuation_snapshots.market_proofs import (
 from investment_research_os.valuation_snapshots.corporate_actions import (
     MassivePersonalResearchCorporateActionAdapter,
 )
+from investment_research_os.valuation_snapshots.composite import OfficialCloseInput
+from tests.test_composite_valuation_source import (
+    CapitalPortFake,
+    CorporateActionPortFake,
+    FreshnessPortFake,
+    MaterialityPortFake,
+)
+from tests.test_evidence_bundle_storage import materialized_bundle
 from tests.test_five_grader_committee import completed_committee_fixture
 from tests.test_openai_execution_contract_registry import CONTRACTS, PROMPTS
 from tests.test_primary_source_end_to_end import (
@@ -45,6 +53,11 @@ from tests.test_primary_source_end_to_end import (
 )
 from tests.test_primary_source_plans import research_run
 from tests.test_primary_source_replay import _platform_capture_archive
+from tests.test_valuation_snapshot_workflow import (
+    FixedCalendar,
+    SESSION,
+    personal_input_candidate,
+)
 from workers.primary_sources.captures import load_primary_source_capture
 from workers.primary_sources.storage import FilePrimarySourceCaptureRepository
 from workers.research_committee.composition import (
@@ -153,6 +166,61 @@ def command_claim() -> CommitteeCommandClaim:
 
 
 class PersistentCommitteeWorkerCompositionTests(unittest.TestCase):
+    def test_personal_valuation_composition_runs_with_injected_close_without_massive(
+        self,
+    ) -> None:
+        class OfficialClosePortFake:
+            def __init__(self) -> None:
+                self.requests = []
+
+            def load(self, bundle, session):
+                self.requests.append((bundle, session))
+                candidate = personal_input_candidate()
+                return OfficialCloseInput(
+                    prices=candidate.prices,
+                    source_references=(candidate.source_references[0],),
+                )
+
+        close_port = OfficialClosePortFake()
+        source = compose_personal_research_valuation_input_source(
+            environment={},
+            market_calendar=FixedCalendar(),
+            historical_halt_verifier=None,
+            close_port=close_port,
+            capital_port=CapitalPortFake(),
+            corporate_action_port=CorporateActionPortFake(),
+            materiality_port=MaterialityPortFake(),
+            freshness_port=FreshnessPortFake(),
+            clock=lambda: datetime(2026, 7, 31, tzinfo=UTC),
+        )
+
+        candidate = source.load(materialized_bundle(), SESSION)
+
+        self.assertEqual(candidate.prices, personal_input_candidate().prices)
+        self.assertEqual(
+            close_port.requests,
+            [(materialized_bundle(), SESSION)],
+        )
+
+    def test_injected_close_requires_explicit_corporate_action_port(self) -> None:
+        with self.assertRaises(PersistentCommitteeCompositionError) as raised:
+            compose_personal_research_valuation_input_source(
+                environment={},
+                market_calendar=FixedCalendar(),
+                historical_halt_verifier=None,
+                close_port=SimpleNamespace(load=lambda bundle, session: None),
+                capital_port=None,
+                corporate_action_port=None,
+                materiality_port=None,
+                freshness_port=None,
+                clock=lambda: datetime(2026, 7, 31, tzinfo=UTC),
+            )
+
+        self.assertEqual(
+            raised.exception.error_code,
+            "personal_research_corporate_action_port_required_with_injected_close",
+        )
+
     def test_personal_valuation_composition_fails_before_market_without_proof_ports(
         self,
     ) -> None:
@@ -328,6 +396,40 @@ class PersistentCommitteeWorkerCompositionTests(unittest.TestCase):
         self.assertIsNotNone(stage._personal_research_workflow)
         self.assertEqual(supabase_transport.calls, [])
         self.assertEqual(massive_transport.calls, [])
+
+    def test_composes_personal_valuation_stage_with_injected_close_without_massive(
+        self,
+    ) -> None:
+        class NoLiveTransport:
+            def __init__(self) -> None:
+                self.calls = []
+
+            def request_json(self, *args, **kwargs):
+                self.calls.append((args, kwargs))
+                raise AssertionError("external interaction is not permitted")
+
+        supabase_transport = NoLiveTransport()
+        stage = compose_supabase_personal_research_valuation_snapshot_stage(
+            settings=SupabaseStorageSettings(
+                url="https://example.supabase.co",
+                secret_key="secret-test-key",
+            ),
+            environment={},
+            market_calendar=FixedCalendar(),
+            strict_input_source=SimpleNamespace(),
+            historical_halt_verifier=None,
+            close_port=SimpleNamespace(load=lambda bundle, session: None),
+            capital_port=None,
+            corporate_action_port=CorporateActionPortFake(),
+            materiality_port=None,
+            freshness_port=None,
+            supabase_transport=supabase_transport,
+            clock=lambda: datetime(2026, 7, 31, tzinfo=UTC),
+        )
+
+        self.assertIsInstance(stage, PersistentValuationSnapshotStage)
+        self.assertIsNotNone(stage._personal_research_workflow)
+        self.assertEqual(supabase_transport.calls, [])
 
     def test_composes_complete_supabase_readiness_stage_without_live_interaction(
         self,

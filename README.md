@@ -120,6 +120,12 @@ Edit `.env` only for active primary-source, market-data, database, and
 policy-approved model integrations. Never commit `.env` or captured source
 content.
 
+Committee workers read immutable captures from
+`data/primary-source-captures` by default. Set
+`IROS_PRIMARY_SOURCE_CAPTURE_ROOT` to an absolute path when captures live
+elsewhere. `MASSIVE_API_KEY` is optional when an approved official-close port
+is injected; Massive remains an inactive candidate, not a required provider.
+
 ### Phase 1 RXRX tracer
 
 Install dashboard dependencies:

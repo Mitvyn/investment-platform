@@ -49,7 +49,7 @@ class ResearchCommitteeCliTests(unittest.TestCase):
         self.assertEqual(factory_calls, [])
         self.assertIn("IROS_WORKER_ID", stderr.getvalue())
         self.assertIn("IROS_SUPABASE_URL", stderr.getvalue())
-        self.assertIn("MASSIVE_API_KEY", stderr.getvalue())
+        self.assertNotIn("MASSIVE_API_KEY", stderr.getvalue())
         self.assertNotIn("secret_key=", stderr.getvalue())
 
     def test_once_executes_injected_complete_worker_once(self) -> None:

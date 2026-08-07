@@ -82,6 +82,7 @@ from investment_research_os.valuation_snapshots.composite import (
     CorporateActionPort,
     FreshnessPort,
     MaterialityPort,
+    OfficialClosePort,
     PersonalResearchValuationInputSource,
 )
 from investment_research_os.valuation_snapshots.capital import (
@@ -429,6 +430,7 @@ def compose_personal_research_valuation_input_source(
     environment: Mapping[str, str],
     market_calendar: MarketCalendar | None,
     historical_halt_verifier: HistoricalHaltVerifier | None,
+    close_port: OfficialClosePort | None = None,
     capital_port: CapitalPort | None,
     corporate_action_port: CorporateActionPort | None,
     materiality_port: MaterialityPort | None,
@@ -438,36 +440,12 @@ def compose_personal_research_valuation_input_source(
 ) -> PersonalResearchValuationInputSource:
     if market_calendar is None:
         market_calendar = load_packaged_us_equities_calendar()
-    if historical_halt_verifier is None:
-        halt_user_agent = environment.get(
-            "IROS_NASDAQ_TRADER_USER_AGENT",
-            environment.get("SEC_USER_AGENT", ""),
+    if not callable(getattr(market_calendar, "latest_completed_session", None)):
+        raise PersistentCommitteeCompositionError(
+            "personal_research_market_calendar_missing"
         )
-        try:
-            halt_transport = NasdaqTraderHaltHttpTransport(
-                NasdaqTraderHaltHttpSettings(user_agent=halt_user_agent),
-                clock=clock,
-            )
-        except ValueError as error:
-            raise PersistentCommitteeCompositionError(
-                "personal_research_historical_halt_configuration_invalid"
-            ) from error
-        historical_halt_verifier = NasdaqTraderHistoricalHaltVerifier(
-            transport=halt_transport,
-            source_version="nasdaq-trader-halt-search.v2",
-            coverage_start=market_calendar.coverage_start,
-            coverage_end=market_calendar.coverage_end,
-        )
-    required_dependencies = (
-        ("market_calendar", market_calendar, "latest_completed_session"),
-        ("historical_halt_verifier", historical_halt_verifier, "verify"),
-    )
-    for name, dependency, method_name in required_dependencies:
-        if dependency is None or not callable(getattr(dependency, method_name, None)):
-            raise PersistentCommitteeCompositionError(
-                f"personal_research_{name}_missing"
-            )
     optional_dependencies = (
+        ("close_port", close_port, "load"),
         ("capital_evidence_port", capital_port, "load"),
         ("corporate_action_port", corporate_action_port, "reconcile"),
         ("materiality_port", materiality_port, "assess"),
@@ -480,31 +458,61 @@ def compose_personal_research_valuation_input_source(
             raise PersistentCommitteeCompositionError(
                 f"personal_research_{name}_missing"
             )
-    try:
-        settings = MassiveSettings.from_environment(environment)
-    except ValueError as error:
+    if close_port is None:
+        if historical_halt_verifier is None:
+            halt_user_agent = environment.get(
+                "IROS_NASDAQ_TRADER_USER_AGENT",
+                environment.get("SEC_USER_AGENT", ""),
+            )
+            try:
+                halt_transport = NasdaqTraderHaltHttpTransport(
+                    NasdaqTraderHaltHttpSettings(user_agent=halt_user_agent),
+                    clock=clock,
+                )
+            except ValueError as error:
+                raise PersistentCommitteeCompositionError(
+                    "personal_research_historical_halt_configuration_invalid"
+                ) from error
+            historical_halt_verifier = NasdaqTraderHistoricalHaltVerifier(
+                transport=halt_transport,
+                source_version="nasdaq-trader-halt-search.v2",
+                coverage_start=market_calendar.coverage_start,
+                coverage_end=market_calendar.coverage_end,
+            )
+        if not callable(getattr(historical_halt_verifier, "verify", None)):
+            raise PersistentCommitteeCompositionError(
+                "personal_research_historical_halt_verifier_missing"
+            )
+        try:
+            settings = MassiveSettings.from_environment(environment)
+        except ValueError as error:
+            raise PersistentCommitteeCompositionError(
+                "personal_research_massive_configuration_invalid"
+            ) from error
+        client = MassiveValuationClient(
+            settings,
+            transport=transport,
+            clock=clock,
+        )
+        close_port = MassivePersonalResearchCloseAdapter(
+            client=client,
+            halt_verifier=historical_halt_verifier,
+        )
+        if corporate_action_port is None:
+            corporate_action_port = MassivePersonalResearchCorporateActionAdapter(
+                client=client
+            )
+    elif corporate_action_port is None:
         raise PersistentCommitteeCompositionError(
-            "personal_research_massive_configuration_invalid"
-        ) from error
-    assert market_calendar is not None
-    assert historical_halt_verifier is not None
-    client = MassiveValuationClient(
-        settings,
-        transport=transport,
-        clock=clock,
-    )
-    close_port = MassivePersonalResearchCloseAdapter(
-        client=client,
-        halt_verifier=historical_halt_verifier,
-    )
+            "personal_research_corporate_action_port_required_with_injected_close"
+        )
+    assert close_port is not None
+    assert corporate_action_port is not None
     return PersonalResearchValuationInputSource(
         market_calendar=market_calendar,
         close_port=close_port,
         capital_port=capital_port or FrozenEvidenceCapitalPort(),
-        corporate_action_port=(
-            corporate_action_port
-            or MassivePersonalResearchCorporateActionAdapter(client=client)
-        ),
+        corporate_action_port=corporate_action_port,
         materiality_port=materiality_port or FrozenEvidenceMaterialityPort(),
         freshness_port=freshness_port or FrozenEvidenceCapitalFreshnessPort(),
     )
@@ -517,6 +525,7 @@ def compose_supabase_personal_research_valuation_snapshot_stage(
     market_calendar: MarketCalendar | None,
     strict_input_source: ValuationInputSource,
     historical_halt_verifier: HistoricalHaltVerifier | None,
+    close_port: OfficialClosePort | None = None,
     capital_port: CapitalPort | None,
     corporate_action_port: CorporateActionPort | None,
     materiality_port: MaterialityPort | None,
@@ -530,6 +539,7 @@ def compose_supabase_personal_research_valuation_snapshot_stage(
         environment=environment,
         market_calendar=market_calendar,
         historical_halt_verifier=historical_halt_verifier,
+        close_port=close_port,
         capital_port=capital_port,
         corporate_action_port=corporate_action_port,
         materiality_port=materiality_port,
