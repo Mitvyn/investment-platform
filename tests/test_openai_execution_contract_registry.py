@@ -16,6 +16,10 @@ from investment_research_os.providers.openai_contracts import (
     OpenAIEvaluationExecutionIdentity,
     OpenAIExecutionContractRegistry,
 )
+from investment_research_os.research_workflows import (
+    build_inactive_production_personal_research_mvp_config,
+    build_personal_research_mvp_config,
+)
 
 
 REPO = Path(__file__).parents[1]
@@ -80,6 +84,69 @@ def rehash_registry(payload) -> None:
 
 
 class OpenAIExecutionContractRegistryTests(unittest.TestCase):
+    def test_offline_personal_config_cannot_execute_as_production(self) -> None:
+        offline = build_personal_research_mvp_config()
+        production = build_inactive_production_personal_research_mvp_config()
+
+        for grader in offline.graders:
+            self.assertEqual(grader.model.environment, "test")
+            self.assertEqual(grader.model.temperature, "0")
+            self.assertEqual(grader.policy.required_environment, "test")
+            self.assertNotEqual(grader.model, production.graders[0].model)
+
+        self.assertEqual(offline.synthesizer.model.environment, "test")
+        self.assertEqual(offline.synthesizer.model.temperature, "0")
+        self.assertEqual(
+            offline.synthesizer.policy.required_environment,
+            "test",
+        )
+        self.assertNotEqual(
+            offline.synthesizer.model,
+            production.synthesizer.model,
+        )
+
+    def test_inactive_personal_production_config_matches_approved_profile(
+        self,
+    ) -> None:
+        config = build_inactive_production_personal_research_mvp_config()
+
+        self.assertEqual(len(config.graders), 5)
+        for grader in config.graders:
+            self.assertEqual(
+                grader.model.config_id,
+                "biotech_committee_graders_openai_sol_medium_v1",
+            )
+            self.assertEqual(grader.model.temperature, "provider_default")
+            self.assertEqual(grader.model.input_token_cap, 48_000)
+            self.assertEqual(grader.model.output_token_cap, 4_000)
+            self.assertEqual(grader.model.environment, "production")
+            self.assertFalse(grader.model.active)
+            self.assertFalse(grader.model.evaluation_passed)
+            self.assertFalse(grader.prompt.active)
+            self.assertFalse(grader.prompt.evaluation_passed)
+            self.assertEqual(
+                grader.policy.required_environment,
+                "production",
+            )
+
+        synthesizer = config.synthesizer
+        self.assertEqual(
+            synthesizer.model.config_id,
+            "biotech_committee_synthesizer_gpt_5_6_sol_medium_v1",
+        )
+        self.assertEqual(synthesizer.model.temperature, "provider_default")
+        self.assertEqual(synthesizer.model.input_token_cap, 160_000)
+        self.assertEqual(synthesizer.model.output_token_cap, 6_000)
+        self.assertEqual(synthesizer.model.environment, "production")
+        self.assertFalse(synthesizer.model.active)
+        self.assertFalse(synthesizer.model.evaluation_passed)
+        self.assertFalse(synthesizer.prompt.active)
+        self.assertFalse(synthesizer.prompt.evaluation_passed)
+        self.assertEqual(
+            synthesizer.policy.required_environment,
+            "production",
+        )
+
     def test_loads_exact_frozen_six_role_registry(self) -> None:
         registry = OpenAIExecutionContractRegistry.load(
             contract_path=CONTRACTS,

@@ -204,19 +204,13 @@ class BiotechResearchCommitteeConfig:
                 {
                     "grader_id": item.contract.grader_id,
                     "grader_version": item.contract.grader_version,
-                    "grader_contract_version": (
-                        item.contract.grader_contract_version
-                    ),
+                    "grader_contract_version": (item.contract.grader_contract_version),
                     "eligibility_rule_version": (
                         item.contract.eligibility_rule_version
                     ),
                     "rubric_version": item.contract.rubric_version,
-                    "output_schema_version": (
-                        item.contract.output_schema_version
-                    ),
-                    "abstention_rule_version": (
-                        item.contract.abstention_rule_version
-                    ),
+                    "output_schema_version": (item.contract.output_schema_version),
+                    "abstention_rule_version": (item.contract.abstention_rule_version),
                     "prompt_version": item.prompt.prompt_version,
                     "prompt_content_sha256": item.prompt.content_sha256,
                     "model_config_version": item.model.config_version,
@@ -227,16 +221,10 @@ class BiotechResearchCommitteeConfig:
             ],
             "synthesizer": {
                 "prompt_version": self.synthesizer.prompt.prompt_version,
-                "prompt_content_sha256": (
-                    self.synthesizer.prompt.content_sha256
-                ),
+                "prompt_content_sha256": (self.synthesizer.prompt.content_sha256),
                 "model_config_version": self.synthesizer.model.config_version,
-                "execution_policy_version": (
-                    self.synthesizer.policy.policy_version
-                ),
-                "retry_policy_version": (
-                    self.synthesizer.policy.retry_policy_version
-                ),
+                "execution_policy_version": (self.synthesizer.policy.policy_version),
+                "retry_policy_version": (self.synthesizer.policy.retry_policy_version),
             },
             "readiness_policy_version": self.readiness_policy_version,
         }
@@ -382,20 +370,12 @@ def _build_offline_mvp_config(
             contract=GraderContract(
                 grader_id=definition.grader_id,
                 grader_version=definition.grader_version,
-                grader_contract_version=(
-                    f"{definition.grader_id}-grader-contract-v1"
-                ),
+                grader_contract_version=(f"{definition.grader_id}-grader-contract-v1"),
                 owned_decision_question=definition.owned_decision_question,
-                eligibility_rule_version=(
-                    f"{definition.grader_id}-eligibility-v1"
-                ),
+                eligibility_rule_version=(f"{definition.grader_id}-eligibility-v1"),
                 rubric_version=f"{definition.grader_id}-rubric-v1",
-                output_schema_version=(
-                    f"{definition.grader_id}_grader_payload.v1"
-                ),
-                abstention_rule_version=(
-                    f"{definition.grader_id}-abstention-v1"
-                ),
+                output_schema_version=(f"{definition.grader_id}_grader_payload.v1"),
+                abstention_rule_version=(f"{definition.grader_id}-abstention-v1"),
                 required=definition.required_when_eligible,
                 eligible=True,
             ),
@@ -403,9 +383,7 @@ def _build_offline_mvp_config(
                 prompt_id=f"{definition.grader_id}_grader_v1",
                 prompt_version=f"{definition.grader_id}_grader_v1",
                 input_schema_version="grader-input-v1",
-                output_schema_version=(
-                    f"{definition.grader_id}_grader_payload.v1"
-                ),
+                output_schema_version=(f"{definition.grader_id}_grader_payload.v1"),
                 active=True,
                 evaluation_passed=True,
                 content_sha256=prompt_hashes[definition.grader_id],
@@ -469,6 +447,78 @@ def build_personal_research_mvp_config() -> BiotechResearchCommitteeConfig:
         question_type_version=PERSONAL_RESEARCH_QUESTION_TYPE_VERSION,
         workflow_config_version=PERSONAL_RESEARCH_WORKFLOW_CONFIG_VERSION,
         readiness_policy_version="biotech-personal-readiness.v1",
+    )
+
+
+def build_inactive_production_personal_research_mvp_config() -> (
+    BiotechResearchCommitteeConfig
+):
+    """Build exact approved production profile without activating execution."""
+
+    offline = build_personal_research_mvp_config()
+    production_policy = replace(
+        _execution_policy(),
+        required_environment="production",
+    )
+    grader_model = ModelConfiguration(
+        config_id="biotech_committee_graders_openai_sol_medium_v1",
+        config_version="biotech_committee_graders_openai_sol_medium_v1",
+        provider="openai",
+        model="gpt-5.6-sol",
+        reasoning_effort="medium",
+        thinking_enabled=True,
+        temperature="provider_default",
+        input_token_cap=48_000,
+        output_token_cap=4_000,
+        active=False,
+        evaluation_passed=False,
+        retention_approved=True,
+        source_processing_approved=True,
+        environment="production",
+    )
+    synthesizer_model = ModelConfiguration(
+        config_id="biotech_committee_synthesizer_gpt_5_6_sol_medium_v1",
+        config_version=("biotech_committee_synthesizer_gpt_5_6_sol_medium_v1"),
+        provider="openai",
+        model="gpt-5.6-sol",
+        reasoning_effort="medium",
+        thinking_enabled=True,
+        temperature="provider_default",
+        input_token_cap=160_000,
+        output_token_cap=6_000,
+        active=False,
+        evaluation_passed=False,
+        retention_approved=True,
+        source_processing_approved=True,
+        environment="production",
+    )
+    graders = tuple(
+        replace(
+            grader,
+            prompt=replace(
+                grader.prompt,
+                active=False,
+                evaluation_passed=False,
+            ),
+            model=grader_model,
+            policy=production_policy,
+        )
+        for grader in offline.graders
+    )
+    synthesizer = replace(
+        offline.synthesizer,
+        prompt=replace(
+            offline.synthesizer.prompt,
+            active=False,
+            evaluation_passed=False,
+        ),
+        model=synthesizer_model,
+        policy=production_policy,
+    )
+    return replace(
+        offline,
+        graders=graders,
+        synthesizer=synthesizer,
     )
 
 
@@ -584,9 +634,7 @@ class BiotechResearchCommitteeWorkflow:
         run = self._run_workflow.create(operator, request.as_payload())
         bundle = self._bundle_workflow.materialize(operator, run.id)
         valuation = self._valuation_workflow.materialize(operator, bundle.id)
-        grader_ids = tuple(
-            item.contract.grader_id for item in self._config.graders
-        )
+        grader_ids = tuple(item.contract.grader_id for item in self._config.graders)
         grader_eligibility = (
             None
             if self._grader_router is None
@@ -630,6 +678,7 @@ __all__ = [
     "GraderRuntimeConfiguration",
     "GraderEligibilityRouter",
     "SynthesizerRuntimeConfiguration",
+    "build_inactive_production_personal_research_mvp_config",
     "build_offline_mvp_config",
     "build_personal_research_mvp_config",
 ]
