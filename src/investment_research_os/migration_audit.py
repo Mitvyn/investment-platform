@@ -71,7 +71,7 @@ def audit_iros_migration_batch(paths: Iterable[Path]) -> MigrationAuditReport:
             )
         seen_paths.add(resolved_path)
     for path in ordered_paths:
-        sql = _strip_sql_comments_and_literals(path.read_text())
+        sql = strip_sql_comments_and_literals(path.read_text())
         findings: list[tuple[int, MigrationAuditViolation]] = []
         for match in re.finditer(r"\bpublic\.([a-z_][a-z0-9_]*)\b", sql, re.I):
             object_name = match.group(1).lower()
@@ -266,7 +266,7 @@ def audit_iros_migration_batch(paths: Iterable[Path]) -> MigrationAuditReport:
     )
 
 
-def _strip_sql_comments_and_literals(sql: str) -> str:
+def strip_sql_comments_and_literals(sql: str) -> str:
     without_block_comments = re.sub(r"/\*.*?\*/", " ", sql, flags=re.S)
     without_line_comments = re.sub(r"--[^\n]*", " ", without_block_comments)
     return re.sub(r"'(?:''|[^'])*'", "''", without_line_comments)
@@ -309,4 +309,5 @@ __all__ = [
     "MigrationAuditViolation",
     "MigrationManifestEntry",
     "audit_iros_migration_batch",
+    "strip_sql_comments_and_literals",
 ]

@@ -126,6 +126,17 @@ Committee workers read immutable captures from
 elsewhere. `MASSIVE_API_KEY` is optional when an approved official-close port
 is injected; Massive remains an inactive candidate, not a required provider.
 
+Validate hosted-verification v3 plan, migration, target, dispatch, fixture,
+scope, and rollback contracts without opening a database connection:
+
+```bash
+PYTHONPATH=src python3 -m workers.hosted_verification dry-run \
+  --migration-root supabase/migrations
+```
+
+This command reads only local `*_iros_*.sql` migrations. It does not read
+credentials, connect to Supabase, run advisors, or execute probes.
+
 ### Phase 1 RXRX tracer
 
 Install dashboard dependencies:

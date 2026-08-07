@@ -271,6 +271,38 @@ class HostedVerificationV3ContractTests(unittest.TestCase):
                 fixtures=contract.fixtures,
             )
 
+    def test_contract_rejects_unused_fixture(self) -> None:
+        contract = self._read_contract()
+        unused = HostedProbeFixture.freeze(
+            fixture_id="fixture.unused_row",
+            setup_state="unused_row",
+            row_identity="unused_row",
+            target_owner_role="owner",
+            cleanup_rule="none",
+        )
+        plan = HostedVerificationPlan.freeze(
+            probes=(
+                HostedVerificationProbe(
+                    probe_id="access.owner",
+                    category="owner_isolation",
+                    required_scope="owner_isolation_read",
+                    expected_result_code="owner_access_verified",
+                    expected_count=1,
+                ),
+            ),
+            target_objects=("iros_jobs",),
+        )
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "fixture coverage is invalid",
+        ):
+            HostedVerificationExecutionContract.freeze(
+                plan=plan,
+                dispatches=contract.dispatches,
+                fixtures=(*contract.fixtures, unused),
+            )
+
     def test_authorization_rejects_tampered_embedded_dispatch(self) -> None:
         contract = self._read_contract()
         tampered = replace(
