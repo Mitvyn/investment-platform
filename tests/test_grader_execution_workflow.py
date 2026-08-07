@@ -682,6 +682,40 @@ class GraderExecutionWorkflowTests(unittest.TestCase):
         self.assertEqual(budget.reserved_usd, Decimal("0"))
         assert_typescript_contract(self, execution, bundle)
 
+    def test_test_environment_config_cannot_run_under_production_policy(self) -> None:
+        bundle = materialized_bundle()
+        bundle_repository = InMemoryEvidenceBundleRepository()
+        bundle_repository.save(bundle)
+        provider = FakeProvider(())
+        request = approved_request(bundle.id)
+        checked_at = datetime(2026, 7, 22, 1, 0, tzinfo=UTC)
+        request = replace(
+            request,
+            price_card=replace(
+                request.price_card,
+                effective_to=checked_at + timedelta(days=30),
+            ),
+            policy=replace(
+                request.policy,
+                required_environment="production",
+            ),
+        )
+
+        execution = GraderExecutionWorkflow(
+            evidence_bundle_repository=bundle_repository,
+            execution_repository=InMemoryGraderExecutionRepository(),
+            budget_ledger=InMemoryBudgetLedger(hard_limit_usd=Decimal("1.00")),
+            provider=provider,
+            clock=lambda: checked_at,
+        ).execute(AuthenticatedOperator(bundle.operator_id), request)
+
+        self.assertEqual(execution.execution_state, "not_executed")
+        self.assertIn(
+            "execution_environment_mismatch",
+            execution.blocking_reasons,
+        )
+        self.assertEqual(provider.requests, [])
+
     def test_discovery_only_source_in_persisted_bundle_blocks_provider_call(
         self,
     ) -> None:

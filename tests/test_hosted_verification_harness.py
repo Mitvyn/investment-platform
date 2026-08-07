@@ -7,15 +7,17 @@ import tempfile
 import unittest
 
 from investment_research_os.hosted_verification import (
+    HOSTED_VERIFICATION_SCOPES,
+    HostedAdvisorFinding,
     HostedVerificationHarness,
     HostedVerificationAuthorization,
     HostedVerificationPlan,
     HostedVerificationProbe,
     HostedVerificationProbeResult,
     HostedVerificationRecord,
+    HostedVerificationReport,
     build_default_iros_hosted_verification_plan,
     build_hosted_verification_plan,
-    build_matching_offline_probe_results,
 )
 
 
@@ -27,7 +29,33 @@ revoke all privileges on table public.iros_test from anon, authenticated;
 """
 
 
+def build_matching_offline_probe_results(
+    plan: HostedVerificationPlan,
+) -> tuple[HostedVerificationProbeResult, ...]:
+    results = []
+    for probe in plan.probes:
+        if probe.expected_result_code is None or probe.expected_count is None:
+            raise ValueError("test fixture requires exact probe contract")
+        artifact_sha256 = None
+        if probe.category == "migration_history":
+            artifact_sha256 = plan.migration_manifest_sha256
+        elif probe.category == "owner_isolation":
+            artifact_sha256 = plan.target_manifest_sha256
+        results.append(
+            HostedVerificationProbeResult.passed_result(
+                probe_id=probe.probe_id,
+                category=probe.category,
+                result_code=probe.expected_result_code,
+                count=probe.expected_count,
+                artifact_sha256=artifact_sha256,
+            )
+        )
+    return tuple(results)
+
+
 class PortSpy:
+    execution_provenance = "offline_fixture"
+
     def __init__(self) -> None:
         self.calls: list[str] = []
 
@@ -35,26 +63,28 @@ class PortSpy:
         self.calls.append("database")
         raise AssertionError("database probes must not run")
 
-    def run_advisor_probes(self, plan, authorization):
+    def read_advisor_findings(self, plan, authorization):
         self.calls.append("advisor")
         raise AssertionError("advisor probes must not run")
 
 
 class ResultPort:
+    execution_provenance = "offline_fixture"
+
     def __init__(
         self,
         *,
         database_results: tuple[HostedVerificationProbeResult, ...] = (),
-        advisor_results: tuple[HostedVerificationProbeResult, ...] = (),
+        advisor_findings: tuple[HostedAdvisorFinding, ...] = (),
     ) -> None:
         self.database_results = database_results
-        self.advisor_results = advisor_results
+        self.advisor_findings = advisor_findings
 
     def run_database_probes(self, plan, authorization):
         return self.database_results
 
-    def run_advisor_probes(self, plan, authorization):
-        return self.advisor_results
+    def read_advisor_findings(self, plan, authorization):
+        return self.advisor_findings
 
 
 class FailingDatabasePort(ResultPort):
@@ -62,7 +92,19 @@ class FailingDatabasePort(ResultPort):
         raise RuntimeError("secret-token-and-raw-payload")
 
 
-def valid_authorization() -> HostedVerificationAuthorization:
+class FailingAdvisorPort(ResultPort):
+    def read_advisor_findings(self, plan, authorization):
+        raise RuntimeError("secret-token-and-advisor-payload")
+
+
+class HostedAttestedResultPort(ResultPort):
+    execution_provenance = "hosted_transport"
+
+
+def valid_authorization(
+    *,
+    authorized_scopes: tuple[str, ...] = HOSTED_VERIFICATION_SCOPES,
+) -> HostedVerificationAuthorization:
     return HostedVerificationAuthorization.freeze(
         authorization_id="authorization-iro-051",
         issue_id="IRO-052",
@@ -74,11 +116,128 @@ def valid_authorization() -> HostedVerificationAuthorization:
         turn_id="turn-iro-051",
         issued_at=NOW - timedelta(minutes=1),
         expires_at=NOW + timedelta(minutes=15),
-        authorized_scopes=HostedVerificationPlan.required_scopes(),
+        authorized_scopes=authorized_scopes,
     )
 
 
 class HostedVerificationHarnessTests(unittest.TestCase):
+    def test_advisor_filters_iros_findings_and_blocks_unresolved_warning(
+        self,
+    ) -> None:
+        plan = HostedVerificationPlan.freeze(
+            probes=(
+                HostedVerificationProbe(
+                    probe_id="advisor.iros_findings",
+                    category="database_advisor",
+                    required_scope="database_advisor_read",
+                    expected_result_code="no_unaddressed_findings",
+                    expected_count=0,
+                ),
+            ),
+        )
+        advisor = ResultPort(
+            advisor_findings=(
+                HostedAdvisorFinding(
+                    finding_id="advisor.outside_scope",
+                    object_name="public.well_profiles",
+                    severity="error",
+                    resolved=False,
+                ),
+                HostedAdvisorFinding(
+                    finding_id="advisor.iros_warning",
+                    object_name="public.iros_jobs",
+                    severity="warning",
+                    resolved=False,
+                ),
+            )
+        )
+
+        report = HostedVerificationHarness(
+            database=ResultPort(),
+            advisor=advisor,
+        ).run(
+            plan=plan,
+            authorization=valid_authorization(
+                authorized_scopes=plan.required_scopes,
+            ),
+            current_turn_id="turn-iro-051",
+            checked_at=NOW,
+        )
+
+        self.assertFalse(report.passed)
+        self.assertEqual(
+            report.blocking_reason_codes,
+            (
+                "probe_contract_mismatch:advisor.iros_findings",
+                "probe_failed:advisor.iros_findings",
+            ),
+        )
+        self.assertEqual(report.probe_results[0].count, 1)
+
+    def test_empty_plan_never_reports_hosted_verification_pass(self) -> None:
+        database = PortSpy()
+        advisor = PortSpy()
+
+        report = HostedVerificationHarness(
+            database=database,
+            advisor=advisor,
+        ).run(
+            plan=HostedVerificationPlan.empty(),
+            authorization=valid_authorization(),
+            current_turn_id="turn-iro-051",
+            checked_at=NOW,
+        )
+
+        self.assertFalse(report.passed)
+        self.assertEqual(
+            report.blocking_reason_codes,
+            ("plan_coverage_incomplete",),
+        )
+        self.assertEqual(database.calls, [])
+        self.assertEqual(advisor.calls, [])
+
+    def test_plan_required_scopes_come_only_from_declared_probes(self) -> None:
+        plan = HostedVerificationPlan.freeze(
+            probes=(
+                HostedVerificationProbe(
+                    probe_id="migration.reviewed_batch",
+                    category="migration_history",
+                    required_scope="linked_migration_history_read",
+                ),
+            ),
+        )
+
+        self.assertEqual(
+            plan.required_scopes,
+            ("linked_migration_history_read",),
+        )
+
+    def test_direct_authorization_construction_cannot_bypass_subject_isolation(
+        self,
+    ) -> None:
+        authorization = valid_authorization()
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "hosted verification subjects must be distinct",
+        ):
+            replace(
+                authorization,
+                unrelated_subject_id=authorization.owner_subject_id,
+            ).assert_valid_contract()
+
+    def test_report_rejects_contradictory_pass_state(self) -> None:
+        with self.assertRaisesRegex(
+            ValueError,
+            "hosted verification report outcome is inconsistent",
+        ):
+            HostedVerificationReport(
+                passed=True,
+                blocking_reason_codes=("probe_failed:test.probe",),
+                probe_results=(),
+                checked_at=NOW,
+            )
+
     def test_authorization_is_bound_to_iros_052_and_iros_only_database(self) -> None:
         authorization = HostedVerificationAuthorization.freeze(
             authorization_id="authorization-iro-052",
@@ -91,7 +250,7 @@ class HostedVerificationHarnessTests(unittest.TestCase):
             turn_id="turn-iro-052",
             issued_at=NOW - timedelta(minutes=1),
             expires_at=NOW + timedelta(minutes=15),
-            authorized_scopes=HostedVerificationPlan.required_scopes(),
+            authorized_scopes=HOSTED_VERIFICATION_SCOPES,
         )
 
         self.assertEqual(authorization.issue_id, "IRO-052")
@@ -125,7 +284,7 @@ class HostedVerificationHarnessTests(unittest.TestCase):
                 turn_id="turn-iro-052",
                 issued_at=NOW,
                 expires_at=NOW + timedelta(hours=24),
-                authorized_scopes=HostedVerificationPlan.required_scopes(),
+                authorized_scopes=HOSTED_VERIFICATION_SCOPES,
             )
 
     def test_missing_authorization_fails_closed_before_any_probe(self) -> None:
@@ -185,7 +344,7 @@ class HostedVerificationHarnessTests(unittest.TestCase):
             turn_id="old-turn",
             issued_at=NOW - timedelta(minutes=1),
             expires_at=NOW + timedelta(minutes=15),
-            authorized_scopes=HostedVerificationPlan.required_scopes(),
+            authorized_scopes=HOSTED_VERIFICATION_SCOPES,
         )
 
         report = harness.run(
@@ -199,6 +358,28 @@ class HostedVerificationHarnessTests(unittest.TestCase):
         self.assertEqual(
             report.blocking_reason_codes,
             ("authorization_not_current_turn",),
+        )
+        self.assertEqual(database.calls, [])
+        self.assertEqual(advisor.calls, [])
+
+        scoped_plan = HostedVerificationPlan.freeze(
+            probes=(
+                HostedVerificationProbe(
+                    probe_id="migration.reviewed_batch",
+                    category="migration_history",
+                    required_scope="linked_migration_history_read",
+                ),
+            ),
+        )
+        wrong_scope_report = harness.run(
+            plan=scoped_plan,
+            authorization=valid_authorization(),
+            current_turn_id="turn-iro-051",
+            checked_at=NOW,
+        )
+        self.assertEqual(
+            wrong_scope_report.blocking_reason_codes,
+            ("authorization_scope_mismatch",),
         )
         self.assertEqual(database.calls, [])
         self.assertEqual(advisor.calls, [])
@@ -239,23 +420,17 @@ class HostedVerificationHarnessTests(unittest.TestCase):
                 artifact_sha256=plan.target_manifest_sha256,
             ),
         )
-        advisor_results = (
-            HostedVerificationProbeResult.passed_result(
-                probe_id="advisor.iros_findings",
-                category="database_advisor",
-                result_code="no_unaddressed_findings",
-                count=0,
-            ),
-        )
         database = ResultPort(database_results=database_results)
-        advisor = ResultPort(advisor_results=advisor_results)
+        advisor = ResultPort()
 
         report = HostedVerificationHarness(
             database=database,
             advisor=advisor,
         ).run(
             plan=plan,
-            authorization=valid_authorization(),
+            authorization=valid_authorization(
+                authorized_scopes=plan.required_scopes,
+            ),
             current_turn_id="turn-iro-051",
             checked_at=NOW,
         )
@@ -310,6 +485,7 @@ class HostedVerificationHarnessTests(unittest.TestCase):
             )
 
         categories = {probe.category for probe in plan.probes}
+        self.assertEqual(plan.plan_version, "hosted-verification-plan.v2")
         self.assertEqual(
             categories,
             {
@@ -376,7 +552,9 @@ class HostedVerificationHarnessTests(unittest.TestCase):
             advisor=advisor,
         ).run(
             plan=plan,
-            authorization=valid_authorization(),
+            authorization=valid_authorization(
+                authorized_scopes=plan.required_scopes,
+            ),
             current_turn_id="turn-iro-051",
             checked_at=NOW,
         )
@@ -387,7 +565,63 @@ class HostedVerificationHarnessTests(unittest.TestCase):
             ("database_probe_transport_failed",),
         )
         self.assertNotIn("secret-token", str(report.as_dict()))
+        self.assertEqual(
+            set(report.as_dict()),
+            {
+                "passed",
+                "blocking_reason_codes",
+                "probe_results",
+                "checked_at",
+                "plan_sha256",
+                "authorization_sha256",
+                "execution_provenance",
+                "content_sha256",
+            },
+        )
         self.assertEqual(advisor.calls, [])
+
+    def test_advisor_transport_failure_discards_partial_database_results(
+        self,
+    ) -> None:
+        plan = HostedVerificationPlan.freeze(
+            probes=(
+                HostedVerificationProbe(
+                    probe_id="migration.reviewed_batch",
+                    category="migration_history",
+                    required_scope="linked_migration_history_read",
+                ),
+                HostedVerificationProbe(
+                    probe_id="advisor.iros_findings",
+                    category="database_advisor",
+                    required_scope="database_advisor_read",
+                ),
+            ),
+        )
+        database_result = HostedVerificationProbeResult.passed_result(
+            probe_id="migration.reviewed_batch",
+            category="migration_history",
+            result_code="reviewed_batch_matches",
+            count=0,
+            artifact_sha256=plan.migration_manifest_sha256,
+        )
+
+        report = HostedVerificationHarness(
+            database=ResultPort(database_results=(database_result,)),
+            advisor=FailingAdvisorPort(),
+        ).run(
+            plan=plan,
+            authorization=valid_authorization(
+                authorized_scopes=plan.required_scopes,
+            ),
+            current_turn_id="turn-iro-051",
+            checked_at=NOW,
+        )
+
+        self.assertEqual(
+            report.blocking_reason_codes,
+            ("advisor_probe_transport_failed",),
+        )
+        self.assertEqual(report.probe_results, ())
 
     def test_authorization_integrity_and_subject_isolation_fail_closed(self) -> None:
         with self.assertRaisesRegex(
@@ -405,7 +639,7 @@ class HostedVerificationHarnessTests(unittest.TestCase):
                 turn_id="turn-iro-051",
                 issued_at=NOW - timedelta(minutes=1),
                 expires_at=NOW + timedelta(minutes=15),
-                authorized_scopes=HostedVerificationPlan.required_scopes(),
+                authorized_scopes=HOSTED_VERIFICATION_SCOPES,
             )
 
         database = PortSpy()
@@ -466,7 +700,9 @@ class HostedVerificationHarnessTests(unittest.TestCase):
             advisor=ResultPort(),
         ).run(
             plan=plan,
-            authorization=valid_authorization(),
+            authorization=valid_authorization(
+                authorized_scopes=plan.required_scopes,
+            ),
             current_turn_id="turn-iro-051",
             checked_at=NOW,
         )
@@ -517,7 +753,9 @@ class HostedVerificationHarnessTests(unittest.TestCase):
             advisor=ResultPort(),
         ).run(
             plan=plan,
-            authorization=valid_authorization(),
+            authorization=valid_authorization(
+                authorized_scopes=plan.required_scopes,
+            ),
             current_turn_id="turn-iro-051",
             checked_at=NOW,
         )
@@ -557,7 +795,9 @@ class HostedVerificationHarnessTests(unittest.TestCase):
             advisor=ResultPort(),
         ).run(
             plan=plan,
-            authorization=valid_authorization(),
+            authorization=valid_authorization(
+                authorized_scopes=plan.required_scopes,
+            ),
             current_turn_id="turn-iro-051",
             checked_at=NOW,
         )
@@ -594,15 +834,14 @@ class HostedVerificationHarnessTests(unittest.TestCase):
         database_results = tuple(
             result for result in results if result.category != "database_advisor"
         )
-        advisor_results = tuple(
-            result for result in results if result.category == "database_advisor"
-        )
         report = HostedVerificationHarness(
             database=ResultPort(database_results=database_results),
-            advisor=ResultPort(advisor_results=advisor_results),
+            advisor=ResultPort(),
         ).run(
             plan=plan,
-            authorization=valid_authorization(),
+            authorization=valid_authorization(
+                authorized_scopes=plan.required_scopes,
+            ),
             current_turn_id="turn-iro-051",
             checked_at=NOW,
         )
@@ -685,7 +924,9 @@ class HostedVerificationHarnessTests(unittest.TestCase):
             advisor=ResultPort(),
         ).run(
             plan=plan,
-            authorization=valid_authorization(),
+            authorization=valid_authorization(
+                authorized_scopes=plan.required_scopes,
+            ),
             current_turn_id="turn-iro-051",
             checked_at=NOW,
         )
@@ -716,7 +957,9 @@ class HostedVerificationHarnessTests(unittest.TestCase):
             advisor=advisor,
         ).run(
             plan=plan,
-            authorization=valid_authorization(),
+            authorization=valid_authorization(
+                authorized_scopes=plan.required_scopes,
+            ),
             current_turn_id="turn-iro-051",
             checked_at=NOW,
         )
@@ -731,23 +974,22 @@ class HostedVerificationHarnessTests(unittest.TestCase):
     def test_authorized_execution_freezes_redacted_content_addressed_record(
         self,
     ) -> None:
-        plan = HostedVerificationPlan.freeze(
-            probes=(
-                HostedVerificationProbe(
-                    probe_id="advisor.iros_findings",
-                    category="database_advisor",
-                    required_scope="database_advisor_read",
-                    expected_result_code="no_unaddressed_findings",
-                    expected_count=0,
-                ),
-            ),
-            target_objects=("iros_v_research_run_eligibility",),
+        with tempfile.TemporaryDirectory() as directory:
+            migration = Path(directory) / "20260807000000_iros_test.sql"
+            migration.write_text(COMPLIANT_IROS_MIGRATION)
+            plan = build_default_iros_hosted_verification_plan(
+                migration_paths=(migration,),
+            )
+        authorization = valid_authorization(
+            authorized_scopes=plan.required_scopes,
         )
-        authorization = valid_authorization()
         results = build_matching_offline_probe_results(plan)
+        database_results = tuple(
+            result for result in results if result.category != "database_advisor"
+        )
         report = HostedVerificationHarness(
-            database=ResultPort(),
-            advisor=ResultPort(advisor_results=results),
+            database=HostedAttestedResultPort(database_results=database_results),
+            advisor=HostedAttestedResultPort(),
         ).run(
             plan=plan,
             authorization=authorization,
@@ -763,11 +1005,13 @@ class HostedVerificationHarnessTests(unittest.TestCase):
         )
 
         self.assertTrue(record.has_valid_content_hash())
-        self.assertEqual(record.record_version, "hosted-verification-record.v1")
+        self.assertEqual(record.record_version, "hosted-verification-record.v2")
         self.assertEqual(record.issue_id, "IRO-052")
         self.assertEqual(record.database_scope, "iros_only")
         self.assertEqual(report.checked_at, NOW)
         self.assertEqual(record.plan_sha256, plan.content_sha256)
+        self.assertEqual(record.report_sha256, report.content_sha256)
+        self.assertEqual(record.execution_provenance, "hosted_transport")
         self.assertEqual(
             record.migration_manifest_sha256,
             plan.migration_manifest_sha256,
@@ -777,7 +1021,19 @@ class HostedVerificationHarnessTests(unittest.TestCase):
         self.assertNotIn("unrelated-subject", serialized)
         self.assertNotIn("audit-subject", serialized)
         self.assertNotIn("payload", serialized)
+        self.assertNotIn("operator_sha256", serialized)
+        self.assertNotIn("subject_manifest_sha256", serialized)
         self.assertFalse(replace(record, passed=False).has_valid_content_hash())
+        with self.assertRaisesRegex(
+            ValueError,
+            "hosted verification record report is invalid",
+        ):
+            HostedVerificationRecord.freeze(
+                plan=plan,
+                authorization=authorization,
+                report=replace(report, content_sha256="0" * 64),
+                checked_at=NOW,
+            )
         with self.assertRaisesRegex(
             ValueError,
             "hosted verification record time does not match report",
@@ -788,6 +1044,107 @@ class HostedVerificationHarnessTests(unittest.TestCase):
                 report=report,
                 checked_at=NOW + timedelta(seconds=1),
             )
+
+    def test_offline_results_cannot_be_frozen_as_hosted_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            migration = Path(directory) / "20260807000000_iros_test.sql"
+            migration.write_text(COMPLIANT_IROS_MIGRATION)
+            plan = build_default_iros_hosted_verification_plan(
+                migration_paths=(migration,),
+            )
+        authorization = valid_authorization(
+            authorized_scopes=plan.required_scopes,
+        )
+        results = build_matching_offline_probe_results(plan)
+        report = HostedVerificationHarness(
+            database=ResultPort(
+                database_results=tuple(
+                    result
+                    for result in results
+                    if result.category != "database_advisor"
+                )
+            ),
+            advisor=ResultPort(),
+        ).run(
+            plan=plan,
+            authorization=authorization,
+            current_turn_id="turn-iro-051",
+            checked_at=NOW,
+        )
+
+        self.assertTrue(report.passed)
+        self.assertEqual(report.execution_provenance, "offline_fixture")
+        with self.assertRaisesRegex(
+            ValueError,
+            "hosted verification record is not hosted evidence",
+        ):
+            HostedVerificationRecord.freeze(
+                plan=plan,
+                authorization=authorization,
+                report=report,
+                checked_at=NOW,
+            )
+
+    def test_truncated_plan_cannot_be_frozen_as_complete_hosted_evidence(
+        self,
+    ) -> None:
+        plan = HostedVerificationPlan.freeze(
+            probes=(
+                HostedVerificationProbe(
+                    probe_id="advisor.iros_findings",
+                    category="database_advisor",
+                    required_scope="database_advisor_read",
+                    expected_result_code="no_unaddressed_findings",
+                    expected_count=0,
+                ),
+            ),
+            target_objects=("iros_jobs",),
+        )
+        authorization = valid_authorization(
+            authorized_scopes=plan.required_scopes,
+        )
+        report = HostedVerificationHarness(
+            database=HostedAttestedResultPort(),
+            advisor=HostedAttestedResultPort(),
+        ).run(
+            plan=plan,
+            authorization=authorization,
+            current_turn_id="turn-iro-051",
+            checked_at=NOW,
+        )
+
+        self.assertTrue(report.passed)
+        with self.assertRaisesRegex(
+            ValueError,
+            "hosted verification record plan coverage is incomplete",
+        ):
+            HostedVerificationRecord.freeze(
+                plan=plan,
+                authorization=authorization,
+                report=report,
+                checked_at=NOW,
+            )
+
+    def test_missing_required_probe_is_incomplete_even_when_categories_remain(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            migration = Path(directory) / "20260807000000_iros_test.sql"
+            migration.write_text(COMPLIANT_IROS_MIGRATION)
+            complete = build_default_iros_hosted_verification_plan(
+                migration_paths=(migration,),
+            )
+        truncated = HostedVerificationPlan.freeze(
+            migration_manifest=complete.migration_manifest,
+            target_objects=complete.target_objects,
+            probes=tuple(
+                probe
+                for probe in complete.probes
+                if probe.probe_id != "immutable.thesis"
+            ),
+        )
+
+        self.assertFalse(truncated.has_complete_coverage)
 
     def test_default_plan_rejects_migration_that_fails_iros_static_audit(
         self,
@@ -804,6 +1161,22 @@ class HostedVerificationHarnessTests(unittest.TestCase):
             ):
                 build_default_iros_hosted_verification_plan(
                     migration_paths=(migration,),
+                )
+
+            with self.assertRaisesRegex(
+                ValueError,
+                "hosted verification migration batch failed IROS audit",
+            ):
+                build_hosted_verification_plan(
+                    migration_paths=(migration,),
+                    target_objects=("iros_test",),
+                    probes=(
+                        HostedVerificationProbe(
+                            probe_id="migration.reviewed_batch",
+                            category="migration_history",
+                            required_scope="linked_migration_history_read",
+                        ),
+                    ),
                 )
 
 

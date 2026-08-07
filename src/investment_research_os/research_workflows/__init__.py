@@ -135,6 +135,70 @@ class SynthesizerRuntimeConfiguration:
     policy: ExecutionPolicy
 
 
+def _runtime_contract_payload(
+    runtime: GraderRuntimeConfiguration | SynthesizerRuntimeConfiguration,
+) -> dict[str, object]:
+    prompt = runtime.prompt
+    model = runtime.model
+    price_card = runtime.price_card
+    policy = runtime.policy
+    return {
+        "prompt": {
+            "prompt_id": prompt.prompt_id,
+            "prompt_version": prompt.prompt_version,
+            "input_schema_version": prompt.input_schema_version,
+            "output_schema_version": prompt.output_schema_version,
+            "active": prompt.active,
+            "evaluation_passed": prompt.evaluation_passed,
+            "content_sha256": prompt.content_sha256,
+            "evaluation_corpus_id": prompt.evaluation_corpus_id,
+            "evaluation_corpus_version": prompt.evaluation_corpus_version,
+            "evaluation_corpus_sha256": prompt.evaluation_corpus_sha256,
+            "evaluation_identity_sha256": prompt.evaluation_identity_sha256,
+        },
+        "model": {
+            "config_id": model.config_id,
+            "config_version": model.config_version,
+            "provider": model.provider,
+            "model": model.model,
+            "reasoning_effort": model.reasoning_effort,
+            "thinking_enabled": model.thinking_enabled,
+            "temperature": model.temperature,
+            "input_token_cap": model.input_token_cap,
+            "output_token_cap": model.output_token_cap,
+            "active": model.active,
+            "evaluation_passed": model.evaluation_passed,
+            "retention_approved": model.retention_approved,
+            "source_processing_approved": model.source_processing_approved,
+            "environment": model.environment,
+        },
+        "price_card": {
+            "price_card_id": price_card.price_card_id,
+            "provider": price_card.provider,
+            "model": price_card.model,
+            "currency": price_card.currency,
+            "input_per_million": str(price_card.input_per_million),
+            "cached_input_per_million": str(price_card.cached_input_per_million),
+            "cache_write_per_million": str(price_card.cache_write_per_million),
+            "output_per_million": str(price_card.output_per_million),
+            "effective_from": price_card.effective_from.isoformat(),
+            "effective_to": (
+                price_card.effective_to.isoformat()
+                if price_card.effective_to is not None
+                else None
+            ),
+            "verified_at": price_card.verified_at.isoformat(),
+        },
+        "policy": {
+            "policy_version": policy.policy_version,
+            "retry_policy_version": policy.retry_policy_version,
+            "budget_policy_version": policy.budget_policy_version,
+            "max_attempts": policy.max_attempts,
+            "required_environment": policy.required_environment,
+        },
+    }
+
+
 @dataclass(frozen=True, slots=True)
 class BiotechResearchCommitteeConfig:
     question_type: str
@@ -211,22 +275,14 @@ class BiotechResearchCommitteeConfig:
                     "rubric_version": item.contract.rubric_version,
                     "output_schema_version": (item.contract.output_schema_version),
                     "abstention_rule_version": (item.contract.abstention_rule_version),
-                    "prompt_version": item.prompt.prompt_version,
-                    "prompt_content_sha256": item.prompt.content_sha256,
-                    "model_config_version": item.model.config_version,
-                    "execution_policy_version": item.policy.policy_version,
-                    "retry_policy_version": item.policy.retry_policy_version,
+                    "runtime": _runtime_contract_payload(item),
                 }
                 for item in self.graders
             ],
-            "synthesizer": {
-                "prompt_version": self.synthesizer.prompt.prompt_version,
-                "prompt_content_sha256": (self.synthesizer.prompt.content_sha256),
-                "model_config_version": self.synthesizer.model.config_version,
-                "execution_policy_version": (self.synthesizer.policy.policy_version),
-                "retry_policy_version": (self.synthesizer.policy.retry_policy_version),
-            },
+            "synthesizer": _runtime_contract_payload(self.synthesizer),
             "readiness_policy_version": self.readiness_policy_version,
+            "grader_budget_usd": str(self.grader_budget_usd),
+            "synthesis_budget_usd": str(self.synthesis_budget_usd),
         }
         encoded = json.dumps(
             payload,
@@ -327,10 +383,10 @@ def _price_card() -> ModelPriceCard:
         currency="USD",
         input_per_million=Decimal("5.00"),
         cached_input_per_million=Decimal("0.50"),
-        cache_write_per_million=Decimal("0"),
+        cache_write_per_million=Decimal("6.25"),
         output_per_million=Decimal("30.00"),
         effective_from=datetime(2026, 7, 1, tzinfo=UTC),
-        effective_to=datetime(2026, 8, 31, 23, 59, 59, tzinfo=UTC),
+        effective_to=datetime(2026, 8, 21, 23, 59, 59, tzinfo=UTC),
         verified_at=datetime(2026, 7, 22, tzinfo=UTC),
     )
 
@@ -362,7 +418,7 @@ def _build_offline_mvp_config(
         "valuation": "69f89ade22d287028790a617ac4ff0eecf80d07a027778ce690e7832fbce10db",
     }
     model = _model_config(
-        "biotech_committee_graders_openai_sol_medium_v1",
+        "biotech_committee_graders_openai_sol_medium_test_v1",
         output_token_cap=2000,
     )
     graders = tuple(
@@ -407,7 +463,7 @@ def _build_offline_mvp_config(
             ),
         ),
         model=_model_config(
-            "biotech_committee_synthesizer_gpt_5_6_sol_medium_v1",
+            "biotech_committee_synthesizer_gpt_5_6_sol_medium_test_v1",
             output_token_cap=4000,
         ),
         price_card=_price_card(),

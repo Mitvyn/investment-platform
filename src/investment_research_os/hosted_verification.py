@@ -58,6 +58,55 @@ IROS_HOSTED_VERIFICATION_TARGETS = (
     "iros_v_thesis_chains",
     "iros_watchlist_items",
 )
+IROS_REQUIRED_HOSTED_PROBE_IDS = (
+    "migration.linked_history",
+    "access.owner",
+    "access.unrelated_denied",
+    "access.anonymous_denied",
+    "access.least_privilege_grants",
+    "access.security_invoker_views",
+    "raw_audit.ordinary_denied",
+    "raw_audit.owner_permitted",
+    "raw_audit.cross_owner_denied",
+    "raw_audit.access_event",
+    "advisor.iros_findings",
+    *(
+        f"immutable.{identity}"
+        for identity in (
+            "research_run",
+            "grader_execution",
+            "committee",
+            "memo",
+            "thesis",
+            "operator_decision",
+            "command",
+            "market_series",
+        )
+    ),
+    *(
+        f"duplicate.{identity}"
+        for identity in (
+            "research_run",
+            "grader_execution",
+            "committee",
+            "memo",
+            "thesis",
+            "operator_decision",
+            "command",
+            "market_series",
+        )
+    ),
+    *(
+        f"valuation.{state}"
+        for state in (
+            "missing",
+            "invalid",
+            "stale",
+            "pre_material_evidence",
+            "indeterminate",
+        )
+    ),
+)
 _PROBE_ID_PATTERN = re.compile(r"[a-z][a-z0-9_]*(?:\.[a-z0-9_]+)+")
 _MAX_AUTHORIZATION_LIFETIME = timedelta(minutes=30)
 
@@ -142,7 +191,14 @@ class HostedVerificationAuthorization:
             raise ValueError("hosted verification authorization lifetime is invalid")
         if len({owner_subject_id, unrelated_subject_id, audit_subject_id}) != 3:
             raise ValueError("hosted verification subjects must be distinct")
-        if authorized_scopes != HOSTED_VERIFICATION_SCOPES:
+        canonical_scopes = tuple(
+            scope for scope in HOSTED_VERIFICATION_SCOPES if scope in authorized_scopes
+        )
+        if (
+            not authorized_scopes
+            or canonical_scopes != authorized_scopes
+            or len(set(authorized_scopes)) != len(authorized_scopes)
+        ):
             raise ValueError("hosted verification authorization scopes are invalid")
         content = cls._content(
             authorization_id=authorization_id,
@@ -202,6 +258,18 @@ class HostedVerificationAuthorization:
         }
 
     def assert_valid_contract(self) -> None:
+        identifiers = (
+            self.authorization_id,
+            self.operator_id,
+            self.owner_subject_id,
+            self.unrelated_subject_id,
+            self.audit_subject_id,
+            self.turn_id,
+        )
+        if any(
+            not isinstance(value, str) or not value.strip() for value in identifiers
+        ):
+            raise ValueError("hosted verification authorization identity is invalid")
         if self.issue_id != "IRO-052":
             raise ValueError("hosted verification issue is invalid")
         if self.database_scope != "iros_only":
@@ -212,6 +280,28 @@ class HostedVerificationAuthorization:
             raise ValueError("hosted verification authorization expiry is invalid")
         if self.expires_at - self.issued_at > _MAX_AUTHORIZATION_LIFETIME:
             raise ValueError("hosted verification authorization lifetime is invalid")
+        if (
+            len(
+                {
+                    self.owner_subject_id,
+                    self.unrelated_subject_id,
+                    self.audit_subject_id,
+                }
+            )
+            != 3
+        ):
+            raise ValueError("hosted verification subjects must be distinct")
+        canonical_scopes = tuple(
+            scope
+            for scope in HOSTED_VERIFICATION_SCOPES
+            if scope in self.authorized_scopes
+        )
+        if (
+            not self.authorized_scopes
+            or canonical_scopes != self.authorized_scopes
+            or len(set(self.authorized_scopes)) != len(self.authorized_scopes)
+        ):
+            raise ValueError("hosted verification authorization scopes are invalid")
 
     def has_valid_content_hash(self) -> bool:
         return self.content_sha256 == _content_sha256(
@@ -334,6 +424,28 @@ class HostedVerificationProbeResult:
 
 
 @dataclass(frozen=True, slots=True)
+class HostedAdvisorFinding:
+    finding_id: str
+    object_name: str
+    severity: str
+    resolved: bool
+
+    def __post_init__(self) -> None:
+        if not _PROBE_ID_PATTERN.fullmatch(self.finding_id):
+            raise ValueError("hosted advisor finding identity is invalid")
+        if not re.fullmatch(r"(?:[a-z][a-z0-9_]*\.)?[a-z][a-z0-9_]*", self.object_name):
+            raise ValueError("hosted advisor finding object is invalid")
+        if self.severity not in {"info", "warning", "error"}:
+            raise ValueError("hosted advisor finding severity is invalid")
+        if type(self.resolved) is not bool:
+            raise ValueError("hosted advisor finding resolution is invalid")
+
+    @property
+    def is_iros(self) -> bool:
+        return self.object_name.rsplit(".", 1)[-1].startswith("iros_")
+
+
+@dataclass(frozen=True, slots=True)
 class HostedVerificationPlan:
     plan_version: str
     migration_manifest: tuple[HostedMigrationManifestEntry, ...]
@@ -370,7 +482,7 @@ class HostedVerificationPlan:
         )
         ordered_targets = tuple(sorted(target_objects))
         ordered = tuple(sorted(probes, key=lambda probe: probe.probe_id))
-        plan_version = "hosted-verification-plan.v1"
+        plan_version = "hosted-verification-plan.v2"
         content = cls._content(
             plan_version=plan_version,
             migration_manifest=ordered_manifest,
@@ -425,9 +537,19 @@ class HostedVerificationPlan:
             )
         )
 
-    @staticmethod
-    def required_scopes() -> tuple[str, ...]:
-        return HOSTED_VERIFICATION_SCOPES
+    @property
+    def required_scopes(self) -> tuple[str, ...]:
+        declared = {probe.required_scope for probe in self.probes}
+        return tuple(scope for scope in HOSTED_VERIFICATION_SCOPES if scope in declared)
+
+    @property
+    def has_complete_coverage(self) -> bool:
+        return (
+            bool(self.migration_manifest)
+            and self.target_objects == tuple(sorted(IROS_HOSTED_VERIFICATION_TARGETS))
+            and {probe.probe_id for probe in self.probes}
+            == set(IROS_REQUIRED_HOSTED_PROBE_IDS)
+        )
 
     @property
     def migration_manifest_sha256(self) -> str:
@@ -452,6 +574,9 @@ def build_hosted_verification_plan(
     target_objects: tuple[str, ...],
     probes: tuple[HostedVerificationProbe, ...],
 ) -> HostedVerificationPlan:
+    migration_audit = audit_iros_migration_batch(migration_paths)
+    if not migration_audit.passed:
+        raise ValueError("hosted verification migration batch failed IROS audit")
     manifest = tuple(
         HostedMigrationManifestEntry(
             filename=path.name,
@@ -470,9 +595,6 @@ def build_default_iros_hosted_verification_plan(
     *,
     migration_paths: tuple[Path, ...],
 ) -> HostedVerificationPlan:
-    migration_audit = audit_iros_migration_batch(migration_paths)
-    if not migration_audit.passed:
-        raise ValueError("hosted verification migration batch failed IROS audit")
     probe_specs = (
         (
             (
@@ -630,33 +752,6 @@ def build_default_iros_hosted_verification_plan(
     )
 
 
-def build_matching_offline_probe_results(
-    plan: HostedVerificationPlan,
-) -> tuple[HostedVerificationProbeResult, ...]:
-    """Build redacted fake results for contract tests; never proves hosted state."""
-    results: list[HostedVerificationProbeResult] = []
-    for probe in plan.probes:
-        if probe.expected_result_code is None or probe.expected_count is None:
-            raise ValueError(
-                "offline hosted verification fixture requires exact probe contract"
-            )
-        artifact_sha256 = None
-        if probe.category == "migration_history":
-            artifact_sha256 = plan.migration_manifest_sha256
-        elif probe.category == "owner_isolation":
-            artifact_sha256 = plan.target_manifest_sha256
-        results.append(
-            HostedVerificationProbeResult.passed_result(
-                probe_id=probe.probe_id,
-                category=probe.category,
-                result_code=probe.expected_result_code,
-                count=probe.expected_count,
-                artifact_sha256=artifact_sha256,
-            )
-        )
-    return tuple(results)
-
-
 @dataclass(frozen=True, slots=True)
 class HostedVerificationReport:
     passed: bool
@@ -665,8 +760,23 @@ class HostedVerificationReport:
     checked_at: datetime
     plan_sha256: str | None = None
     authorization_sha256: str | None = None
+    execution_provenance: str = "unattested"
+    content_sha256: str = ""
 
-    def as_dict(self) -> dict[str, object]:
+    def __post_init__(self) -> None:
+        if self.passed == bool(self.blocking_reason_codes):
+            raise ValueError("hosted verification report outcome is inconsistent")
+        if self.execution_provenance not in {
+            "unattested",
+            "offline_fixture",
+            "hosted_transport",
+        }:
+            raise ValueError("hosted verification report provenance is invalid")
+        expected = _content_sha256(self._content())
+        if not self.content_sha256:
+            object.__setattr__(self, "content_sha256", expected)
+
+    def _content(self) -> dict[str, object]:
         return {
             "passed": self.passed,
             "blocking_reason_codes": list(self.blocking_reason_codes),
@@ -674,6 +784,16 @@ class HostedVerificationReport:
             "checked_at": self.checked_at.isoformat(),
             "plan_sha256": self.plan_sha256,
             "authorization_sha256": self.authorization_sha256,
+            "execution_provenance": self.execution_provenance,
+        }
+
+    def has_valid_content_hash(self) -> bool:
+        return self.content_sha256 == _content_sha256(self._content())
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            **self._content(),
+            "content_sha256": self.content_sha256,
         }
 
 
@@ -687,8 +807,8 @@ class HostedVerificationRecord:
     migration_manifest_sha256: str
     target_manifest_sha256: str
     authorization_sha256: str
-    operator_sha256: str
-    subject_manifest_sha256: str
+    report_sha256: str
+    execution_provenance: str
     checked_at: datetime
     passed: bool
     blocking_reason_codes: tuple[str, ...]
@@ -713,21 +833,19 @@ class HostedVerificationRecord:
             raise ValueError("hosted verification record plan is invalid")
         if not authorization.has_valid_content_hash():
             raise ValueError("hosted verification record authorization is invalid")
+        if not report.has_valid_content_hash():
+            raise ValueError("hosted verification record report is invalid")
         if report.plan_sha256 != plan.content_sha256:
             raise ValueError("hosted verification record plan does not match report")
         if report.authorization_sha256 != authorization.content_sha256:
             raise ValueError(
                 "hosted verification record authorization does not match report"
             )
-        record_version = "hosted-verification-record.v1"
-        operator_sha256 = _content_sha256({"operator_id": authorization.operator_id})
-        subject_manifest_sha256 = _content_sha256(
-            {
-                "owner_subject_id": authorization.owner_subject_id,
-                "unrelated_subject_id": authorization.unrelated_subject_id,
-                "audit_subject_id": authorization.audit_subject_id,
-            }
-        )
+        if report.passed and not plan.has_complete_coverage:
+            raise ValueError("hosted verification record plan coverage is incomplete")
+        if report.passed and report.execution_provenance != "hosted_transport":
+            raise ValueError("hosted verification record is not hosted evidence")
+        record_version = "hosted-verification-record.v2"
         content = cls._content(
             record_version=record_version,
             issue_id=authorization.issue_id,
@@ -737,8 +855,8 @@ class HostedVerificationRecord:
             migration_manifest_sha256=plan.migration_manifest_sha256,
             target_manifest_sha256=plan.target_manifest_sha256,
             authorization_sha256=authorization.content_sha256,
-            operator_sha256=operator_sha256,
-            subject_manifest_sha256=subject_manifest_sha256,
+            report_sha256=report.content_sha256,
+            execution_provenance=report.execution_provenance,
             checked_at=checked_at,
             passed=report.passed,
             blocking_reason_codes=report.blocking_reason_codes,
@@ -753,8 +871,8 @@ class HostedVerificationRecord:
             migration_manifest_sha256=plan.migration_manifest_sha256,
             target_manifest_sha256=plan.target_manifest_sha256,
             authorization_sha256=authorization.content_sha256,
-            operator_sha256=operator_sha256,
-            subject_manifest_sha256=subject_manifest_sha256,
+            report_sha256=report.content_sha256,
+            execution_provenance=report.execution_provenance,
             checked_at=checked_at,
             passed=report.passed,
             blocking_reason_codes=report.blocking_reason_codes,
@@ -773,8 +891,8 @@ class HostedVerificationRecord:
         migration_manifest_sha256: str,
         target_manifest_sha256: str,
         authorization_sha256: str,
-        operator_sha256: str,
-        subject_manifest_sha256: str,
+        report_sha256: str,
+        execution_provenance: str,
         checked_at: datetime,
         passed: bool,
         blocking_reason_codes: tuple[str, ...],
@@ -789,8 +907,8 @@ class HostedVerificationRecord:
             "migration_manifest_sha256": migration_manifest_sha256,
             "target_manifest_sha256": target_manifest_sha256,
             "authorization_sha256": authorization_sha256,
-            "operator_sha256": operator_sha256,
-            "subject_manifest_sha256": subject_manifest_sha256,
+            "report_sha256": report_sha256,
+            "execution_provenance": execution_provenance,
             "checked_at": checked_at.isoformat(),
             "passed": passed,
             "blocking_reason_codes": list(blocking_reason_codes),
@@ -808,8 +926,8 @@ class HostedVerificationRecord:
                 migration_manifest_sha256=self.migration_manifest_sha256,
                 target_manifest_sha256=self.target_manifest_sha256,
                 authorization_sha256=self.authorization_sha256,
-                operator_sha256=self.operator_sha256,
-                subject_manifest_sha256=self.subject_manifest_sha256,
+                report_sha256=self.report_sha256,
+                execution_provenance=self.execution_provenance,
                 checked_at=self.checked_at,
                 passed=self.passed,
                 blocking_reason_codes=self.blocking_reason_codes,
@@ -828,8 +946,8 @@ class HostedVerificationRecord:
                 migration_manifest_sha256=self.migration_manifest_sha256,
                 target_manifest_sha256=self.target_manifest_sha256,
                 authorization_sha256=self.authorization_sha256,
-                operator_sha256=self.operator_sha256,
-                subject_manifest_sha256=self.subject_manifest_sha256,
+                report_sha256=self.report_sha256,
+                execution_provenance=self.execution_provenance,
                 checked_at=self.checked_at,
                 passed=self.passed,
                 blocking_reason_codes=self.blocking_reason_codes,
@@ -840,6 +958,8 @@ class HostedVerificationRecord:
 
 
 class HostedDatabaseVerificationPort(Protocol):
+    execution_provenance: str
+
     def run_database_probes(
         self,
         plan: HostedVerificationPlan,
@@ -848,11 +968,13 @@ class HostedDatabaseVerificationPort(Protocol):
 
 
 class HostedAdvisorVerificationPort(Protocol):
-    def run_advisor_probes(
+    execution_provenance: str
+
+    def read_advisor_findings(
         self,
         plan: HostedVerificationPlan,
         authorization: HostedVerificationAuthorization,
-    ) -> tuple[HostedVerificationProbeResult, ...]: ...
+    ) -> tuple[HostedAdvisorFinding, ...]: ...
 
 
 class HostedVerificationHarness:
@@ -864,6 +986,24 @@ class HostedVerificationHarness:
     ) -> None:
         self.database = database
         self.advisor = advisor
+
+    def _execution_provenance(self) -> str:
+        database_provenance = getattr(
+            self.database,
+            "execution_provenance",
+            "unattested",
+        )
+        advisor_provenance = getattr(
+            self.advisor,
+            "execution_provenance",
+            "unattested",
+        )
+        if database_provenance == advisor_provenance and database_provenance in {
+            "offline_fixture",
+            "hosted_transport",
+        }:
+            return database_provenance
+        return "unattested"
 
     def run(
         self,
@@ -931,13 +1071,23 @@ class HostedVerificationHarness:
                 probe_results=(),
                 checked_at=checked_at,
             )
-        if authorization.authorized_scopes != plan.required_scopes():
+        if not plan.probes:
+            return HostedVerificationReport(
+                passed=False,
+                blocking_reason_codes=("plan_coverage_incomplete",),
+                probe_results=(),
+                checked_at=checked_at,
+                plan_sha256=plan.content_sha256,
+                authorization_sha256=authorization.content_sha256,
+            )
+        if authorization.authorized_scopes != plan.required_scopes:
             return HostedVerificationReport(
                 passed=False,
                 blocking_reason_codes=("authorization_scope_mismatch",),
                 probe_results=(),
                 checked_at=checked_at,
             )
+        execution_provenance = self._execution_provenance()
         try:
             database_results = tuple(
                 self.database.run_database_probes(plan, authorization)
@@ -950,6 +1100,7 @@ class HostedVerificationHarness:
                 checked_at=checked_at,
                 plan_sha256=plan.content_sha256,
                 authorization_sha256=authorization.content_sha256,
+                execution_provenance=execution_provenance,
             )
         if any(
             not isinstance(result, HostedVerificationProbeResult)
@@ -962,20 +1113,63 @@ class HostedVerificationHarness:
                 checked_at=checked_at,
                 plan_sha256=plan.content_sha256,
                 authorization_sha256=authorization.content_sha256,
+                execution_provenance=execution_provenance,
             )
         try:
-            advisor_results = tuple(
-                self.advisor.run_advisor_probes(plan, authorization)
+            advisor_findings = tuple(
+                self.advisor.read_advisor_findings(plan, authorization)
             )
         except Exception:
             return HostedVerificationReport(
                 passed=False,
                 blocking_reason_codes=("advisor_probe_transport_failed",),
-                probe_results=database_results,
+                probe_results=(),
                 checked_at=checked_at,
                 plan_sha256=plan.content_sha256,
                 authorization_sha256=authorization.content_sha256,
+                execution_provenance=execution_provenance,
             )
+        if any(
+            not isinstance(finding, HostedAdvisorFinding)
+            for finding in advisor_findings
+        ):
+            return HostedVerificationReport(
+                passed=False,
+                blocking_reason_codes=("advisor_finding_contract_invalid",),
+                probe_results=(),
+                checked_at=checked_at,
+                plan_sha256=plan.content_sha256,
+                authorization_sha256=authorization.content_sha256,
+                execution_provenance=execution_provenance,
+            )
+        unaddressed_iros_findings = tuple(
+            finding
+            for finding in advisor_findings
+            if (
+                finding.is_iros
+                and finding.severity in {"warning", "error"}
+                and not finding.resolved
+            )
+        )
+        advisor_results = tuple(
+            (
+                HostedVerificationProbeResult.passed_result(
+                    probe_id=probe.probe_id,
+                    category=probe.category,
+                    result_code="no_unaddressed_findings",
+                    count=0,
+                )
+                if not unaddressed_iros_findings
+                else HostedVerificationProbeResult.failed_result(
+                    probe_id=probe.probe_id,
+                    category=probe.category,
+                    result_code="unaddressed_findings",
+                    count=len(unaddressed_iros_findings),
+                )
+            )
+            for probe in plan.probes
+            if probe.category == "database_advisor"
+        )
         received = database_results + advisor_results
         if any(
             not isinstance(result, HostedVerificationProbeResult) for result in received
@@ -987,6 +1181,7 @@ class HostedVerificationHarness:
                 checked_at=checked_at,
                 plan_sha256=plan.content_sha256,
                 authorization_sha256=authorization.content_sha256,
+                execution_provenance=execution_provenance,
             )
         by_id = {result.probe_id: result for result in received}
         if len(by_id) != len(received) or set(by_id) != {
@@ -999,6 +1194,7 @@ class HostedVerificationHarness:
                 checked_at=checked_at,
                 plan_sha256=plan.content_sha256,
                 authorization_sha256=authorization.content_sha256,
+                execution_provenance=execution_provenance,
             )
         ordered_results = tuple(by_id[probe.probe_id] for probe in plan.probes)
         if any(
@@ -1012,6 +1208,7 @@ class HostedVerificationHarness:
                 checked_at=checked_at,
                 plan_sha256=plan.content_sha256,
                 authorization_sha256=authorization.content_sha256,
+                execution_provenance=execution_provenance,
             )
         contract_failures = tuple(
             f"probe_contract_mismatch:{probe.probe_id}"
@@ -1050,6 +1247,7 @@ class HostedVerificationHarness:
             checked_at=checked_at,
             plan_sha256=plan.content_sha256,
             authorization_sha256=authorization.content_sha256,
+            execution_provenance=execution_provenance,
         )
 
 
@@ -1065,7 +1263,7 @@ __all__ = [
     "HostedVerificationReport",
     "HostedMigrationManifestEntry",
     "IROS_HOSTED_VERIFICATION_TARGETS",
+    "IROS_REQUIRED_HOSTED_PROBE_IDS",
     "build_default_iros_hosted_verification_plan",
     "build_hosted_verification_plan",
-    "build_matching_offline_probe_results",
 ]

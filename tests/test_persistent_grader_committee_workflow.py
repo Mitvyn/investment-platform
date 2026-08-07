@@ -112,7 +112,14 @@ class RecordingLifecycleFactory:
 
     def create(self, binding):
         self.bindings.append(binding)
-        execution = BoundExecution(self.executions[binding.request.grader.grader_id])
+        fixture = self.executions[binding.request.grader.grader_id]
+        execution = BoundExecution(
+            replace(
+                fixture,
+                model_config_version=binding.request.model.config_version,
+                request=binding.request,
+            )
+        )
         self.bound_executions.append(execution)
         return execution
 
@@ -131,6 +138,7 @@ class ClaimBoundRecordingLifecycleFactory:
             question_type_id=binding.request.question_type_id,
             question_type_version=binding.request.question_type_version,
             workflow_config_version=binding.request.workflow_config_version,
+            model_config_version=binding.request.model.config_version,
             request=binding.request,
         )
         bound = BoundExecution(rebound)

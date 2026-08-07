@@ -84,14 +84,23 @@ def rehash_registry(payload) -> None:
 
 
 class OpenAIExecutionContractRegistryTests(unittest.TestCase):
-    def test_offline_personal_config_cannot_execute_as_production(self) -> None:
+    def test_offline_and_production_profiles_have_distinct_identities(self) -> None:
         offline = build_personal_research_mvp_config()
         production = build_inactive_production_personal_research_mvp_config()
+
+        self.assertNotEqual(
+            offline.contract_fingerprint,
+            production.contract_fingerprint,
+        )
 
         for grader in offline.graders:
             self.assertEqual(grader.model.environment, "test")
             self.assertEqual(grader.model.temperature, "0")
             self.assertEqual(grader.policy.required_environment, "test")
+            self.assertNotEqual(
+                grader.model.config_version,
+                production.graders[0].model.config_version,
+            )
             self.assertNotEqual(grader.model, production.graders[0].model)
 
         self.assertEqual(offline.synthesizer.model.environment, "test")
@@ -99,6 +108,10 @@ class OpenAIExecutionContractRegistryTests(unittest.TestCase):
         self.assertEqual(
             offline.synthesizer.policy.required_environment,
             "test",
+        )
+        self.assertNotEqual(
+            offline.synthesizer.model.config_version,
+            production.synthesizer.model.config_version,
         )
         self.assertNotEqual(
             offline.synthesizer.model,
@@ -128,6 +141,11 @@ class OpenAIExecutionContractRegistryTests(unittest.TestCase):
                 grader.policy.required_environment,
                 "production",
             )
+            self.assertEqual(str(grader.price_card.cache_write_per_million), "6.25")
+            self.assertEqual(
+                grader.price_card.effective_to.date().isoformat(),
+                "2026-08-21",
+            )
 
         synthesizer = config.synthesizer
         self.assertEqual(
@@ -145,6 +163,14 @@ class OpenAIExecutionContractRegistryTests(unittest.TestCase):
         self.assertEqual(
             synthesizer.policy.required_environment,
             "production",
+        )
+        self.assertEqual(
+            str(synthesizer.price_card.cache_write_per_million),
+            "6.25",
+        )
+        self.assertEqual(
+            synthesizer.price_card.effective_to.date().isoformat(),
+            "2026-08-21",
         )
 
     def test_loads_exact_frozen_six_role_registry(self) -> None:

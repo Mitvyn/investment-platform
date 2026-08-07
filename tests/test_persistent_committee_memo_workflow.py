@@ -84,7 +84,19 @@ def fixture():
         memo_execution,
     ) = synthesized_fixture(requested_disposition="monitor")
     _, valuation = aligned_valuation_repository(bundle)
-    return eligible_run(), committee, valuation, memo_execution
+    config = build_offline_mvp_config()
+    return (
+        eligible_run(),
+        committee,
+        valuation,
+        replace(
+            memo_execution,
+            memo=replace(
+                memo_execution.memo,
+                model_config_id=config.synthesizer.model.config_id,
+            ),
+        ),
+    )
 
 
 def adapter(
@@ -185,9 +197,11 @@ class PersistentCommitteeMemoWorkflowAdapterTests(unittest.TestCase):
             "committee": (run, None, valuation),
             "valuation": (run, committee, None),
         }
-        for label, (candidate_run, candidate_committee, candidate_value) in (
-            cases.items()
-        ):
+        for label, (
+            candidate_run,
+            candidate_committee,
+            candidate_value,
+        ) in cases.items():
             with self.subTest(label=label):
                 boundary, *_, workflow, _ = adapter(
                     candidate_run,
