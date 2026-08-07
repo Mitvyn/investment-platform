@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import sys
 from tempfile import NamedTemporaryFile
 from typing import Any
 
@@ -18,6 +19,7 @@ from .acquisition import (
 from .http import CurlCffiBytesTransport
 from .models import PrimarySourceRequest
 from .plans import load_primary_source_plan
+from .replay import PrimarySourceReplayResult, replay_primary_source_capture
 
 
 class PrimarySourceCliError(RuntimeError):
@@ -42,6 +44,18 @@ def _parser() -> argparse.ArgumentParser:
     acquire.add_argument("--output", required=True)
     acquire.add_argument("--timeout-seconds", type=float, default=20.0)
     acquire.add_argument("--minimum-interval-seconds", type=float, default=0.2)
+    verify = subcommands.add_parser("verify")
+    verify.add_argument("--plan", required=True)
+    verify.add_argument("--capture", required=True)
+    verify.add_argument("--ticker", required=True)
+    verify.add_argument("--operator-id", required=True)
+    verify.add_argument("--as-of-cutoff", required=True)
+    verify.add_argument(
+        "--trusted-issuer-host",
+        action="append",
+        required=True,
+        dest="trusted_issuer_hosts",
+    )
     return parser
 
 
@@ -61,6 +75,16 @@ def _write_immutable(path: Path, body: bytes) -> None:
         temporary_path.unlink(missing_ok=True)
 
 
+def _utc_timestamp(value: str) -> datetime:
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as error:
+        raise PrimarySourceCliError("as-of cutoff is invalid") from error
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise PrimarySourceCliError("as-of cutoff must include timezone")
+    return parsed.astimezone(UTC)
+
+
 def run(
     argv: Sequence[str] | None = None,
     *,
@@ -68,14 +92,60 @@ def run(
     acquire: Callable[..., PrimarySourceAcquisitionResult] = (
         acquire_primary_source_capture
     ),
+    replay: Callable[..., PrimarySourceReplayResult] = replay_primary_source_capture,
     clock: Callable[[], datetime] = lambda: datetime.now(UTC),
     transport: Any | None = None,
 ) -> int:
     args = _parser().parse_args(argv)
-    if args.command != "acquire":
-        raise PrimarySourceCliError("primary-source command is unsupported")
     source_plan = Path(args.plan).read_bytes()
     plan = load_primary_source_plan(source_plan)
+    if args.command == "verify":
+        user_agent = environ.get("SEC_USER_AGENT", "").strip()
+        if not user_agent:
+            raise PrimarySourceCliError("SEC_USER_AGENT is required")
+        request = PrimarySourceRequest(
+            operator_id=args.operator_id,
+            security_id=plan.security_id,
+            cik=plan.cik,
+            issuer_name=plan.issuer_name,
+            primary_listing_exchange=plan.primary_listing_exchange,
+            as_of_cutoff=_utc_timestamp(args.as_of_cutoff),
+        )
+        try:
+            result = replay(
+                Path(args.capture).read_bytes(),
+                request=request,
+                ticker=args.ticker.upper(),
+                sec_user_agent=user_agent,
+                trusted_issuer_hosts=tuple(
+                    sorted({host.casefold() for host in args.trusted_issuer_hosts})
+                ),
+                accepted_at=clock,
+            )
+        except (RuntimeError, ValueError):
+            raise PrimarySourceCliError("capture verification failed") from None
+        if result.capture.plan.content_hash != plan.content_hash:
+            raise PrimarySourceCliError("capture does not match requested source plan")
+        print(
+            json.dumps(
+                {
+                    "archive_sha256": result.capture.receipt.package_sha256,
+                    "capture_content_hash": result.capture.content_hash,
+                    "capture_id": result.capture.capture_id,
+                    "capture_revision": result.capture.revision,
+                    "contract_version": ("primary_source_capture_verification.v1"),
+                    "plan_content_hash": result.capture.plan.content_hash,
+                    "response_count": len(result.capture.responses),
+                    "sec_passage_count": len(result.sec_passages),
+                    "security_id": request.security_id,
+                    "status": "verified",
+                },
+                sort_keys=True,
+            )
+        )
+        return 0
+    if args.command != "acquire":
+        raise PrimarySourceCliError("primary-source command is unsupported")
     if plan.revision != args.revision:
         raise PrimarySourceCliError("capture revision does not match source plan")
     user_agent = environ.get("SEC_USER_AGENT", "").strip()
@@ -129,8 +199,25 @@ def run(
     return 0
 
 
+def main(
+    argv: Sequence[str] | None = None,
+    **run_options: Any,
+) -> int:
+    try:
+        return run(argv, **run_options)
+    except PrimarySourceCliError as error:
+        print(
+            json.dumps(
+                {"error": str(error), "status": "failed"},
+                sort_keys=True,
+            ),
+            file=sys.stderr,
+        )
+        return 2
+
+
 if __name__ == "__main__":
-    raise SystemExit(run())
+    raise SystemExit(main())
 
 
-__all__ = ["PrimarySourceCliError", "run"]
+__all__ = ["PrimarySourceCliError", "main", "run"]

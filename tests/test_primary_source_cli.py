@@ -1,17 +1,27 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from contextlib import redirect_stderr, redirect_stdout
+from io import BytesIO, StringIO
 import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
+from zipfile import ZipFile
 
-from workers.primary_sources.__main__ import run
+from workers.primary_sources.__main__ import main, run
 from workers.primary_sources.acquisition import PrimarySourceAcquisitionResult
+
+from tests.test_primary_source_replay import _platform_capture_archive
 
 
 OPERATOR_ID = "8ed47ebc-d5cf-40ad-80ce-d4d803f7c735"
 SECURITY_ID = "a657d245-6bda-5476-930a-911667ea6c64"
+VERIFY_ENVIRONMENT = {"SEC_USER_AGENT": "Investment Research OS operator@example.com"}
+
+
+def verify_clock() -> datetime:
+    return datetime(2026, 8, 7, 4, 0, tzinfo=UTC)
 
 
 def source_plan() -> bytes:
@@ -110,7 +120,124 @@ def source_plan() -> bytes:
     ).encode()
 
 
+def verification_inputs(
+    directory: str,
+    *,
+    capture_bytes: bytes | None = None,
+) -> tuple[bytes, list[str]]:
+    archive = _platform_capture_archive()
+    with ZipFile(BytesIO(archive), "r") as capture_zip:
+        plan = capture_zip.read("primary-source-plan.json")
+    plan_path = Path(directory) / "plan.json"
+    capture_path = Path(directory) / "capture.zip"
+    plan_path.write_bytes(plan)
+    capture_path.write_bytes(archive if capture_bytes is None else capture_bytes)
+    return archive, [
+        "verify",
+        "--plan",
+        str(plan_path),
+        "--capture",
+        str(capture_path),
+        "--ticker",
+        "EXMP",
+        "--operator-id",
+        OPERATOR_ID,
+        "--as-of-cutoff",
+        "2026-05-06T23:59:59Z",
+        "--trusted-issuer-host",
+        "investors.example-biotech.com",
+    ]
+
+
 class PrimarySourceCliTests(unittest.TestCase):
+    def test_verify_replays_complete_capture_without_network_access(self) -> None:
+        with TemporaryDirectory() as directory:
+            _, args = verification_inputs(directory)
+            output = StringIO()
+
+            with redirect_stdout(output):
+                exit_code = run(
+                    args,
+                    environ=VERIFY_ENVIRONMENT,
+                    clock=verify_clock,
+                )
+
+            self.assertEqual(exit_code, 0)
+            payload = json.loads(output.getvalue())
+            self.assertEqual(payload["status"], "verified")
+            self.assertEqual(
+                payload["contract_version"],
+                "primary_source_capture_verification.v1",
+            )
+            self.assertEqual(payload["security_id"], SECURITY_ID)
+            self.assertGreater(payload["response_count"], 0)
+            self.assertGreater(payload["sec_passage_count"], 0)
+
+    def test_verify_maps_invalid_archive_to_machine_safe_error(self) -> None:
+        with TemporaryDirectory() as directory:
+            _, args = verification_inputs(
+                directory,
+                capture_bytes=b"not-a-capture",
+            )
+
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "^capture verification failed$",
+            ):
+                run(
+                    args,
+                    environ=VERIFY_ENVIRONMENT,
+                    clock=verify_clock,
+                )
+
+    def test_verify_rejects_archive_from_another_source_plan(self) -> None:
+        with TemporaryDirectory() as directory:
+            _, args = verification_inputs(directory)
+            plan_path = Path(args[args.index("--plan") + 1])
+            mismatched_plan = json.loads(plan_path.read_bytes())
+            mismatched_plan["issuer_sources"][0]["title"] = "Other source plan"
+            plan_path.write_text(
+                json.dumps(
+                    mismatched_plan,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+            )
+
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "^capture does not match requested source plan$",
+            ):
+                run(
+                    args,
+                    environ=VERIFY_ENVIRONMENT,
+                    clock=verify_clock,
+                )
+
+    def test_main_emits_machine_safe_verify_failure_without_traceback(self) -> None:
+        with TemporaryDirectory() as directory:
+            _, args = verification_inputs(
+                directory,
+                capture_bytes=b"not-a-capture",
+            )
+            errors = StringIO()
+
+            with redirect_stderr(errors):
+                exit_code = main(
+                    args,
+                    environ=VERIFY_ENVIRONMENT,
+                    clock=verify_clock,
+                )
+
+            self.assertEqual(exit_code, 2)
+            self.assertEqual(
+                json.loads(errors.getvalue()),
+                {
+                    "error": "capture verification failed",
+                    "status": "failed",
+                },
+            )
+
     def test_acquire_derives_exact_request_from_plan_and_writes_archive(self) -> None:
         calls = []
 
