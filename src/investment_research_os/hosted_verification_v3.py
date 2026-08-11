@@ -12,7 +12,11 @@ from investment_research_os.hosted_verification import (
     HostedVerificationPlan,
     build_default_iros_hosted_verification_plan,
 )
-from investment_research_os.migration_audit import strip_sql_comments_and_literals
+from investment_research_os.iros_constraint_index import (
+    IrosConstraintIndex,
+    build_iros_constraint_index,
+)
+from investment_research_os.iros_object_inventory import build_iros_object_inventory
 
 
 _IDENTITY = re.compile(r"[a-z][a-z0-9_]*(?:\.[a-z0-9_]+)+")
@@ -21,20 +25,45 @@ _TRANSPORT_OWNERS = frozenset({"database", "advisor"})
 _OPERATIONS = frozenset(
     {
         "count_rows",
-        "attempt_insert",
+        "read_access_surface",
+        "attempt_duplicate_insert",
+        "attempt_invalid_insert",
         "attempt_update",
         "read_migration_history",
         "read_grants",
         "read_view_security",
-        "read_audit_events",
         "read_advisor_findings",
         "read_raw_provider_payload",
+        "assert_raw_access_residue",
     }
 )
 _SUBJECT_ROLES = frozenset({"owner", "unrelated", "anonymous", "audit_permitted"})
 _TARGET_OWNER_ROLES = frozenset({"owner", "unrelated", "system"})
 _CLEANUP_RULES = frozenset({"none", "transaction_rollback"})
 _ROLLBACK_ASSERTIONS = frozenset({"not_required", "required_and_verified"})
+_SETUP_STATES = frozenset(
+    {
+        "advisor_snapshot",
+        "duplicate_key_row",
+        "finalized_row",
+        "invalid_valuation_row",
+        "migration_batch",
+        "owner_graph",
+        "raw_provider_payload",
+    }
+)
+
+
+class HostedVerificationContractError(ValueError):
+    def __init__(
+        self,
+        reason_code: str,
+        *,
+        blocking_probe_ids: tuple[str, ...] = (),
+    ) -> None:
+        super().__init__(reason_code)
+        self.reason_code = reason_code
+        self.blocking_probe_ids = tuple(sorted(set(blocking_probe_ids)))
 
 
 def _sha256(value: object) -> str:
@@ -69,7 +98,7 @@ class HostedProbeFixture:
     ) -> HostedProbeFixture:
         if _IDENTITY.fullmatch(fixture_id) is None:
             raise ValueError("hosted verification fixture ID is invalid")
-        if not setup_state.strip() or not row_identity.strip():
+        if setup_state not in _SETUP_STATES or not row_identity.strip():
             raise ValueError("hosted verification fixture state is invalid")
         if target_owner_role not in _TARGET_OWNER_ROLES:
             raise ValueError("hosted verification fixture owner role is invalid")
@@ -105,7 +134,11 @@ class HostedProbeDispatch:
     subject_role: str
     fixture_id: str
     mutation_field: str | None
+    conflict_key: tuple[str, ...] | None
     expected_constraint: str | None
+    residue_assertion: str | None
+    residue_source_probe_id: str | None
+    external_scope_reason_code: str | None
     rollback_assertion: str
     content_sha256: str
 
@@ -120,7 +153,11 @@ class HostedProbeDispatch:
         subject_role: str,
         fixture_id: str,
         mutation_field: str | None,
+        conflict_key: tuple[str, ...] | None = None,
         expected_constraint: str | None,
+        residue_assertion: str | None = None,
+        residue_source_probe_id: str | None = None,
+        external_scope_reason_code: str | None = None,
         rollback_assertion: str,
     ) -> HostedProbeDispatch:
         if _IDENTITY.fullmatch(probe_id) is None:
@@ -154,21 +191,61 @@ class HostedProbeDispatch:
             raise ValueError("hosted verification dispatch fixture ID is invalid")
         if rollback_assertion not in _ROLLBACK_ASSERTIONS:
             raise ValueError("hosted verification rollback assertion is invalid")
-        mutating = operation in {"attempt_insert", "attempt_update"}
+        mutating = operation in {
+            "attempt_duplicate_insert",
+            "attempt_invalid_insert",
+            "attempt_update",
+        }
+        ordered_conflict_key = (
+            tuple(sorted(set(conflict_key))) if conflict_key is not None else None
+        )
+        if ordered_conflict_key is not None and (
+            not ordered_conflict_key
+            or len(ordered_conflict_key) != len(conflict_key or ())
+            or any(
+                re.fullmatch(r"[a-z][a-z0-9_]*", field) is None
+                for field in ordered_conflict_key
+            )
+        ):
+            raise ValueError("hosted verification conflict key is invalid")
         if mutating and (
-            rollback_assertion != "required_and_verified"
-            or not mutation_field
-            or not expected_constraint
+            rollback_assertion != "required_and_verified" or not expected_constraint
         ):
             raise ValueError(
                 "hosted verification mutating dispatch requires verified rollback"
             )
+        if operation == "attempt_update" and (
+            not mutation_field or ordered_conflict_key is not None
+        ):
+            raise ValueError("hosted verification update dispatch is invalid")
+        if operation == "attempt_duplicate_insert" and (
+            mutation_field is not None or ordered_conflict_key is None
+        ):
+            raise ValueError("hosted verification duplicate dispatch is invalid")
+        if operation == "attempt_invalid_insert" and (
+            mutation_field is not None or ordered_conflict_key is not None
+        ):
+            raise ValueError("hosted verification invalid insert dispatch is invalid")
         if not mutating and (
             rollback_assertion != "not_required"
             or mutation_field is not None
+            or ordered_conflict_key is not None
             or expected_constraint is not None
         ):
             raise ValueError("hosted verification read dispatch cannot mutate")
+        if (operation == "assert_raw_access_residue") != (
+            residue_assertion == "access_audit_event_id_and_accessed_at"
+        ):
+            raise ValueError("hosted verification residue assertion is invalid")
+        if (operation == "assert_raw_access_residue") != (
+            residue_source_probe_id is not None
+            and _IDENTITY.fullmatch(residue_source_probe_id) is not None
+        ):
+            raise ValueError("hosted verification residue source is invalid")
+        if (operation == "read_migration_history") != (
+            external_scope_reason_code == "fixed_supabase_migration_history"
+        ):
+            raise ValueError("hosted verification external scope reason is invalid")
         ordered_targets = tuple(sorted(target_objects))
         content = {
             "probe_id": probe_id,
@@ -178,7 +255,13 @@ class HostedProbeDispatch:
             "subject_role": subject_role,
             "fixture_id": fixture_id,
             "mutation_field": mutation_field,
+            "conflict_key": (
+                list(ordered_conflict_key) if ordered_conflict_key is not None else None
+            ),
             "expected_constraint": expected_constraint,
+            "residue_assertion": residue_assertion,
+            "residue_source_probe_id": residue_source_probe_id,
+            "external_scope_reason_code": external_scope_reason_code,
             "rollback_assertion": rollback_assertion,
         }
         return cls(
@@ -189,7 +272,11 @@ class HostedProbeDispatch:
             subject_role=subject_role,
             fixture_id=fixture_id,
             mutation_field=mutation_field,
+            conflict_key=ordered_conflict_key,
             expected_constraint=expected_constraint,
+            residue_assertion=residue_assertion,
+            residue_source_probe_id=residue_source_probe_id,
+            external_scope_reason_code=external_scope_reason_code,
             rollback_assertion=rollback_assertion,
             content_sha256=_sha256(content),
         )
@@ -204,7 +291,13 @@ class HostedProbeDispatch:
                 "subject_role": self.subject_role,
                 "fixture_id": self.fixture_id,
                 "mutation_field": self.mutation_field,
+                "conflict_key": (
+                    list(self.conflict_key) if self.conflict_key is not None else None
+                ),
                 "expected_constraint": self.expected_constraint,
+                "residue_assertion": self.residue_assertion,
+                "residue_source_probe_id": self.residue_source_probe_id,
+                "external_scope_reason_code": self.external_scope_reason_code,
                 "rollback_assertion": self.rollback_assertion,
             }
         )
@@ -219,6 +312,8 @@ class HostedVerificationExecutionContract:
     execution_target_manifest_sha256: str
     dispatch_registry_sha256: str
     fixture_set_sha256: str
+    inventory_sha256: str
+    constraint_index_sha256: str
     required_scopes: tuple[str, ...]
     dispatches: tuple[HostedProbeDispatch, ...]
     fixtures: tuple[HostedProbeFixture, ...]
@@ -231,6 +326,8 @@ class HostedVerificationExecutionContract:
         plan: HostedVerificationPlan,
         dispatches: tuple[HostedProbeDispatch, ...],
         fixtures: tuple[HostedProbeFixture, ...],
+        inventory_sha256: str,
+        constraint_index_sha256: str,
     ) -> HostedVerificationExecutionContract:
         if not plan.has_valid_content_hash():
             raise ValueError("hosted verification v3 plan hash is invalid")
@@ -240,6 +337,11 @@ class HostedVerificationExecutionContract:
             raise ValueError("hosted verification v3 dispatch hash is invalid")
         if any(not item.has_valid_content_hash() for item in ordered_fixtures):
             raise ValueError("hosted verification v3 fixture hash is invalid")
+        if any(
+            re.fullmatch(r"[0-9a-f]{64}", value) is None
+            for value in (inventory_sha256, constraint_index_sha256)
+        ):
+            raise ValueError("hosted verification v3 schema hash is invalid")
         if len({item.probe_id for item in ordered_dispatches}) != len(
             ordered_dispatches
         ):
@@ -256,13 +358,57 @@ class HostedVerificationExecutionContract:
         if fixture_ids != {item.fixture_id for item in ordered_dispatches}:
             raise ValueError("hosted verification v3 fixture coverage is invalid")
         fixtures_by_id = {item.fixture_id: item for item in ordered_fixtures}
+        probes_by_id = {item.probe_id: item for item in plan.probes}
+        dispatches_by_id = {item.probe_id: item for item in ordered_dispatches}
+        for dispatch in ordered_dispatches:
+            expected_count = probes_by_id[dispatch.probe_id].expected_count
+            if (
+                expected_count is not None
+                and dispatch.target_objects
+                and len(dispatch.target_objects) != expected_count
+            ):
+                raise ValueError(
+                    "hosted verification v3 dispatch target count is invalid"
+                )
+            if dispatch.residue_source_probe_id is not None:
+                source = dispatches_by_id.get(dispatch.residue_source_probe_id)
+                if (
+                    source is None
+                    or source.operation != "read_raw_provider_payload"
+                    or source.fixture_id != dispatch.fixture_id
+                    or source.target_objects != dispatch.target_objects
+                ):
+                    raise ValueError(
+                        "hosted verification v3 residue source binding is invalid"
+                    )
         if any(
-            item.operation in {"attempt_insert", "attempt_update"}
+            item.operation
+            in {
+                "attempt_duplicate_insert",
+                "attempt_invalid_insert",
+                "attempt_update",
+            }
             and fixtures_by_id[item.fixture_id].cleanup_rule != "transaction_rollback"
             for item in ordered_dispatches
         ):
             raise ValueError(
                 "hosted verification v3 mutating fixture cleanup is invalid"
+            )
+        if any(
+            item.probe_id.startswith("immutable.")
+            and fixtures_by_id[item.fixture_id].setup_state != "finalized_row"
+            for item in ordered_dispatches
+        ):
+            raise ValueError(
+                "hosted verification v3 immutable fixture is not finalized"
+            )
+        if any(
+            item.probe_id.startswith("duplicate.")
+            and fixtures_by_id[item.fixture_id].setup_state != "duplicate_key_row"
+            for item in ordered_dispatches
+        ):
+            raise ValueError(
+                "hosted verification v3 duplicate fixture key is unavailable"
             )
         dispatch_hash = _sha256([item.content_sha256 for item in ordered_dispatches])
         fixture_hash = _sha256([item.content_sha256 for item in ordered_fixtures])
@@ -285,6 +431,8 @@ class HostedVerificationExecutionContract:
             "execution_target_manifest_sha256": execution_target_hash,
             "dispatch_registry_sha256": dispatch_hash,
             "fixture_set_sha256": fixture_hash,
+            "inventory_sha256": inventory_sha256,
+            "constraint_index_sha256": constraint_index_sha256,
             "required_scopes": list(plan.required_scopes),
         }
         return cls(
@@ -295,6 +443,8 @@ class HostedVerificationExecutionContract:
             execution_target_manifest_sha256=execution_target_hash,
             dispatch_registry_sha256=dispatch_hash,
             fixture_set_sha256=fixture_hash,
+            inventory_sha256=inventory_sha256,
+            constraint_index_sha256=constraint_index_sha256,
             required_scopes=plan.required_scopes,
             dispatches=ordered_dispatches,
             fixtures=ordered_fixtures,
@@ -310,6 +460,8 @@ class HostedVerificationExecutionContract:
             != tuple(sorted(self.fixtures, key=lambda item: item.fixture_id))
             or len({item.probe_id for item in self.dispatches}) != len(self.dispatches)
             or len({item.fixture_id for item in self.fixtures}) != len(self.fixtures)
+            or re.fullmatch(r"[0-9a-f]{64}", self.inventory_sha256) is None
+            or re.fullmatch(r"[0-9a-f]{64}", self.constraint_index_sha256) is None
             or any(not item.has_valid_content_hash() for item in self.dispatches)
             or any(not item.has_valid_content_hash() for item in self.fixtures)
             or self.dispatch_registry_sha256
@@ -339,6 +491,8 @@ class HostedVerificationExecutionContract:
                 ),
                 "dispatch_registry_sha256": self.dispatch_registry_sha256,
                 "fixture_set_sha256": self.fixture_set_sha256,
+                "inventory_sha256": self.inventory_sha256,
+                "constraint_index_sha256": self.constraint_index_sha256,
                 "required_scopes": list(self.required_scopes),
             }
         )
@@ -352,12 +506,15 @@ class HostedVerificationExecutionContract:
 class HostedVerificationExecutionAuthorization:
     contract_version: str
     authorization_sha256: str
+    execution_contract_sha256: str
     plan_sha256: str
     migration_manifest_sha256: str
     plan_target_manifest_sha256: str
     target_manifest_sha256: str
     dispatch_registry_sha256: str
     fixture_set_sha256: str
+    inventory_sha256: str
+    constraint_index_sha256: str
     content_sha256: str
 
     @classmethod
@@ -380,6 +537,7 @@ class HostedVerificationExecutionAuthorization:
         content = {
             "contract_version": version,
             "authorization_sha256": authorization.content_sha256,
+            "execution_contract_sha256": execution_contract.content_sha256,
             "plan_sha256": execution_contract.plan_sha256,
             "migration_manifest_sha256": (execution_contract.migration_manifest_sha256),
             "plan_target_manifest_sha256": (
@@ -390,6 +548,8 @@ class HostedVerificationExecutionAuthorization:
             ),
             "dispatch_registry_sha256": (execution_contract.dispatch_registry_sha256),
             "fixture_set_sha256": execution_contract.fixture_set_sha256,
+            "inventory_sha256": execution_contract.inventory_sha256,
+            "constraint_index_sha256": execution_contract.constraint_index_sha256,
         }
         return cls(**content, content_sha256=_sha256(content))
 
@@ -398,12 +558,15 @@ class HostedVerificationExecutionAuthorization:
             {
                 "contract_version": self.contract_version,
                 "authorization_sha256": self.authorization_sha256,
+                "execution_contract_sha256": self.execution_contract_sha256,
                 "plan_sha256": self.plan_sha256,
                 "migration_manifest_sha256": self.migration_manifest_sha256,
                 "plan_target_manifest_sha256": self.plan_target_manifest_sha256,
                 "target_manifest_sha256": self.target_manifest_sha256,
                 "dispatch_registry_sha256": self.dispatch_registry_sha256,
                 "fixture_set_sha256": self.fixture_set_sha256,
+                "inventory_sha256": self.inventory_sha256,
+                "constraint_index_sha256": self.constraint_index_sha256,
             }
         )
 
@@ -425,22 +588,40 @@ _MUTATION_FIELDS = {
     "memo": "requested_disposition",
     "thesis": "final_disposition",
     "operator_decision": "rationale",
-    "command": "state",
+    "command": "command_state",
     "market_series": "currency",
 }
 
-
-def _declared_iros_objects(migration_paths: tuple[Path, ...]) -> frozenset[str]:
-    declared: set[str] = set()
-    pattern = re.compile(
-        r"\bcreate\s+(?:or\s+replace\s+)?(?:table|view|function)\s+"
-        r"(?:if\s+not\s+exists\s+)?public\.(iros_[a-z0-9_]+)\b",
-        re.IGNORECASE,
-    )
-    for path in migration_paths:
-        sql = strip_sql_comments_and_literals(path.read_text())
-        declared.update(match.group(1).lower() for match in pattern.finditer(sql))
-    return frozenset(declared)
+_IMMUTABILITY_ENFORCERS = {
+    "research_run": "iros_research_runs_contract_immutable",
+    "grader_execution": "iros_grader_executions_z_immutable",
+    "committee": "iros_committee_results_z_immutable",
+    "memo": "iros_committee_memos_immutable",
+    "thesis": "iros_thesis_versions_z_immutable",
+    "operator_decision": "iros_operator_decisions_z_immutable",
+    "command": "iros_workflow_commands_z_immutable",
+    "market_series": "iros_market_series_immutable",
+}
+_DUPLICATE_ENFORCERS = {
+    "research_run": "iros_research_runs_operator_idempotency_unique",
+    "grader_execution": "iros_grader_executions_key_unique",
+    "committee": "iros_committee_results_run_unique",
+    "memo": "iros_committee_memos_execution_unique",
+    "thesis": "iros_thesis_versions_run_unique",
+    "operator_decision": "iros_operator_decisions_idempotency_unique",
+    "command": "iros_workflow_commands_event_type_unique",
+    "market_series": "iros_market_series_content_unique",
+}
+_DUPLICATE_KEYS = {
+    "research_run": ("operator_id", "idempotency_key"),
+    "grader_execution": ("operator_id", "execution_key"),
+    "committee": ("operator_id", "research_run_id"),
+    "memo": ("operator_id", "synthesis_execution_id"),
+    "thesis": ("operator_id", "research_run_id"),
+    "operator_decision": ("operator_id", "idempotency_key"),
+    "command": ("operator_id", "operator_decision_id", "command_type"),
+    "market_series": ("operator_id", "security_id", "provider", "response_sha256"),
+}
 
 
 def _fixture(
@@ -464,25 +645,25 @@ def _default_fixtures() -> tuple[HostedProbeFixture, ...]:
     fixtures = [
         _fixture(
             "fixture.migration_history",
-            setup_state="reviewed_migration_batch",
+            setup_state="migration_batch",
             row_identity="migration_batch",
             owner_role="system",
         ),
         _fixture(
             "fixture.owner_graph",
-            setup_state="seeded_owner_graph",
+            setup_state="owner_graph",
             row_identity="owner_graph",
             owner_role="owner",
         ),
         _fixture(
             "fixture.raw_payload",
-            setup_state="seeded_raw_provider_payload",
+            setup_state="raw_provider_payload",
             row_identity="raw_provider_payload",
             owner_role="owner",
         ),
         _fixture(
             "fixture.advisor_snapshot",
-            setup_state="current_advisor_snapshot",
+            setup_state="advisor_snapshot",
             row_identity="advisor_snapshot",
             owner_role="system",
         ),
@@ -492,7 +673,11 @@ def _default_fixtures() -> tuple[HostedProbeFixture, ...]:
             fixtures.append(
                 _fixture(
                     f"fixture.{prefix}_{identity}",
-                    setup_state=f"{prefix}_probe_row",
+                    setup_state=(
+                        "finalized_row"
+                        if prefix == "immutable"
+                        else "duplicate_key_row"
+                    ),
                     row_identity=f"{prefix}_{identity}_row",
                     owner_role="owner",
                     cleanup_rule="transaction_rollback",
@@ -508,7 +693,7 @@ def _default_fixtures() -> tuple[HostedProbeFixture, ...]:
         fixtures.append(
             _fixture(
                 f"fixture.valuation_{state}",
-                setup_state=f"valuation_{state}_scenario",
+                setup_state="invalid_valuation_row",
                 row_identity=f"valuation_{state}_run",
                 owner_role="owner",
                 cleanup_rule="transaction_rollback",
@@ -519,18 +704,20 @@ def _default_fixtures() -> tuple[HostedProbeFixture, ...]:
 
 def _default_dispatches(
     plan: HostedVerificationPlan,
+    constraint_index: IrosConstraintIndex,
 ) -> tuple[HostedProbeDispatch, ...]:
     access_targets = plan.target_objects
-    view_targets = tuple(
-        target for target in access_targets if target.startswith("iros_v_")
-    )
     dispatches: list[HostedProbeDispatch] = []
     for probe_id in IROS_REQUIRED_HOSTED_PROBE_IDS:
         common: dict[str, object] = {
             "probe_id": probe_id,
             "transport_owner": "database",
             "mutation_field": None,
+            "conflict_key": None,
             "expected_constraint": None,
+            "residue_assertion": None,
+            "residue_source_probe_id": None,
+            "external_scope_reason_code": None,
             "rollback_assertion": "not_required",
         }
         if probe_id == "migration.linked_history":
@@ -539,24 +726,25 @@ def _default_dispatches(
                 target_objects=(),
                 subject_role="audit_permitted",
                 fixture_id="fixture.migration_history",
+                external_scope_reason_code="fixed_supabase_migration_history",
             )
         elif probe_id == "access.owner":
             common.update(
-                operation="count_rows",
+                operation="read_access_surface",
                 target_objects=access_targets,
                 subject_role="owner",
                 fixture_id="fixture.owner_graph",
             )
         elif probe_id == "access.unrelated_denied":
             common.update(
-                operation="count_rows",
+                operation="read_access_surface",
                 target_objects=access_targets,
                 subject_role="unrelated",
                 fixture_id="fixture.owner_graph",
             )
         elif probe_id == "access.anonymous_denied":
             common.update(
-                operation="count_rows",
+                operation="read_access_surface",
                 target_objects=access_targets,
                 subject_role="anonymous",
                 fixture_id="fixture.owner_graph",
@@ -571,7 +759,7 @@ def _default_dispatches(
         elif probe_id == "access.security_invoker_views":
             common.update(
                 operation="read_view_security",
-                target_objects=view_targets,
+                target_objects=access_targets,
                 subject_role="audit_permitted",
                 fixture_id="fixture.owner_graph",
             )
@@ -584,17 +772,23 @@ def _default_dispatches(
             }
             common.update(
                 operation=(
-                    "read_audit_events"
+                    "assert_raw_access_residue"
                     if probe_id == "raw_audit.access_event"
                     else "read_raw_provider_payload"
                 ),
-                target_objects=(
-                    ("iros_raw_provider_payload_access_events",)
-                    if probe_id == "raw_audit.access_event"
-                    else ("iros_read_raw_provider_payload",)
-                ),
+                target_objects=("iros_read_raw_provider_payload",),
                 subject_role=raw_subjects[probe_id],
                 fixture_id="fixture.raw_payload",
+                residue_assertion=(
+                    "access_audit_event_id_and_accessed_at"
+                    if probe_id == "raw_audit.access_event"
+                    else None
+                ),
+                residue_source_probe_id=(
+                    "raw_audit.owner_permitted"
+                    if probe_id == "raw_audit.access_event"
+                    else None
+                ),
             )
         elif probe_id == "advisor.iros_findings":
             common.update(
@@ -606,26 +800,42 @@ def _default_dispatches(
             )
         elif probe_id.startswith(("immutable.", "duplicate.")):
             prefix, identity = probe_id.split(".", 1)
+            target = _MUTATION_TARGETS[identity]
+            expected_constraint = (
+                _IMMUTABILITY_ENFORCERS[identity]
+                if prefix == "immutable"
+                else _DUPLICATE_ENFORCERS[identity]
+            )
+            constraint_index.require_name(target, expected_constraint)
             common.update(
                 operation=(
-                    "attempt_update" if prefix == "immutable" else "attempt_insert"
+                    "attempt_update"
+                    if prefix == "immutable"
+                    else "attempt_duplicate_insert"
                 ),
-                target_objects=(_MUTATION_TARGETS[identity],),
+                target_objects=(target,),
                 subject_role="audit_permitted",
                 fixture_id=f"fixture.{prefix}_{identity}",
-                mutation_field=_MUTATION_FIELDS[identity],
-                expected_constraint=f"{prefix}_{identity}_enforced",
+                mutation_field=(
+                    _MUTATION_FIELDS[identity] if prefix == "immutable" else None
+                ),
+                conflict_key=(
+                    _DUPLICATE_KEYS[identity] if prefix == "duplicate" else None
+                ),
+                expected_constraint=expected_constraint,
                 rollback_assertion="required_and_verified",
             )
         elif probe_id.startswith("valuation."):
             state = probe_id.split(".", 1)[1]
+            target = "iros_readiness_gate_results"
+            expected_constraint = "iros_readiness_gate_results_a_validate_insert"
+            constraint_index.require_name(target, expected_constraint)
             common.update(
-                operation="attempt_insert",
-                target_objects=("iros_readiness_gate_results",),
+                operation="attempt_invalid_insert",
+                target_objects=(target,),
                 subject_role="audit_permitted",
                 fixture_id=f"fixture.valuation_{state}",
-                mutation_field="final_disposition",
-                expected_constraint="aligned_valuation_snapshot_required",
+                expected_constraint=expected_constraint,
                 rollback_assertion="required_and_verified",
             )
         else:  # pragma: no cover - closed required-probe registry above
@@ -638,24 +848,55 @@ def build_default_iros_hosted_execution_contract(
     *,
     migration_paths: tuple[Path, ...],
 ) -> HostedVerificationExecutionContract:
-    plan = build_default_iros_hosted_verification_plan(
-        migration_paths=migration_paths,
-    )
-    dispatches = _default_dispatches(plan)
-    declared_objects = _declared_iros_objects(migration_paths)
-    execution_targets = {
-        target for dispatch in dispatches for target in dispatch.target_objects
+    try:
+        plan = build_default_iros_hosted_verification_plan(
+            migration_paths=migration_paths,
+        )
+        inventory = build_iros_object_inventory(migration_paths=migration_paths)
+    except ValueError as error:
+        raise HostedVerificationContractError("migration_contract_invalid") from error
+    declared_objects = frozenset(inventory.entries_by_name)
+    required_targets = {
+        *plan.target_objects,
+        *_MUTATION_TARGETS.values(),
+        "iros_readiness_gate_results",
+        "iros_read_raw_provider_payload",
     }
-    missing_targets = tuple(sorted(execution_targets - declared_objects))
-    if missing_targets:
-        raise ValueError(
-            "hosted verification v3 dispatch target is absent from reviewed migrations: "
-            + ",".join(missing_targets)
+    missing_required_targets = tuple(sorted(required_targets - declared_objects))
+    if missing_required_targets:
+        raise HostedVerificationContractError(
+            "dispatch_target_absent",
+        )
+    try:
+        constraint_index = build_iros_constraint_index(migration_paths=migration_paths)
+        dispatches = _default_dispatches(plan, constraint_index)
+    except ValueError as error:
+        raise HostedVerificationContractError("constraint_binding_invalid") from error
+    unreachable_mutations = tuple(
+        dispatch.probe_id
+        for dispatch in dispatches
+        if dispatch.operation
+        in {
+            "attempt_duplicate_insert",
+            "attempt_invalid_insert",
+            "attempt_update",
+        }
+        and ("update" if dispatch.operation == "attempt_update" else "insert")
+        not in inventory.entries_by_name[
+            dispatch.target_objects[0]
+        ].authenticated_privileges
+    )
+    if unreachable_mutations:
+        raise HostedVerificationContractError(
+            "mutation_path_unreachable",
+            blocking_probe_ids=unreachable_mutations,
         )
     return HostedVerificationExecutionContract.freeze(
         plan=plan,
         dispatches=dispatches,
         fixtures=_default_fixtures(),
+        inventory_sha256=inventory.content_sha256,
+        constraint_index_sha256=constraint_index.content_sha256,
     )
 
 
@@ -664,5 +905,6 @@ __all__ = [
     "HostedProbeFixture",
     "HostedVerificationExecutionAuthorization",
     "HostedVerificationExecutionContract",
+    "HostedVerificationContractError",
     "build_default_iros_hosted_execution_contract",
 ]

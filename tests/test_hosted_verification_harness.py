@@ -1085,6 +1085,57 @@ class HostedVerificationHarnessTests(unittest.TestCase):
                 checked_at=NOW,
             )
 
+    def test_report_rejects_passed_flag_with_failed_probe_result(self) -> None:
+        failed_result = HostedVerificationProbeResult(
+            probe_id="access.owner",
+            category="owner_isolation",
+            passed=False,
+            result_code="owner_access_failed",
+            count=0,
+        )
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "report outcome is inconsistent",
+        ):
+            HostedVerificationReport(
+                passed=True,
+                blocking_reason_codes=(),
+                probe_results=(failed_result,),
+                checked_at=NOW,
+            )
+
+    def test_failed_unattested_report_cannot_freeze_as_record(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            migration = Path(directory) / "20260807000000_iros_test.sql"
+            migration.write_text(COMPLIANT_IROS_MIGRATION)
+            plan = build_default_iros_hosted_verification_plan(
+                migration_paths=(migration,),
+            )
+        authorization = valid_authorization(
+            authorized_scopes=plan.required_scopes,
+        )
+        report = HostedVerificationReport(
+            passed=False,
+            blocking_reason_codes=("transport_failure",),
+            probe_results=(),
+            checked_at=NOW,
+            plan_sha256=plan.content_sha256,
+            authorization_sha256=authorization.content_sha256,
+            execution_provenance="unattested",
+        )
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "record provenance is invalid",
+        ):
+            HostedVerificationRecord.freeze(
+                plan=plan,
+                authorization=authorization,
+                report=report,
+                checked_at=NOW,
+            )
+
     def test_truncated_plan_cannot_be_frozen_as_complete_hosted_evidence(
         self,
     ) -> None:

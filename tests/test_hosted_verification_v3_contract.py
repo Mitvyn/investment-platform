@@ -17,6 +17,10 @@ from investment_research_os.hosted_verification_v3 import (
 )
 
 
+INVENTORY_SHA256 = "1" * 64
+CONSTRAINT_INDEX_SHA256 = "2" * 64
+
+
 class HostedVerificationV3ContractTests(unittest.TestCase):
     def test_freezes_plan_dispatch_and_fixture_as_one_content_addressed_contract(
         self,
@@ -35,7 +39,7 @@ class HostedVerificationV3ContractTests(unittest.TestCase):
         )
         fixture = HostedProbeFixture.freeze(
             fixture_id="fixture.owner_job",
-            setup_state="existing_owner_row",
+            setup_state="owner_graph",
             row_identity="owner_job",
             target_owner_role="owner",
             cleanup_rule="none",
@@ -56,6 +60,8 @@ class HostedVerificationV3ContractTests(unittest.TestCase):
             plan=plan,
             dispatches=(dispatch,),
             fixtures=(fixture,),
+            inventory_sha256=INVENTORY_SHA256,
+            constraint_index_sha256=CONSTRAINT_INDEX_SHA256,
         )
 
         self.assertEqual(
@@ -99,6 +105,10 @@ class HostedVerificationV3ContractTests(unittest.TestCase):
 
         self.assertEqual(bound.plan_sha256, contract.plan_sha256)
         self.assertEqual(
+            bound.execution_contract_sha256,
+            contract.content_sha256,
+        )
+        self.assertEqual(
             bound.dispatch_registry_sha256,
             contract.dispatch_registry_sha256,
         )
@@ -139,7 +149,7 @@ class HostedVerificationV3ContractTests(unittest.TestCase):
     ) -> None:
         fixture = HostedProbeFixture.freeze(
             fixture_id="fixture.immutable_run",
-            setup_state="existing_immutable_row",
+            setup_state="finalized_row",
             row_identity="immutable_run",
             target_owner_role="owner",
             cleanup_rule="none",
@@ -178,7 +188,7 @@ class HostedVerificationV3ContractTests(unittest.TestCase):
         )
         fixture = HostedProbeFixture.freeze(
             fixture_id="fixture.immutable_run",
-            setup_state="existing_immutable_row",
+            setup_state="finalized_row",
             row_identity="immutable_run",
             target_owner_role="owner",
             cleanup_rule="none",
@@ -203,6 +213,8 @@ class HostedVerificationV3ContractTests(unittest.TestCase):
                 plan=plan,
                 dispatches=(dispatch,),
                 fixtures=(fixture,),
+                inventory_sha256=INVENTORY_SHA256,
+                constraint_index_sha256=CONSTRAINT_INDEX_SHA256,
             )
 
     def test_advisor_transport_owns_only_advisor_read_operation(self) -> None:
@@ -220,6 +232,200 @@ class HostedVerificationV3ContractTests(unittest.TestCase):
                 mutation_field=None,
                 expected_constraint=None,
                 rollback_assertion="not_required",
+            )
+
+    def test_duplicate_insert_requires_conflict_key_not_mutation_field(self) -> None:
+        with self.assertRaisesRegex(
+            ValueError,
+            "duplicate dispatch is invalid",
+        ):
+            HostedProbeDispatch.freeze(
+                probe_id="duplicate.research_run",
+                transport_owner="database",
+                operation="attempt_duplicate_insert",
+                target_objects=("iros_research_runs",),
+                subject_role="audit_permitted",
+                fixture_id="fixture.duplicate_run",
+                mutation_field="status",
+                expected_constraint="iros_research_runs_operator_idempotency_unique",
+                rollback_assertion="required_and_verified",
+            )
+
+    def test_raw_access_event_is_residue_assertion_on_rpc_result(self) -> None:
+        with self.assertRaisesRegex(
+            ValueError,
+            "residue assertion is invalid",
+        ):
+            HostedProbeDispatch.freeze(
+                probe_id="raw_audit.access_event",
+                transport_owner="database",
+                operation="assert_raw_access_residue",
+                target_objects=("iros_read_raw_provider_payload",),
+                subject_role="audit_permitted",
+                fixture_id="fixture.raw_payload",
+                mutation_field=None,
+                expected_constraint=None,
+                rollback_assertion="not_required",
+            )
+
+    def test_raw_access_residue_requires_source_probe_binding(self) -> None:
+        with self.assertRaisesRegex(
+            ValueError,
+            "residue source is invalid",
+        ):
+            HostedProbeDispatch.freeze(
+                probe_id="raw_audit.access_event",
+                transport_owner="database",
+                operation="assert_raw_access_residue",
+                target_objects=("iros_read_raw_provider_payload",),
+                subject_role="audit_permitted",
+                fixture_id="fixture.raw_payload",
+                mutation_field=None,
+                expected_constraint=None,
+                residue_assertion="access_audit_event_id_and_accessed_at",
+                rollback_assertion="not_required",
+            )
+
+    def test_contract_rejects_missing_raw_access_source_dispatch(self) -> None:
+        plan = HostedVerificationPlan.freeze(
+            probes=(
+                HostedVerificationProbe(
+                    probe_id="raw_audit.access_event",
+                    category="raw_provider_audit",
+                    required_scope="raw_provider_audit_probe",
+                    expected_result_code="audit_event_recorded",
+                    expected_count=1,
+                ),
+            ),
+            target_objects=("iros_read_raw_provider_payload",),
+        )
+        fixture = HostedProbeFixture.freeze(
+            fixture_id="fixture.raw_payload",
+            setup_state="raw_provider_payload",
+            row_identity="raw_payload",
+            target_owner_role="owner",
+            cleanup_rule="none",
+        )
+        dispatch = HostedProbeDispatch.freeze(
+            probe_id="raw_audit.access_event",
+            transport_owner="database",
+            operation="assert_raw_access_residue",
+            target_objects=("iros_read_raw_provider_payload",),
+            subject_role="audit_permitted",
+            fixture_id=fixture.fixture_id,
+            mutation_field=None,
+            expected_constraint=None,
+            residue_assertion="access_audit_event_id_and_accessed_at",
+            residue_source_probe_id="raw_audit.owner_permitted",
+            rollback_assertion="not_required",
+        )
+
+        with self.assertRaisesRegex(ValueError, "source binding is invalid"):
+            HostedVerificationExecutionContract.freeze(
+                plan=plan,
+                dispatches=(dispatch,),
+                fixtures=(fixture,),
+                inventory_sha256=INVENTORY_SHA256,
+                constraint_index_sha256=CONSTRAINT_INDEX_SHA256,
+            )
+
+    def test_migration_history_requires_fixed_external_scope_reason(self) -> None:
+        with self.assertRaisesRegex(
+            ValueError,
+            "external scope reason is invalid",
+        ):
+            HostedProbeDispatch.freeze(
+                probe_id="migration.linked_history",
+                transport_owner="database",
+                operation="read_migration_history",
+                target_objects=(),
+                subject_role="audit_permitted",
+                fixture_id="fixture.migration_history",
+                mutation_field=None,
+                expected_constraint=None,
+                rollback_assertion="not_required",
+            )
+
+    def test_contract_rejects_dispatch_target_count_drift(self) -> None:
+        plan = HostedVerificationPlan.freeze(
+            probes=(
+                HostedVerificationProbe(
+                    probe_id="access.owner",
+                    category="owner_isolation",
+                    required_scope="owner_isolation_read",
+                    expected_result_code="owner_access_verified",
+                    expected_count=2,
+                ),
+            ),
+            target_objects=("iros_jobs", "iros_watchlist_items"),
+        )
+        fixture = HostedProbeFixture.freeze(
+            fixture_id="fixture.owner_job",
+            setup_state="owner_graph",
+            row_identity="owner_job",
+            target_owner_role="owner",
+            cleanup_rule="none",
+        )
+        dispatch = HostedProbeDispatch.freeze(
+            probe_id="access.owner",
+            transport_owner="database",
+            operation="count_rows",
+            target_objects=("iros_jobs",),
+            subject_role="owner",
+            fixture_id=fixture.fixture_id,
+            mutation_field=None,
+            expected_constraint=None,
+            rollback_assertion="not_required",
+        )
+
+        with self.assertRaisesRegex(ValueError, "target count is invalid"):
+            HostedVerificationExecutionContract.freeze(
+                plan=plan,
+                dispatches=(dispatch,),
+                fixtures=(fixture,),
+                inventory_sha256=INVENTORY_SHA256,
+                constraint_index_sha256=CONSTRAINT_INDEX_SHA256,
+            )
+
+    def test_immutable_probe_requires_finalized_fixture(self) -> None:
+        plan = HostedVerificationPlan.freeze(
+            probes=(
+                HostedVerificationProbe(
+                    probe_id="immutable.research_run",
+                    category="immutable_constraint",
+                    required_scope="negative_constraint_probe",
+                    expected_result_code="mutation_rejected",
+                    expected_count=1,
+                ),
+            ),
+            target_objects=("iros_research_runs",),
+        )
+        fixture = HostedProbeFixture.freeze(
+            fixture_id="fixture.immutable_run",
+            setup_state="duplicate_key_row",
+            row_identity="immutable_run",
+            target_owner_role="owner",
+            cleanup_rule="transaction_rollback",
+        )
+        dispatch = HostedProbeDispatch.freeze(
+            probe_id="immutable.research_run",
+            transport_owner="database",
+            operation="attempt_update",
+            target_objects=("iros_research_runs",),
+            subject_role="audit_permitted",
+            fixture_id=fixture.fixture_id,
+            mutation_field="status",
+            expected_constraint="iros_research_runs_contract_immutable",
+            rollback_assertion="required_and_verified",
+        )
+
+        with self.assertRaisesRegex(ValueError, "fixture is not finalized"):
+            HostedVerificationExecutionContract.freeze(
+                plan=plan,
+                dispatches=(dispatch,),
+                fixtures=(fixture,),
+                inventory_sha256=INVENTORY_SHA256,
+                constraint_index_sha256=CONSTRAINT_INDEX_SHA256,
             )
 
     def test_contract_rejects_direct_dispatch_hash_tampering(self) -> None:
@@ -244,6 +450,8 @@ class HostedVerificationV3ContractTests(unittest.TestCase):
                 ),
                 dispatches=(replace(contract.dispatches[0], content_sha256="0" * 64),),
                 fixtures=contract.fixtures,
+                inventory_sha256=INVENTORY_SHA256,
+                constraint_index_sha256=CONSTRAINT_INDEX_SHA256,
             )
 
     def test_contract_rejects_duplicate_dispatch_ids(self) -> None:
@@ -269,13 +477,15 @@ class HostedVerificationV3ContractTests(unittest.TestCase):
                 plan=plan,
                 dispatches=(contract.dispatches[0], contract.dispatches[0]),
                 fixtures=contract.fixtures,
+                inventory_sha256=INVENTORY_SHA256,
+                constraint_index_sha256=CONSTRAINT_INDEX_SHA256,
             )
 
     def test_contract_rejects_unused_fixture(self) -> None:
         contract = self._read_contract()
         unused = HostedProbeFixture.freeze(
             fixture_id="fixture.unused_row",
-            setup_state="unused_row",
+            setup_state="owner_graph",
             row_identity="unused_row",
             target_owner_role="owner",
             cleanup_rule="none",
@@ -301,6 +511,8 @@ class HostedVerificationV3ContractTests(unittest.TestCase):
                 plan=plan,
                 dispatches=contract.dispatches,
                 fixtures=(*contract.fixtures, unused),
+                inventory_sha256=INVENTORY_SHA256,
+                constraint_index_sha256=CONSTRAINT_INDEX_SHA256,
             )
 
     def test_authorization_rejects_tampered_embedded_dispatch(self) -> None:
@@ -349,7 +561,7 @@ class HostedVerificationV3ContractTests(unittest.TestCase):
         )
         fixture = HostedProbeFixture.freeze(
             fixture_id="fixture.owner_job",
-            setup_state="existing_owner_row",
+            setup_state="owner_graph",
             row_identity="owner_job",
             target_owner_role="owner",
             cleanup_rule="none",
@@ -369,6 +581,8 @@ class HostedVerificationV3ContractTests(unittest.TestCase):
             plan=plan,
             dispatches=(dispatch,),
             fixtures=(fixture,),
+            inventory_sha256=INVENTORY_SHA256,
+            constraint_index_sha256=CONSTRAINT_INDEX_SHA256,
         )
 
 

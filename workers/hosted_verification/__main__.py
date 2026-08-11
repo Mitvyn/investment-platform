@@ -7,8 +7,18 @@ from pathlib import Path
 from typing import Mapping, Sequence
 
 from investment_research_os.hosted_verification_v3 import (
+    HostedVerificationContractError,
     build_default_iros_hosted_execution_contract,
 )
+
+
+class _DryRunConnectionGuard:
+    def __init__(self) -> None:
+        self.connection_attempted = False
+
+    def reject_connection_attempt(self) -> None:
+        self.connection_attempted = True
+        raise RuntimeError("dry run forbids connection construction")
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -30,6 +40,7 @@ def run(
 ) -> int:
     del environment
     arguments = _parser().parse_args(argv)
+    connection_guard = _DryRunConnectionGuard()
     migration_paths = tuple(sorted(arguments.migration_root.glob("*_iros_*.sql")))
     if not migration_paths:
         _emit(
@@ -43,17 +54,36 @@ def run(
         contract = build_default_iros_hosted_execution_contract(
             migration_paths=migration_paths,
         )
-    except (OSError, ValueError):
+    except HostedVerificationContractError as error:
+        _emit(
+            {
+                "blocking_probe_ids": list(error.blocking_probe_ids),
+                "connection_attempted": connection_guard.connection_attempted,
+                "error": "hosted_verification_dry_run_blocked",
+                "migration_count": len(migration_paths),
+                "reason": error.reason_code,
+            }
+        )
+        return 2
+    except OSError:
         _emit(
             {
                 "error": "hosted_verification_dry_run_failed",
-                "reason": "execution_contract_invalid",
+                "reason": "migration_read_failed",
+            }
+        )
+        return 2
+    except ValueError:
+        _emit(
+            {
+                "error": "hosted_verification_dry_run_failed",
+                "reason": "execution_contract_validation_failed",
             }
         )
         return 2
     _emit(
         {
-            "connection_attempted": False,
+            "connection_attempted": connection_guard.connection_attempted,
             "content_sha256": contract.content_sha256,
             "contract_version": contract.contract_version,
             "dispatch_count": len(contract.dispatches),

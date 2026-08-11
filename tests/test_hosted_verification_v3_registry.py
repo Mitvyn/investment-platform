@@ -6,9 +6,9 @@ import unittest
 
 from investment_research_os.hosted_verification import (
     IROS_REQUIRED_HOSTED_PROBE_IDS,
-    build_default_iros_hosted_verification_plan,
 )
 from investment_research_os.hosted_verification_v3 import (
+    HostedVerificationContractError,
     build_default_iros_hosted_execution_contract,
 )
 
@@ -18,36 +18,24 @@ MIGRATION_ROOT = REPO_ROOT / "supabase" / "migrations"
 
 
 class HostedVerificationV3RegistryTests(unittest.TestCase):
-    def test_default_registry_covers_every_required_probe_once(self) -> None:
+    def test_default_registry_refuses_unreachable_mutating_probe_material(self) -> None:
         migration_paths = tuple(sorted(MIGRATION_ROOT.glob("*_iros_*.sql")))
-        contract = build_default_iros_hosted_execution_contract(
-            migration_paths=migration_paths,
-        )
-        legacy_plan = build_default_iros_hosted_verification_plan(
-            migration_paths=migration_paths,
-        )
+        with self.assertRaises(HostedVerificationContractError) as caught:
+            build_default_iros_hosted_execution_contract(
+                migration_paths=migration_paths,
+            )
 
+        self.assertEqual(caught.exception.reason_code, "mutation_path_unreachable")
         self.assertEqual(
-            tuple(item.probe_id for item in contract.dispatches),
-            tuple(sorted(IROS_REQUIRED_HOSTED_PROBE_IDS)),
+            caught.exception.blocking_probe_ids,
+            tuple(
+                sorted(
+                    probe_id
+                    for probe_id in IROS_REQUIRED_HOSTED_PROBE_IDS
+                    if probe_id.startswith(("immutable.", "duplicate.", "valuation."))
+                )
+            ),
         )
-        self.assertEqual(
-            contract.target_manifest_sha256,
-            contract.execution_target_manifest_sha256,
-        )
-        self.assertIn(
-            "iros_research_runs",
-            {
-                target
-                for dispatch in contract.dispatches
-                for target in dispatch.target_objects
-            },
-        )
-        self.assertNotIn(
-            "iros_research_runs",
-            legacy_plan.target_objects,
-        )
-        self.assertTrue(contract.has_valid_content_hash())
 
     def test_default_registry_requires_every_dispatch_target_in_migrations(
         self,
@@ -58,13 +46,11 @@ class HostedVerificationV3RegistryTests(unittest.TestCase):
             if path.name != "20260722040000_iros_operator_decisions.sql"
         )
 
-        with self.assertRaisesRegex(
-            ValueError,
-            "dispatch target is absent from reviewed migrations",
-        ):
+        with self.assertRaises(HostedVerificationContractError) as caught:
             build_default_iros_hosted_execution_contract(
                 migration_paths=migration_paths,
             )
+        self.assertEqual(caught.exception.reason_code, "dispatch_target_absent")
 
     def test_commented_object_declaration_cannot_satisfy_target_discovery(
         self,
@@ -84,28 +70,11 @@ class HostedVerificationV3RegistryTests(unittest.TestCase):
                 "-- create view public.iros_v_operator_decision_history as select 1;\n"
             )
 
-            with self.assertRaisesRegex(
-                ValueError,
-                "dispatch target is absent from reviewed migrations",
-            ):
+            with self.assertRaises(HostedVerificationContractError) as caught:
                 build_default_iros_hosted_execution_contract(
                     migration_paths=(*migration_paths, comment_only),
                 )
-
-    def test_every_mutating_default_probe_has_transaction_cleanup(self) -> None:
-        contract = build_default_iros_hosted_execution_contract(
-            migration_paths=tuple(sorted(MIGRATION_ROOT.glob("*_iros_*.sql"))),
-        )
-        fixtures = {item.fixture_id: item for item in contract.fixtures}
-
-        for dispatch in contract.dispatches:
-            if dispatch.operation not in {"attempt_insert", "attempt_update"}:
-                continue
-            self.assertEqual(dispatch.rollback_assertion, "required_and_verified")
-            self.assertEqual(
-                fixtures[dispatch.fixture_id].cleanup_rule,
-                "transaction_rollback",
-            )
+            self.assertEqual(caught.exception.reason_code, "dispatch_target_absent")
 
 
 if __name__ == "__main__":

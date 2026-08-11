@@ -764,7 +764,10 @@ class HostedVerificationReport:
     content_sha256: str = ""
 
     def __post_init__(self) -> None:
-        if self.passed == bool(self.blocking_reason_codes):
+        derived_passed = not self.blocking_reason_codes and all(
+            result.passed for result in self.probe_results
+        )
+        if self.passed != derived_passed:
             raise ValueError("hosted verification report outcome is inconsistent")
         if self.execution_provenance not in {
             "unattested",
@@ -843,6 +846,11 @@ class HostedVerificationRecord:
             )
         if report.passed and not plan.has_complete_coverage:
             raise ValueError("hosted verification record plan coverage is incomplete")
+        if report.execution_provenance not in {
+            "offline_fixture",
+            "hosted_transport",
+        }:
+            raise ValueError("hosted verification record provenance is invalid")
         if report.passed and report.execution_provenance != "hosted_transport":
             raise ValueError("hosted verification record is not hosted evidence")
         record_version = "hosted-verification-record.v2"

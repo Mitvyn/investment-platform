@@ -15,7 +15,9 @@ MIGRATION_ROOT = REPO_ROOT / "supabase" / "migrations"
 
 
 class HostedVerificationV3CliTests(unittest.TestCase):
-    def test_dry_run_builds_complete_contract_without_connection_settings(self) -> None:
+    def test_dry_run_reports_structurally_blocked_material_without_connection(
+        self,
+    ) -> None:
         output = StringIO()
 
         with redirect_stdout(output):
@@ -29,17 +31,12 @@ class HostedVerificationV3CliTests(unittest.TestCase):
             )
 
         payload = json.loads(output.getvalue())
-        self.assertEqual(exit_code, 0)
-        self.assertEqual(
-            payload["contract_version"],
-            "hosted-verification-execution-contract.v3",
-        )
-        self.assertEqual(payload["probe_count"], 32)
-        self.assertEqual(payload["dispatch_count"], 32)
-        self.assertGreater(payload["fixture_count"], 0)
+        self.assertEqual(exit_code, 2)
+        self.assertEqual(payload["error"], "hosted_verification_dry_run_blocked")
+        self.assertEqual(payload["reason"], "mutation_path_unreachable")
+        self.assertEqual(len(payload["blocking_probe_ids"]), 21)
         self.assertGreater(payload["migration_count"], 0)
         self.assertFalse(payload["connection_attempted"])
-        self.assertEqual(len(payload["content_sha256"]), 64)
 
     def test_dry_run_failure_is_machine_safe(self) -> None:
         output = StringIO()
@@ -55,6 +52,22 @@ class HostedVerificationV3CliTests(unittest.TestCase):
         self.assertEqual(payload["error"], "hosted_verification_dry_run_failed")
         self.assertEqual(payload["reason"], "migration_batch_empty")
         self.assertNotIn("must-not-appear", output.getvalue())
+
+    def test_invalid_migration_gets_typed_machine_safe_reason(self) -> None:
+        output = StringIO()
+        with tempfile.TemporaryDirectory() as directory:
+            migration = Path(directory) / "20260811000000_iros_invalid.sql"
+            migration.write_text("create table public.well_sessions (id uuid);\n")
+            with redirect_stdout(output):
+                exit_code = run(
+                    ["dry-run", "--migration-root", directory],
+                    environment={},
+                )
+
+        payload = json.loads(output.getvalue())
+        self.assertEqual(exit_code, 2)
+        self.assertEqual(payload["reason"], "migration_contract_invalid")
+        self.assertFalse(payload["connection_attempted"])
 
 
 if __name__ == "__main__":
