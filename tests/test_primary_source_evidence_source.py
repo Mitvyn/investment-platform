@@ -36,6 +36,12 @@ from workers.primary_sources.storage import FilePrimarySourceCaptureRepository
 
 
 class CandidateAssemblerFake:
+    def __init__(
+        self,
+        evidence_policy_version: str = "biotech-primary-evidence-v2",
+    ) -> None:
+        self.evidence_policy_version = evidence_policy_version
+
     def assemble(
         self,
         raw_archive: bytes,
@@ -55,7 +61,7 @@ class CandidateAssemblerFake:
         return EvidenceBundleCandidate(
             security_id=request.security_id,
             as_of_cutoff=request.as_of_cutoff,
-            evidence_policy_version="biotech-primary-evidence-v1",
+            evidence_policy_version=self.evidence_policy_version,
             freshness_policy_version="biotech-evidence-freshness-v1",
             items=(),
         )
@@ -93,6 +99,7 @@ class PersistedPrimarySourceEvidenceSourceTests(unittest.TestCase):
             first.bind_to_run(
                 persisted,
                 run,
+                evidence_policy_version="biotech-primary-evidence-v2",
                 bound_at=datetime(2026, 5, 7, 4, tzinfo=UTC),
             )
             source = PersistedPrimarySourceEvidenceSource(
@@ -150,9 +157,7 @@ class PersistedPrimarySourceEvidenceSourceTests(unittest.TestCase):
         self,
     ) -> None:
         candidate = ReplayEvidenceCandidateAssembler().assemble(
-            _platform_capture_archive(
-                corporate_action_text=CORPORATE_ACTION_NO_CHANGE
-            ),
+            _platform_capture_archive(corporate_action_text=CORPORATE_ACTION_NO_CHANGE),
             request=integrated_request(PLATFORM_CASE),
             ticker=PLATFORM_CASE.display_symbol,
             sec_user_agent="Investment Research OS research@example.com",
@@ -250,6 +255,7 @@ class PersistedPrimarySourceEvidenceSourceTests(unittest.TestCase):
             repository.bind_to_run(
                 persisted,
                 run,
+                evidence_policy_version="biotech-primary-evidence-v2",
                 bound_at=datetime(2026, 5, 7, 4, tzinfo=UTC),
             )
             restarted = FilePrimarySourceCaptureRepository(root)
@@ -274,6 +280,47 @@ class PersistedPrimarySourceEvidenceSourceTests(unittest.TestCase):
         self.assertEqual(assembler.request.cik, run.security_identity.cik)
         self.assertEqual(assembler.ticker, run.security_identity.symbol)
         self.assertEqual(assembler.accepted_at, accepted_at)
+
+    def test_restart_rejects_assembler_under_different_evidence_policy(self) -> None:
+        value, payloads, source_plan = capture_value()
+        archive = archive_bytes(value, payloads, source_plan)
+        accepted_at = datetime(2026, 5, 7, 3, tzinfo=UTC)
+        capture = load_primary_source_capture(
+            archive,
+            request=request(),
+            trusted_issuer_hosts=("ir.recursion.com",),
+            accepted_at=lambda: accepted_at,
+        )
+        run = research_run()
+
+        with tempfile.TemporaryDirectory() as directory:
+            repository = FilePrimarySourceCaptureRepository(Path(directory))
+            persisted = repository.save_capture(capture, archive)
+            repository.bind_to_run(
+                persisted,
+                run,
+                evidence_policy_version="biotech-primary-evidence-v2",
+                bound_at=datetime(2026, 5, 7, 4, tzinfo=UTC),
+            )
+            source = PersistedPrimarySourceEvidenceSource(
+                repository=repository,
+                research_run=run,
+                assembler=CandidateAssemblerFake(
+                    evidence_policy_version="biotech-primary-evidence-v1"
+                ),
+                sec_user_agent="Investment Research OS research@example.com",
+                trusted_issuer_hosts=("ir.recursion.com",),
+            )
+
+            with self.assertRaisesRegex(
+                PersistedPrimarySourceEvidenceError,
+                "assembled evidence does not match Research Run",
+            ):
+                source.load(
+                    run.operator_id,
+                    run.security_id,
+                    run.as_of_cutoff,
+                )
 
 
 if __name__ == "__main__":

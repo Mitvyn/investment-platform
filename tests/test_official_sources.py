@@ -26,7 +26,10 @@ PASSAGE = (
     "in the fourth quarter of 2026."
 )
 FDA_URL = "https://www.fda.gov/drugs/news-events/regulatory-update"
-FDA_PASSAGE = "FDA granted Fast Track designation for the investigational therapy."
+FDA_PASSAGE = (
+    "FDA granted Fast Track designation for Asset Alpha in the "
+    "Example oncology programme."
+)
 
 
 def source_request() -> PrimarySourceRequest:

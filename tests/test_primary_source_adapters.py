@@ -35,6 +35,7 @@ from workers.primary_sources.pipeline import (
     NormalizedMetricFact,
     PrimarySourcePipelineError,
 )
+from workers.regulatory import FDARegulatoryEvidenceAdapter
 from workers.sec.documents import (
     SecFilingDocument,
     SecFilingDocumentSnapshot,
@@ -264,6 +265,186 @@ class PrimarySourceAdapterTests(unittest.TestCase):
         self.assertEqual(
             proofs[0].evidence_reference_keys,
             (passages[0].reference_key,),
+        )
+
+    def test_regulatory_coverage_requires_programme_designation_bridge(self) -> None:
+        body = (
+            b'<p>"name":"REC-4881"</p>'
+            b'<p>"codeSystem":"FDA ORPHAN DRUG","code":"817621"</p>'
+        )
+        snapshot = FDARegulatoryEvidenceAdapter(
+            allowed_hosts=("precision.fda.gov",),
+            transport=FixtureTransport(body),
+            clock=lambda: datetime(2026, 5, 7, 1, 0, tzinfo=UTC),
+        ).collect(
+            request(),
+            (
+                OfficialSourceLocator(
+                    source_key="fda-rec-4881-bridge",
+                    requirement_id="us_regulatory",
+                    title="REC-4881 FDA bridge",
+                    source_url="https://precision.fda.gov/rec-4881",
+                    publication_time="2026-05-05T20:00:00Z",
+                    effective_date=date(2026, 5, 5),
+                    passages=(
+                        OfficialPassageSpec(
+                            passage_key="programme-name",
+                            locator="$.names",
+                            exact_text='"name":"REC-4881"',
+                        ),
+                        OfficialPassageSpec(
+                            passage_key="orphan-designation",
+                            locator="$.codes",
+                            exact_text=(
+                                '"codeSystem":"FDA ORPHAN DRUG","code":"817621"'
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+        )
+
+        passages = official_snapshot_pipeline_inputs(
+            snapshot,
+            regulatory_program_names=("REC-4881",),
+        )
+        proofs = official_snapshot_coverage_proofs(
+            snapshot,
+            regulatory_program_names=("REC-4881",),
+        )
+
+        self.assertTrue(
+            any("us_regulatory" in passage.coverage_keys for passage in passages)
+        )
+        self.assertEqual(proofs[0].state, "complete")
+        self.assertEqual(proofs[0].policy_version, "fda-regulatory-source-v2")
+
+    def test_regulatory_coverage_rejects_sponsor_only_designation(self) -> None:
+        body = (
+            b"<p>Designation Date 10/10/2023</p>"
+            b"<p>Sponsor SELLAS Life Sciences Group, Inc.</p>"
+        )
+        snapshot = FDARegulatoryEvidenceAdapter(
+            allowed_hosts=("www.accessdata.fda.gov",),
+            transport=FixtureTransport(body),
+            clock=lambda: datetime(2026, 5, 7, 1, 0, tzinfo=UTC),
+        ).collect(
+            request(),
+            (
+                OfficialSourceLocator(
+                    source_key="fda-oopd-965323",
+                    requirement_id="us_regulatory",
+                    title="SLS orphan designation",
+                    source_url=(
+                        "https://www.accessdata.fda.gov/scripts/opdlisting/"
+                        "oopd/detailedIndex.cfm?cfgridkey=965323"
+                    ),
+                    publication_time="2023-10-10",
+                    effective_date=date(2023, 10, 10),
+                    passages=(
+                        OfficialPassageSpec(
+                            passage_key="designation-date",
+                            locator="Designation Date",
+                            exact_text="Designation Date 10/10/2023",
+                        ),
+                        OfficialPassageSpec(
+                            passage_key="sponsor",
+                            locator="Sponsor",
+                            exact_text="Sponsor SELLAS Life Sciences Group, Inc.",
+                        ),
+                    ),
+                ),
+            ),
+        )
+
+        passages = official_snapshot_pipeline_inputs(
+            snapshot,
+            regulatory_program_names=("SLS009", "tambiciclib"),
+        )
+        proofs = official_snapshot_coverage_proofs(
+            snapshot,
+            regulatory_program_names=("SLS009", "tambiciclib"),
+        )
+
+        self.assertTrue(all(not passage.coverage_keys for passage in passages))
+        self.assertEqual(proofs[0].state, "incomplete")
+        self.assertEqual(
+            proofs[0].reason_codes,
+            ("regulatory_programme_linkage_unresolved",),
+        )
+
+    def test_regulatory_proof_references_only_linked_source_passages(self) -> None:
+        body = (
+            b'<p>"name":"REC-4881"</p>'
+            b'<p>"codeSystem":"FDA ORPHAN DRUG","code":"817621"</p>'
+            b"<p>Treatment of familial adenomatous polyposis</p>"
+        )
+        snapshot = FDARegulatoryEvidenceAdapter(
+            allowed_hosts=("precision.fda.gov",),
+            transport=FixtureTransport(body),
+            clock=lambda: datetime(2026, 5, 7, 1, 0, tzinfo=UTC),
+        ).collect(
+            request(),
+            (
+                OfficialSourceLocator(
+                    source_key="fda-rec-4881-bridge",
+                    requirement_id="us_regulatory",
+                    title="REC-4881 FDA bridge",
+                    source_url="https://precision.fda.gov/rec-4881",
+                    publication_time="2026-05-05T20:00:00Z",
+                    effective_date=date(2026, 5, 5),
+                    passages=(
+                        OfficialPassageSpec(
+                            passage_key="programme-name",
+                            locator="$.names",
+                            exact_text='"name":"REC-4881"',
+                        ),
+                        OfficialPassageSpec(
+                            passage_key="orphan-designation",
+                            locator="$.codes",
+                            exact_text=(
+                                '"codeSystem":"FDA ORPHAN DRUG","code":"817621"'
+                            ),
+                        ),
+                    ),
+                ),
+                OfficialSourceLocator(
+                    source_key="fda-oopd-817621",
+                    requirement_id="us_regulatory",
+                    title="FDA orphan designation record",
+                    source_url="https://precision.fda.gov/oopd-817621",
+                    publication_time="2021-09-28",
+                    effective_date=date(2021, 9, 28),
+                    passages=(
+                        OfficialPassageSpec(
+                            passage_key="orphan-indication",
+                            locator="Indication",
+                            exact_text=("Treatment of familial adenomatous polyposis"),
+                        ),
+                    ),
+                ),
+            ),
+        )
+
+        passages = official_snapshot_pipeline_inputs(
+            snapshot,
+            regulatory_program_names=("REC-4881",),
+        )
+        proof = official_snapshot_coverage_proofs(
+            snapshot,
+            regulatory_program_names=("REC-4881",),
+        )[0]
+
+        linked_references = tuple(
+            passage.reference_key
+            for passage in passages
+            if "us_regulatory" in passage.coverage_keys
+        )
+        self.assertEqual(proof.state, "complete")
+        self.assertEqual(proof.evidence_reference_keys, linked_references)
+        self.assertNotIn(
+            "regulatory:fda-oopd-817621:orphan-indication",
+            proof.evidence_reference_keys,
         )
 
     def test_sec_exact_passage_maps_to_sec_primary_evidence(self) -> None:

@@ -29,7 +29,7 @@ FIELD_PHRASES = {
     "convertibles": "convertible notes",
     "rsus": "restricted stock units",
     "preferreds": "preferred shares",
-    "atm_shelf_capacity": "at-the-market program capacity",
+    "atm_shelf_capacity": "at-the-market program capacity of $100 million",
     "share_growth": "share count growth",
 }
 
@@ -145,6 +145,104 @@ class FinancingSemanticMatrixTests(unittest.TestCase):
             {item.field_id for item in evidence},
         )
 
+    def test_sales_agreement_prospectus_supplement_resolves_atm_capacity(
+        self,
+    ) -> None:
+        passage = financing_passage(
+            "financing:atm_shelf_capacity",
+            passage_text=(
+                "a sales agreement prospectus supplement covering the offering, "
+                "issuance and sale by the registrant of up to a maximum aggregate "
+                "offering price of $150,000,000 of the registrant's common stock "
+                "that may be issued and sold from time to time under a sales "
+                "agreement with TD Securities (USA) LLC, or TD Cowen."
+            ),
+        )
+
+        evidence = derive_financing_field_evidence(
+            passages=(passage,),
+            metrics=(),
+        )
+
+        self.assertEqual(
+            evidence,
+            (
+                FinancingFieldEvidence(
+                    field_id="atm_shelf_capacity",
+                    outcome="complete",
+                    evidence_reference_keys=(passage.reference_key,),
+                ),
+            ),
+        )
+
+    def test_sales_agreement_prospectus_title_alone_cannot_resolve_atm_capacity(
+        self,
+    ) -> None:
+        passage = financing_passage(
+            "financing:atm_shelf_capacity",
+            passage_text=(
+                "The registrant filed a sales agreement prospectus supplement "
+                "for its common stock offering."
+            ),
+        )
+
+        evidence = derive_financing_field_evidence(
+            passages=(passage,),
+            metrics=(),
+        )
+
+        self.assertNotIn(
+            "atm_shelf_capacity",
+            {item.field_id for item in evidence},
+        )
+
+        passages = tuple(
+            (
+                passage
+                if field_id == "atm_shelf_capacity"
+                else financing_passage(f"financing:{field_id}")
+            )
+            for field_id in FINANCING_FIELD_IDS
+        )
+        with self.assertRaisesRegex(
+            FinancingSemanticError,
+            "atm_shelf_capacity complete outcome conflicts with evidence",
+        ):
+            build_financing_semantic_matrix(
+                field_evidence=tuple(
+                    FinancingFieldEvidence(
+                        field_id=field_id,
+                        outcome="complete",
+                        evidence_reference_keys=(f"financing:{field_id}",),
+                    )
+                    for field_id in FINANCING_FIELD_IDS
+                ),
+                passages=passages,
+                metrics=(),
+            )
+
+    def test_hypothetical_shelf_enumeration_cannot_resolve_atm_capacity(
+        self,
+    ) -> None:
+        passage = financing_passage(
+            "financing:atm_shelf_capacity",
+            passage_text=(
+                "This sales agreement prospectus supplement describes securities "
+                "we may offer in future offerings, including common stock, "
+                "preferred stock, debt securities, and warrants."
+            ),
+        )
+
+        evidence = derive_financing_field_evidence(
+            passages=(passage,),
+            metrics=(),
+        )
+
+        self.assertNotIn(
+            "atm_shelf_capacity",
+            {item.field_id for item in evidence},
+        )
+
     def test_preferred_absence_accepts_no_shares_outstanding_phrase(
         self,
     ) -> None:
@@ -193,8 +291,7 @@ class FinancingSemanticMatrixTests(unittest.TestCase):
         self,
     ) -> None:
         prior = financing_passage(
-            "sec-companyfacts:basic_shares_outstanding:2025-12-31:"
-            "0000000000-26-000001",
+            "sec-companyfacts:basic_shares_outstanding:2025-12-31:0000000000-26-000001",
             passage_text='{"concept":"EntityCommonStockSharesOutstanding"}',
         )
         current = replace(

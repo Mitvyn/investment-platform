@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime, time
 from decimal import Decimal, InvalidOperation
 from typing import TYPE_CHECKING, Callable, Mapping
@@ -20,8 +20,16 @@ if TYPE_CHECKING:
     from .share_growth import BasicShareObservation
 
 
-_POLICY_VERSION = "sec-companyfacts-core-metrics-v1"
+_POLICY_VERSION = "sec-companyfacts-core-metrics-v2"
 _COMPOSITE_FINANCING_POLICY_VERSION = "biotech-financing-share-capital-v1"
+_REQUIRED_METRIC_KEYS = frozenset(
+    {
+        "basic_shares_outstanding",
+        "cash_and_cash_equivalents",
+        "debt_current",
+        "operating_cash_used",
+    }
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -59,6 +67,21 @@ _CONCEPTS = (
         ),
     ),
     (
+        "restricted_cash",
+        (
+            _ConceptSpec(
+                "us-gaap",
+                "RestrictedCashAndCashEquivalents",
+                "USD",
+            ),
+            _ConceptSpec(
+                "us-gaap",
+                "RestrictedCashCurrent",
+                "USD",
+            ),
+        ),
+    ),
+    (
         "debt_current",
         (
             _ConceptSpec(
@@ -69,6 +92,16 @@ _CONCEPTS = (
             _ConceptSpec(
                 "us-gaap",
                 "LongTermDebtCurrent",
+                "USD",
+            ),
+        ),
+    ),
+    (
+        "debt_total",
+        (
+            _ConceptSpec(
+                "us-gaap",
+                "DebtLongtermAndShorttermCombinedAmount",
                 "USD",
             ),
         ),
@@ -270,6 +303,7 @@ class SecCompanyFactsCollector:
             for metric_key, _concept_specs in _CONCEPTS
             if metric_key not in available_keys
         )
+        missing_required = _REQUIRED_METRIC_KEYS.difference(available_keys)
         retrieved_at = self.clock()
         if retrieved_at.tzinfo is None or retrieved_at.utcoffset() is None:
             raise RuntimeError("SEC Company Facts clock must include timezone")
@@ -280,14 +314,14 @@ class SecCompanyFactsCollector:
             issuer_name=request.issuer_name,
             as_of_cutoff=request.as_of_cutoff,
             policy_version=_POLICY_VERSION,
-            coverage_state="complete" if not missing else "incomplete",
+            coverage_state=("complete" if not missing_required else "incomplete"),
             reason_codes=(
-                ("sec_companyfacts_core_metrics_complete",)
-                if not missing
-                else (
-                    *(f"sec_companyfacts_missing_{key}" for key in missing),
-                    "sec_companyfacts_core_metrics_incomplete",
-                )
+                *(f"sec_companyfacts_missing_{key}" for key in missing),
+                (
+                    "sec_companyfacts_core_metrics_complete"
+                    if not missing_required
+                    else "sec_companyfacts_core_metrics_incomplete"
+                ),
             ),
             source_url=source_url,
             retrieved_at=retrieved_at.astimezone(UTC),
@@ -515,6 +549,30 @@ def companyfacts_pipeline_inputs(
         )
         for fact in snapshot.facts
     )
+    facts_by_key = {fact.metric_key: fact for fact in snapshot.facts}
+    cash_fact = facts_by_key.get("cash_and_cash_equivalents")
+    restricted_cash_fact = facts_by_key.get("restricted_cash")
+    if (
+        cash_fact is not None
+        and restricted_cash_fact is not None
+        and cash_fact.period_end == restricted_cash_fact.period_end
+    ):
+        total_cash = Decimal(cash_fact.value) + Decimal(restricted_cash_fact.value)
+        metrics = tuple(
+            replace(
+                metric,
+                value=format(total_cash, "f"),
+                calculation_method="derived",
+                formula=("unrestricted_cash_and_cash_equivalents+restricted_cash"),
+                supporting_passage_keys=(
+                    "sec-companyfacts:cash_and_cash_equivalents",
+                    "sec-companyfacts:restricted_cash",
+                ),
+            )
+            if metric.metric_key == "cash_and_cash_equivalents"
+            else metric
+            for metric in metrics
+        )
     return passages, metrics
 
 

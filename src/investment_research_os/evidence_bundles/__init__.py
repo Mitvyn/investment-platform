@@ -53,36 +53,39 @@ class EvidencePolicyRegistry(Protocol):
 
 class FixedEvidencePolicyRegistry:
     def __init__(self, policy: EvidencePolicyDefinition | None = None) -> None:
-        self._policy = policy or EvidencePolicyDefinition(
-            version="biotech-primary-evidence-v1",
-            freshness_policy_version="biotech-evidence-freshness-v1",
-            source_class_order=(
-                "sec",
-                "issuer",
-                "clinical",
-                "regulatory",
-                "financing",
-            ),
-            blocking_source_classes=(
-                "sec",
-                "issuer",
-                "clinical",
-                "regulatory",
-                "financing",
-            ),
+        source_classes = (
+            "sec",
+            "issuer",
+            "clinical",
+            "regulatory",
+            "financing",
         )
+        policies = (
+            (policy,)
+            if policy is not None
+            else tuple(
+                EvidencePolicyDefinition(
+                    version=version,
+                    freshness_policy_version="biotech-evidence-freshness-v1",
+                    source_class_order=source_classes,
+                    blocking_source_classes=source_classes,
+                )
+                for version in (
+                    "biotech-primary-evidence-v1",
+                    "biotech-primary-evidence-v2",
+                )
+            )
+        )
+        self._policies = {
+            (item.version, item.freshness_policy_version): item for item in policies
+        }
 
     def resolve(
         self,
         evidence_policy_version: str,
         freshness_policy_version: str,
     ) -> EvidencePolicyDefinition | None:
-        if (
-            evidence_policy_version == self._policy.version
-            and freshness_policy_version == self._policy.freshness_policy_version
-        ):
-            return self._policy
-        return None
+        return self._policies.get((evidence_policy_version, freshness_policy_version))
 
 
 @dataclass(frozen=True, slots=True)
@@ -357,14 +360,10 @@ def _gaps_wire(gaps: tuple[EvidenceGap, ...]) -> list[dict[str, object]]:
         {
             "gap_id": gap.code,
             "requirement_id": (
-                gap.requirement_id
-                or f"{gap.source_class}_primary_evidence"
+                gap.requirement_id or f"{gap.source_class}_primary_evidence"
             ),
             "source_class": gap.source_class,
-            "reason_code": (
-                gap.reason_code
-                or "missing_blocking_primary_evidence"
-            ),
+            "reason_code": (gap.reason_code or "missing_blocking_primary_evidence"),
             "explanation": gap.explanation,
         }
         for gap in gaps
@@ -429,10 +428,7 @@ def _valid_at_cutoff(item: EvidenceItem, cutoff: datetime) -> bool:
     return (
         (item.publication_at is None or item.publication_at <= cutoff)
         and (item.effective_at is None or item.effective_at <= cutoff)
-        and (
-            item.filing_period_end is None
-            or item.filing_period_end <= cutoff.date()
-        )
+        and (item.filing_period_end is None or item.filing_period_end <= cutoff.date())
     )
 
 
@@ -448,9 +444,7 @@ def validate_evidence_source_url(value: str) -> None:
     if urlparse(value).scheme != "https":
         raise EvidenceBundleError("source URL must use HTTPS")
     if is_discovery_only_source_url(value):
-        raise EvidenceBundleError(
-            "discovery-only source cannot enter evidence bundle"
-        )
+        raise EvidenceBundleError("discovery-only source cannot enter evidence bundle")
 
 
 def _blocking_gaps(
@@ -526,22 +520,11 @@ def _prepare_candidate(
             )
         if item.item_kind == "passage":
             passage_text = item.passage_text
-            if (
-                item.passage_id is None
-                or item.passage_hash is None
-                or not passage_text
-            ):
-                raise EvidenceBundleError(
-                    "evidence passage content is required"
-                )
+            if item.passage_id is None or item.passage_hash is None or not passage_text:
+                raise EvidenceBundleError("evidence passage content is required")
             _require_uuid(item.passage_id, "evidence passage identity")
-            if (
-                hashlib.sha256(passage_text.encode()).hexdigest()
-                != item.passage_hash
-            ):
-                raise EvidenceBundleError(
-                    "evidence passage content hash mismatch"
-                )
+            if hashlib.sha256(passage_text.encode()).hexdigest() != item.passage_hash:
+                raise EvidenceBundleError("evidence passage content hash mismatch")
         validate_evidence_source_url(item.canonical_url)
     manifest = tuple(
         sorted(
@@ -560,13 +543,10 @@ def _prepare_candidate(
     )
     item_ids = [item.evidence_id for item in manifest]
     version_ids = [item.evidence_version_id for item in manifest]
-    if len(set(item_ids)) != len(item_ids) or len(set(version_ids)) != len(
-        version_ids
-    ):
+    if len(set(item_ids)) != len(item_ids) or len(set(version_ids)) != len(version_ids):
         raise EvidenceBundleError("duplicate evidence manifest identity")
     if any(
-        item.freshness not in {"current", "stale", "indeterminate"}
-        for item in manifest
+        item.freshness not in {"current", "stale", "indeterminate"} for item in manifest
     ):
         raise EvidenceBundleError("invalid evidence freshness state")
     for gap in candidate.declared_gaps:
@@ -603,9 +583,7 @@ def _prepare_candidate(
     metrics = tuple(sorted(candidate.metrics, key=lambda item: item.snapshot_id))
     catalysts = tuple(sorted(candidate.catalysts, key=lambda item: item.snapshot_id))
     risks = tuple(sorted(candidate.risks, key=lambda item: item.snapshot_id))
-    snapshot_ids = [
-        snapshot.snapshot_id for snapshot in (*metrics, *catalysts, *risks)
-    ]
+    snapshot_ids = [snapshot.snapshot_id for snapshot in (*metrics, *catalysts, *risks)]
     if len(set(snapshot_ids)) != len(snapshot_ids):
         raise EvidenceBundleError("duplicate evidence snapshot identity")
     for metric in metrics:
@@ -630,9 +608,7 @@ def _prepare_candidate(
             metric.period_end is not None
             and metric.period_end > run.as_of_cutoff.date()
         ):
-            raise EvidenceBundleError(
-                "verified metric period is after cutoff"
-            )
+            raise EvidenceBundleError("verified metric period is after cutoff")
     for catalyst in catalysts:
         _require_uuid(catalyst.snapshot_id, "catalyst identity")
         _require_non_empty(catalyst.program, "catalyst program")

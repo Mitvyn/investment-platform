@@ -61,6 +61,17 @@ _COMMON_EQUITY_LISTING_PATTERN = re.compile(
     r"\s+(?:is|are)\s+listed on\b",
     re.IGNORECASE,
 )
+_ITEM_12B_SECTION_PATTERN = re.compile(
+    r"\bsecurities registered pursuant to section 12\s*\(\s*b\s*\)"
+    r"(?P<section>.*?)"
+    r"(?=\bsecurities registered pursuant to section 12\s*\(\s*g\s*\)|\Z)",
+    re.IGNORECASE | re.DOTALL,
+)
+_ITEM_12B_TABLE_HEADER_PATTERN = re.compile(
+    r"\btitle of each class\b.*?\btrading symbol(?:\(s\)|s)?\b.*?"
+    r"\bname of each exchange on which registered\b",
+    re.IGNORECASE | re.DOTALL,
+)
 
 
 class EligibilitySourceError(ValueError):
@@ -146,6 +157,33 @@ def _normalized_issuer_name(value: str) -> str:
     normalized = unicodedata.normalize("NFKC", value).casefold()
     normalized = normalized.replace("&", " and ")
     return " ".join(re.sub(r"[^\w]+", " ", normalized).split())
+
+
+def _item_12b_has_common_equity_listing_row(
+    passage_text: str,
+    *,
+    symbol: str,
+    exchange: str,
+) -> bool:
+    section_match = _ITEM_12B_SECTION_PATTERN.search(passage_text)
+    if section_match is None:
+        return False
+    section = section_match.group("section")
+    header_match = _ITEM_12B_TABLE_HEADER_PATTERN.search(section)
+    if header_match is None:
+        return False
+    rows = section[header_match.end() :]
+    row_pattern = re.compile(
+        r"\b(?:class\s+[a-z0-9-]+\s+)?common stock\b"
+        rf"(?:(?!\b(?:not listed|not registered|nasdaq|nyse|"
+        rf"new york stock exchange)\b|"
+        rf"\b(?:class\s+[a-z0-9-]+\s+)?(?:common|preferred)\s+"
+        rf"(?:stock|shares?)\b).){{0,180}}?"
+        rf"\b{re.escape(symbol)}\b"
+        rf".{{0,100}}?\b{re.escape(exchange)}\b",
+        re.IGNORECASE | re.DOTALL,
+    )
+    return row_pattern.search(rows) is not None
 
 
 def derive_biotech_eligibility_profile(
@@ -256,11 +294,19 @@ def derive_biotech_eligibility_profile(
         registered_security.cik == submissions.cik == request.cik
         and submissions.identity_evidence.state == "verified"
     )
+    registered_symbol = registered_security.ticker
     common_equity_references = tuple(
         passage.reference_key
         for passage in passages
         if passage.source_class == "sec"
-        and _COMMON_EQUITY_LISTING_PATTERN.search(passage.passage_text) is not None
+        and (
+            _COMMON_EQUITY_LISTING_PATTERN.search(passage.passage_text) is not None
+            or _item_12b_has_common_equity_listing_row(
+                passage.passage_text,
+                symbol=registered_symbol,
+                exchange=registered_security.primary_listing_exchange,
+            )
+        )
     )
     common_equity = bool(common_equity_references)
 
@@ -284,7 +330,7 @@ def derive_biotech_eligibility_profile(
         )
     )
     companyfacts_valid = (
-        companyfacts.policy_version == "sec-companyfacts-core-metrics-v1"
+        companyfacts.policy_version == "sec-companyfacts-core-metrics-v2"
         and companyfacts.coverage_state == "complete"
         and _REQUIRED_COMPANYFACT_KEYS
         <= frozenset(fact.metric_key for fact in companyfacts.facts)

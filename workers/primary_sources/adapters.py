@@ -36,6 +36,7 @@ from .pipeline import (
     PrimarySourceCoverageProof,
     PrimarySourcePipelineError,
 )
+from .regulatory_linkage import has_programme_designation_link
 
 
 _OFFICIAL_COVERAGE = {
@@ -44,7 +45,7 @@ _OFFICIAL_COVERAGE = {
 }
 _OFFICIAL_POLICY_VERSION = {
     "issuer": "official-issuer-source-v1",
-    "regulatory": "fda-regulatory-source-v1",
+    "regulatory": "fda-regulatory-source-v2",
 }
 _OFFICIAL_ORIGIN_POLICY_VERSION = {
     "issuer": "official-issuer-origin-v1",
@@ -52,6 +53,35 @@ _OFFICIAL_ORIGIN_POLICY_VERSION = {
 }
 _SEC_EXHIBIT_POLICY_VERSION = "sec-html-exhibits-v1"
 _FINANCING_POLICY_VERSION = "biotech-financing-share-capital-v1"
+
+
+def _regulatory_linked_source_keys(
+    snapshot: OfficialSourceSnapshot,
+    program_names: tuple[str, ...],
+) -> frozenset[str]:
+    if snapshot.source_class != "regulatory":
+        if program_names:
+            raise PrimarySourcePipelineError(
+                "regulatory programme names require regulatory source"
+            )
+        return frozenset()
+    normalized_names = tuple(
+        dict.fromkeys(name.strip().casefold() for name in program_names if name.strip())
+    )
+    if not normalized_names:
+        raise PrimarySourcePipelineError(
+            "regulatory programme linkage requires programme names"
+        )
+    linked = set()
+    for result in snapshot.source_results:
+        if result.state != "available":
+            continue
+        if has_programme_designation_link(
+            text_groups=(tuple(passage.passage_text for passage in result.passages),),
+            program_names=normalized_names,
+        ):
+            linked.add(result.source_key)
+    return frozenset(linked)
 
 
 def _date_availability(
@@ -73,6 +103,8 @@ def _date_availability(
 
 def official_snapshot_pipeline_inputs(
     snapshot: OfficialSourceSnapshot,
+    *,
+    regulatory_program_names: tuple[str, ...] = (),
 ) -> tuple[PrimaryEvidencePassage, ...]:
     permitted_coverage = _OFFICIAL_COVERAGE.get(snapshot.source_class)
     if permitted_coverage is None:
@@ -82,6 +114,10 @@ def official_snapshot_pipeline_inputs(
         for result in snapshot.coverage_results
         if result.state == "complete"
     }
+    linked_regulatory_sources = _regulatory_linked_source_keys(
+        snapshot,
+        regulatory_program_names,
+    )
     passages: list[PrimaryEvidencePassage] = []
     for result in snapshot.source_results:
         if result.state != "available":
@@ -98,6 +134,10 @@ def official_snapshot_pipeline_inputs(
             if (
                 result.requirement_id in completed_requirements
                 and result.requirement_id in permitted_coverage
+                and (
+                    snapshot.source_class != "regulatory"
+                    or result.source_key in linked_regulatory_sources
+                )
             )
             else frozenset()
         )
@@ -148,6 +188,8 @@ def official_snapshot_pipeline_inputs(
 
 def official_snapshot_coverage_proofs(
     snapshot: OfficialSourceSnapshot,
+    *,
+    regulatory_program_names: tuple[str, ...] = (),
 ):
     from .pipeline import PrimarySourceCoverageProof
 
@@ -162,6 +204,10 @@ def official_snapshot_coverage_proofs(
         )
         for requirement_id in permitted_coverage
     }
+    linked_regulatory_sources = _regulatory_linked_source_keys(
+        snapshot,
+        regulatory_program_names,
+    )
     proofs: list[PrimarySourceCoverageProof] = []
     for coverage in snapshot.coverage_results:
         if coverage.requirement_id not in permitted_coverage:
@@ -173,18 +219,36 @@ def official_snapshot_coverage_proofs(
                 (f"{snapshot.source_class}:{result.source_key}:{passage.passage_key}")
                 for result in results_by_requirement[coverage.requirement_id]
                 if result.state == "available"
+                and (
+                    snapshot.source_class != "regulatory"
+                    or result.source_key in linked_regulatory_sources
+                )
                 for passage in result.passages
             )
+        )
+        linkage_complete = snapshot.source_class != "regulatory" or bool(
+            linked_regulatory_sources
         )
         proofs.append(
             PrimarySourceCoverageProof(
                 requirement_id=coverage.requirement_id,
                 source_class=snapshot.source_class,
                 policy_version=_OFFICIAL_POLICY_VERSION[snapshot.source_class],
-                state=("complete" if coverage.state == "complete" else "incomplete"),
+                state=(
+                    "complete"
+                    if coverage.state == "complete" and linkage_complete
+                    else "incomplete"
+                ),
                 reason_codes=(
-                    coverage.reason_codes
-                    or (f"{snapshot.source_class}_{coverage.requirement_id}_complete",)
+                    ("regulatory_programme_linkage_unresolved",)
+                    if coverage.state == "complete" and not linkage_complete
+                    else (
+                        coverage.reason_codes
+                        or (
+                            f"{snapshot.source_class}_"
+                            f"{coverage.requirement_id}_complete",
+                        )
+                    )
                 ),
                 evidence_reference_keys=references,
             )

@@ -44,6 +44,7 @@ class PrimarySourceCaptureStorageTests(unittest.TestCase):
                         research_run(),
                         security_id=("11111111-1111-4111-8111-111111111111"),
                     ),
+                    evidence_policy_version="biotech-primary-evidence-v2",
                     bound_at=datetime(2026, 5, 7, 4, tzinfo=UTC),
                 )
 
@@ -64,6 +65,7 @@ class PrimarySourceCaptureStorageTests(unittest.TestCase):
             binding = repository.bind_to_run(
                 persisted,
                 run,
+                evidence_policy_version="biotech-primary-evidence-v2",
                 bound_at=datetime(2026, 5, 7, 4, tzinfo=UTC),
             )
             restarted = FilePrimarySourceCaptureRepository(Path(directory))
@@ -76,6 +78,10 @@ class PrimarySourceCaptureStorageTests(unittest.TestCase):
         self.assertEqual(restored, binding)
         self.assertEqual(binding.capture_id, capture.capture_id)
         self.assertEqual(binding.plan_content_hash, capture.plan.content_hash)
+        self.assertEqual(
+            binding.evidence_policy_version,
+            "biotech-primary-evidence-v2",
+        )
 
     def test_corrupt_archive_is_rejected_after_restart(self) -> None:
         value, payloads, source_plan = capture_value()

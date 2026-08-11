@@ -154,15 +154,28 @@ class ReplayEvidenceCandidateAssembler:
         issuer_proofs = official_snapshot_coverage_proofs(replay.issuer)
         clinical_passages = clinical_trials_pipeline_inputs(replay.clinical_trials)
         clinical_proof = clinical_trials_coverage_proof(replay.clinical_trials)
-        regulatory_passages = official_snapshot_pipeline_inputs(replay.regulatory)
-        regulatory_proofs = official_snapshot_coverage_proofs(replay.regulatory)
+        regulatory_program_names = tuple(
+            dict.fromkeys(
+                (
+                    replay.capture.plan.clinical_trial_search.program_name,
+                    *replay.capture.plan.clinical_trial_search.search_terms,
+                )
+            )
+        )
+        regulatory_passages = official_snapshot_pipeline_inputs(
+            replay.regulatory,
+            regulatory_program_names=regulatory_program_names,
+        )
+        regulatory_proofs = official_snapshot_coverage_proofs(
+            replay.regulatory,
+            regulatory_program_names=regulatory_program_names,
+        )
         companyfacts_passages, companyfacts_metrics = companyfacts_pipeline_inputs(
             replay.companyfacts
         )
         share_growth_passages = (
             companyfacts_basic_share_growth_passages(replay.companyfacts)
-            if replay.capture.plan.loaded.contract_version
-            == PRIMARY_SOURCE_PLAN_V3
+            if replay.capture.plan.loaded.contract_version == PRIMARY_SOURCE_PLAN_V3
             else ()
         )
         share_growth_metrics: tuple[NormalizedMetricFact, ...] = ()
@@ -343,8 +356,7 @@ class ReplayEvidenceCandidateAssembler:
             core_metrics=companyfacts_metrics,
             calculation_passages=(
                 share_growth_passages
-                if replay.capture.plan.loaded.contract_version
-                == PRIMARY_SOURCE_PLAN_V3
+                if replay.capture.plan.loaded.contract_version == PRIMARY_SOURCE_PLAN_V3
                 else None
             ),
             filing_passages=(
@@ -401,29 +413,30 @@ class ReplayEvidenceCandidateAssembler:
         pipeline_result = PrimarySourcePipeline().assemble(
             request=request,
             profile=derive_biotech_eligibility_profile(
-                    request=request,
-                    registered_security=replay.registered_security,
-                    submissions=replay.submissions,
-                    issuer=replay.issuer,
-                    clinical_trials=replay.clinical_trials,
-                    companyfacts=replay.companyfacts,
-                    passages=all_passages,
+                request=request,
+                registered_security=replay.registered_security,
+                submissions=replay.submissions,
+                issuer=replay.issuer,
+                clinical_trials=replay.clinical_trials,
+                companyfacts=replay.companyfacts,
+                passages=all_passages,
             ),
             passages=all_passages,
             coverage_proofs=(
-                    *sec_proofs,
-                    *issuer_proofs,
-                    clinical_proof,
-                    *regulatory_proofs,
-                    financing_proof,
+                *sec_proofs,
+                *issuer_proofs,
+                clinical_proof,
+                *regulatory_proofs,
+                financing_proof,
             ),
             metrics=(
-                    *companyfacts_metrics,
-                    *filing_metrics,
-                    *share_growth_metrics,
+                *companyfacts_metrics,
+                *filing_metrics,
+                *share_growth_metrics,
             ),
             catalysts=tuple(catalysts),
             risks=risks,
+            regulatory_program_names=regulatory_program_names,
         )
         candidate = pipeline_result.bundle_candidate
         if share_growth_reason_codes:
@@ -581,6 +594,7 @@ class PersistedPrimarySourceEvidenceSource:
         if (
             candidate.security_id != self._run.security_id
             or candidate.as_of_cutoff != self._run.as_of_cutoff
+            or candidate.evidence_policy_version != binding.evidence_policy_version
         ):
             raise PersistedPrimarySourceEvidenceError(
                 "assembled evidence does not match Research Run"

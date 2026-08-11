@@ -62,9 +62,50 @@ def request() -> PrimarySourceRequest:
     )
 
 
+def _fixture_payload() -> dict[str, object]:
+    payload = json.loads(FIXTURE.read_text())
+    payload["facts"]["us-gaap"]["RestrictedCashAndCashEquivalents"] = {
+        "label": "Restricted Cash and Cash Equivalents",
+        "units": {
+            "USD": [
+                {
+                    "end": "2026-03-31",
+                    "val": 4300000,
+                    "accn": "0001601830-26-000040",
+                    "fy": 2026,
+                    "fp": "Q1",
+                    "form": "10-Q",
+                    "filed": "2026-05-05",
+                }
+            ]
+        },
+    }
+    payload["facts"]["us-gaap"]["DebtLongtermAndShorttermCombinedAmount"] = {
+        "label": "Long-term and Short-term Debt",
+        "units": {
+            "USD": [
+                {
+                    "end": "2026-03-31",
+                    "val": 21750000,
+                    "accn": "0001601830-26-000040",
+                    "fy": 2026,
+                    "fp": "Q1",
+                    "form": "10-Q",
+                    "filed": "2026-05-05",
+                }
+            ]
+        },
+    }
+    return payload
+
+
+def _fixture_body() -> bytes:
+    return json.dumps(_fixture_payload(), sort_keys=True).encode()
+
+
 class SecCompanyFactsCollectorTests(unittest.TestCase):
     def test_resolves_live_concept_aliases_and_exact_acceptance_time(self) -> None:
-        payload = json.loads(FIXTURE.read_text())
+        payload = _fixture_payload()
         payload["facts"]["us-gaap"]["CommonStockSharesOutstanding"] = {
             "label": "Common Stock Shares Outstanding",
             "units": {
@@ -135,6 +176,16 @@ class SecCompanyFactsCollectorTests(unittest.TestCase):
                 "filed": "2026-05-06",
             }
         )
+        for concept in (
+            "RestrictedCashAndCashEquivalents",
+            "DebtLongtermAndShorttermCombinedAmount",
+        ):
+            payload["facts"]["us-gaap"][concept]["units"]["USD"][-1].update(
+                {
+                    "accn": "0001601830-26-000078",
+                    "filed": "2026-05-06",
+                }
+            )
         submissions_payload = {
             "cik": "0001601830",
             "name": "Example Therapeutics, Inc.",
@@ -207,10 +258,24 @@ class SecCompanyFactsCollectorTests(unittest.TestCase):
                     datetime(2026, 5, 6, 10, 32, 40, tzinfo=UTC),
                 ),
                 (
+                    "restricted_cash",
+                    "RestrictedCashAndCashEquivalents",
+                    "4300000",
+                    "4300000",
+                    datetime(2026, 5, 6, 10, 32, 40, tzinfo=UTC),
+                ),
+                (
                     "debt_current",
                     "LongTermDebtAndCapitalLeaseObligationsCurrent",
                     "9265000",
                     "9265000",
+                    datetime(2026, 5, 6, 10, 32, 40, tzinfo=UTC),
+                ),
+                (
+                    "debt_total",
+                    "DebtLongtermAndShorttermCombinedAmount",
+                    "21750000",
+                    "21750000",
                     datetime(2026, 5, 6, 10, 32, 40, tzinfo=UTC),
                 ),
                 (
@@ -285,7 +350,7 @@ class SecCompanyFactsCollectorTests(unittest.TestCase):
         )
 
     def test_same_day_date_only_fact_requires_exact_submission_time(self) -> None:
-        payload = json.loads(FIXTURE.read_text())
+        payload = _fixture_payload()
         for taxonomy in payload["facts"].values():
             for concept in taxonomy.values():
                 for observations in concept["units"].values():
@@ -304,7 +369,7 @@ class SecCompanyFactsCollectorTests(unittest.TestCase):
         self.assertEqual(snapshot.facts, ())
 
     def test_collects_latest_cutoff_safe_financing_facts(self) -> None:
-        body = FIXTURE.read_bytes()
+        body = _fixture_body()
         transport = FixtureTransport(body)
         snapshot = SecCompanyFactsCollector(
             SecCompanyFactsSettings(
@@ -337,8 +402,20 @@ class SecCompanyFactsCollectorTests(unittest.TestCase):
                     date(2026, 3, 31),
                 ),
                 (
+                    "restricted_cash",
+                    "4300000",
+                    "USD",
+                    date(2026, 3, 31),
+                ),
+                (
                     "debt_current",
                     "12500000",
+                    "USD",
+                    date(2026, 3, 31),
+                ),
+                (
+                    "debt_total",
+                    "21750000",
                     "USD",
                     date(2026, 3, 31),
                 ),
@@ -372,7 +449,7 @@ class SecCompanyFactsCollectorTests(unittest.TestCase):
         )
 
     def test_converts_structured_facts_to_exact_financing_evidence(self) -> None:
-        body = FIXTURE.read_bytes()
+        body = _fixture_body()
         snapshot = SecCompanyFactsCollector(
             SecCompanyFactsSettings(
                 user_agent="Investment Research OS research@example.com"
@@ -384,7 +461,7 @@ class SecCompanyFactsCollectorTests(unittest.TestCase):
         passages, metrics = companyfacts_pipeline_inputs(snapshot)
         proof = companyfacts_coverage_proof(snapshot)
 
-        self.assertEqual(len(passages), 4)
+        self.assertEqual(len(passages), 6)
         self.assertTrue(all(item.source_class == "financing" for item in passages))
         self.assertEqual(
             frozenset(coverage for item in passages for coverage in item.coverage_keys),
@@ -396,13 +473,33 @@ class SecCompanyFactsCollectorTests(unittest.TestCase):
             [
                 "basic_shares_outstanding",
                 "cash_and_cash_equivalents",
+                "restricted_cash",
                 "debt_current",
+                "debt_total",
                 "operating_cash_used",
             ],
         )
         self.assertEqual(
             metrics[0].supporting_passage_keys,
             ("sec-companyfacts:basic_shares_outstanding",),
+        )
+        cash_metric = next(
+            metric
+            for metric in metrics
+            if metric.metric_key == "cash_and_cash_equivalents"
+        )
+        self.assertEqual(cash_metric.value, "478600000")
+        self.assertEqual(cash_metric.calculation_method, "derived")
+        self.assertEqual(
+            cash_metric.formula,
+            "unrestricted_cash_and_cash_equivalents+restricted_cash",
+        )
+        self.assertEqual(
+            cash_metric.supporting_passage_keys,
+            (
+                "sec-companyfacts:cash_and_cash_equivalents",
+                "sec-companyfacts:restricted_cash",
+            ),
         )
         self.assertEqual(
             proof.evidence_reference_keys,
@@ -419,7 +516,7 @@ class SecCompanyFactsCollectorTests(unittest.TestCase):
         )
 
     def test_missing_required_fact_is_explicitly_incomplete(self) -> None:
-        payload = json.loads(FIXTURE.read_text())
+        payload = _fixture_payload()
         del payload["facts"]["us-gaap"]["LongTermDebtCurrent"]
         snapshot = SecCompanyFactsCollector(
             SecCompanyFactsSettings(
@@ -447,8 +544,8 @@ class SecCompanyFactsCollectorTests(unittest.TestCase):
     def test_future_unselected_observation_does_not_reversion_selected_facts(
         self,
     ) -> None:
-        base_payload = json.loads(FIXTURE.read_text())
-        changed_payload = json.loads(FIXTURE.read_text())
+        base_payload = _fixture_payload()
+        changed_payload = _fixture_payload()
         changed_payload["facts"]["us-gaap"]["CashAndCashEquivalentsAtCarryingValue"][
             "units"
         ]["USD"].append(
@@ -481,7 +578,7 @@ class SecCompanyFactsCollectorTests(unittest.TestCase):
         )
 
     def test_rejects_redirected_or_mismatched_company_facts(self) -> None:
-        body = FIXTURE.read_bytes()
+        body = _fixture_body()
         with self.assertRaisesRegex(
             SecCompanyFactsCollectorError,
             "response redirected",

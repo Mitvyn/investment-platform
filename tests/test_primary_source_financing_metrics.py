@@ -36,6 +36,541 @@ def passage(reference_key: str, text: str) -> PrimaryEvidencePassage:
 
 
 class FilingFinancingMetricTests(unittest.TestCase):
+    def test_normalizes_warrants_from_scaled_reserved_shares_table(self) -> None:
+        metrics = normalize_filing_financing_metrics(
+            (
+                passage(
+                    "financing:options",
+                    (
+                        "Stock options Shares Weighted-Average Exercise Price. "
+                        "Outstanding as of December 31, 2025 "
+                        "17,315,721 $ 6.53."
+                    ),
+                ),
+                passage(
+                    "financing:rsus",
+                    (
+                        "Restricted stock units Stock units Weighted-average "
+                        "grant date fair value. Outstanding as of March 31, "
+                        "2026 28,565,398 $ 5.99."
+                    ),
+                ),
+                passage(
+                    "financing:atm",
+                    (
+                        "At-The-Market Offerings. As of March 31, 2026, "
+                        "an amount of $300 million remained available for "
+                        "future sales."
+                    ),
+                ),
+                passage(
+                    "financing:warrants",
+                    (
+                        "Shares of common stock reserved for future issuance "
+                        "are as follows (in thousands): December 31, 2025 "
+                        "Warrants outstanding 58,482."
+                    ),
+                ),
+            )
+        )
+
+        warrant = next(
+            metric
+            for metric in metrics
+            if metric.metric_key == "warrant_shares_outstanding"
+        )
+        self.assertEqual(warrant.value, "58482000")
+        self.assertEqual(warrant.period_end.isoformat(), "2025-12-31")
+        self.assertEqual(warrant.calculation_method, "derived")
+        self.assertEqual(warrant.formula, "reported_amount*1000")
+
+    def test_preserves_literal_warrant_value_without_scale_marker(self) -> None:
+        metrics = normalize_filing_financing_metrics(
+            (
+                passage(
+                    "financing:options",
+                    (
+                        "Stock options Shares Weighted-Average Exercise Price. "
+                        "Outstanding as of December 31, 2025 "
+                        "17,315,721 $ 6.53."
+                    ),
+                ),
+                passage(
+                    "financing:rsus",
+                    (
+                        "Restricted stock units Stock units Weighted-average "
+                        "grant date fair value. Outstanding as of March 31, "
+                        "2026 28,565,398 $ 5.99."
+                    ),
+                ),
+                passage(
+                    "financing:atm",
+                    (
+                        "At-The-Market Offerings. As of March 31, 2026, "
+                        "an amount of $300 million remained available for "
+                        "future sales."
+                    ),
+                ),
+                passage(
+                    "financing:warrants",
+                    ("December 31, 2025 Warrants outstanding 58,482 shares."),
+                ),
+            )
+        )
+
+        warrant = next(
+            metric
+            for metric in metrics
+            if metric.metric_key == "warrant_shares_outstanding"
+        )
+        self.assertEqual(warrant.value, "58482")
+        self.assertEqual(warrant.calculation_method, "reported")
+        self.assertIsNone(warrant.formula)
+
+    def test_does_not_apply_completed_unrelated_table_scale_to_warrants(self) -> None:
+        metrics = normalize_filing_financing_metrics(
+            (
+                passage(
+                    "financing:options",
+                    (
+                        "Stock options Shares Weighted-Average Exercise Price. "
+                        "Outstanding as of December 31, 2025 "
+                        "17,315,721 $ 6.53."
+                    ),
+                ),
+                passage(
+                    "financing:rsus",
+                    (
+                        "Restricted stock units Stock units Weighted-average "
+                        "grant date fair value. Outstanding as of March 31, "
+                        "2026 28,565,398 $ 5.99."
+                    ),
+                ),
+                passage(
+                    "financing:atm",
+                    (
+                        "At-The-Market Offerings. As of March 31, 2026, "
+                        "an amount of $300 million remained available for "
+                        "future sales."
+                    ),
+                ),
+                passage(
+                    "financing:warrants",
+                    (
+                        "Operating expenses (in thousands): 2025 15,000. "
+                        "Warrants table: December 31, 2025 Warrants "
+                        "outstanding 58,482 shares."
+                    ),
+                ),
+            )
+        )
+
+        warrant = next(
+            metric
+            for metric in metrics
+            if metric.metric_key == "warrant_shares_outstanding"
+        )
+        self.assertEqual(warrant.value, "58482")
+        self.assertEqual(warrant.calculation_method, "reported")
+        self.assertIsNone(warrant.formula)
+
+    def test_named_warrant_table_resets_flattened_prior_table_scale(self) -> None:
+        metrics = normalize_filing_financing_metrics(
+            (
+                passage(
+                    "financing:options",
+                    (
+                        "Stock options Shares Weighted-Average Exercise Price. "
+                        "Outstanding as of December 31, 2025 "
+                        "17,315,721 $ 6.53."
+                    ),
+                ),
+                passage(
+                    "financing:rsus",
+                    (
+                        "Restricted stock units Stock units Weighted-average "
+                        "grant date fair value. Outstanding as of March 31, "
+                        "2026 28,565,398 $ 5.99."
+                    ),
+                ),
+                passage(
+                    "financing:atm",
+                    (
+                        "At-The-Market Offerings. As of March 31, 2026, "
+                        "an amount of $300 million remained available for "
+                        "future sales."
+                    ),
+                ),
+                passage(
+                    "financing:warrants",
+                    (
+                        "Operating expenses (in thousands) 2025 15,000 "
+                        "Warrants table: December 31, 2025 Warrants "
+                        "outstanding 58,482 shares."
+                    ),
+                ),
+            )
+        )
+
+        warrant = next(
+            metric
+            for metric in metrics
+            if metric.metric_key == "warrant_shares_outstanding"
+        )
+        self.assertEqual(warrant.value, "58482")
+        self.assertEqual(warrant.calculation_method, "reported")
+        self.assertIsNone(warrant.formula)
+
+    def test_does_not_reuse_scale_across_unlabelled_numeric_table(self) -> None:
+        metrics = normalize_filing_financing_metrics(
+            (
+                passage(
+                    "financing:options",
+                    (
+                        "Stock options Shares Weighted-Average Exercise Price. "
+                        "Outstanding as of December 31, 2025 "
+                        "17,315,721 $ 6.53."
+                    ),
+                ),
+                passage(
+                    "financing:rsus",
+                    (
+                        "Restricted stock units Stock units Weighted-average "
+                        "grant date fair value. Outstanding as of March 31, "
+                        "2026 28,565,398 $ 5.99."
+                    ),
+                ),
+                passage(
+                    "financing:atm",
+                    (
+                        "At-The-Market Offerings. As of March 31, 2026, "
+                        "an amount of $300 million remained available for "
+                        "future sales."
+                    ),
+                ),
+                passage(
+                    "financing:warrants",
+                    (
+                        "Operating expenses (in thousands) 2025 15,000 "
+                        "December 31, 2025 Warrants outstanding 58,482 shares."
+                    ),
+                ),
+            )
+        )
+
+        warrant = next(
+            metric
+            for metric in metrics
+            if metric.metric_key == "warrant_shares_outstanding"
+        )
+        self.assertEqual(warrant.value, "58482")
+        self.assertEqual(warrant.calculation_method, "reported")
+        self.assertIsNone(warrant.formula)
+
+    def test_normalizes_adjacent_warrant_scale(self) -> None:
+        metrics = normalize_filing_financing_metrics(
+            (
+                passage(
+                    "financing:options",
+                    (
+                        "Stock options Shares Weighted-Average Exercise Price. "
+                        "Outstanding as of December 31, 2025 "
+                        "17,315,721 $ 6.53."
+                    ),
+                ),
+                passage(
+                    "financing:rsus",
+                    (
+                        "Restricted stock units Stock units Weighted-average "
+                        "grant date fair value. Outstanding as of March 31, "
+                        "2026 28,565,398 $ 5.99."
+                    ),
+                ),
+                passage(
+                    "financing:atm",
+                    (
+                        "At-The-Market Offerings. As of March 31, 2026, "
+                        "an amount of $300 million remained available for "
+                        "future sales."
+                    ),
+                ),
+                passage(
+                    "financing:warrants",
+                    ("December 31, 2025 Warrants outstanding 58.482 million shares."),
+                ),
+            )
+        )
+
+        warrant = next(
+            metric
+            for metric in metrics
+            if metric.metric_key == "warrant_shares_outstanding"
+        )
+        self.assertEqual(warrant.value, "58482000")
+        self.assertEqual(warrant.formula, "reported_amount*1000000")
+
+    def test_rejects_unrecognized_table_scale_marker(self) -> None:
+        with self.assertRaisesRegex(
+            FilingFinancingMetricError,
+            "filing financing table scale is unrecognized",
+        ):
+            normalize_filing_financing_metrics(
+                (
+                    passage(
+                        "financing:options",
+                        (
+                            "Stock options Shares Weighted-Average Exercise "
+                            "Price. Outstanding as of December 31, 2025 "
+                            "17,315,721 $ 6.53."
+                        ),
+                    ),
+                    passage(
+                        "financing:rsus",
+                        (
+                            "Restricted stock units Stock units Weighted-average "
+                            "grant date fair value. Outstanding as of March 31, "
+                            "2026 28,565,398 $ 5.99."
+                        ),
+                    ),
+                    passage(
+                        "financing:atm",
+                        (
+                            "At-The-Market Offerings. As of March 31, 2026, "
+                            "an amount of $300 million remained available for "
+                            "future sales."
+                        ),
+                    ),
+                    passage(
+                        "financing:warrants",
+                        (
+                            "Shares reserved for future issuance (in hundreds): "
+                            "December 31, 2025 Warrants outstanding 58,482."
+                        ),
+                    ),
+                )
+            )
+
+    def test_rejects_ambiguous_table_scale_markers(self) -> None:
+        with self.assertRaisesRegex(
+            FilingFinancingMetricError,
+            "filing financing table scale is ambiguous",
+        ):
+            normalize_filing_financing_metrics(
+                (
+                    passage(
+                        "financing:options",
+                        (
+                            "Stock options Shares Weighted-Average Exercise "
+                            "Price. Outstanding as of December 31, 2025 "
+                            "17,315,721 $ 6.53."
+                        ),
+                    ),
+                    passage(
+                        "financing:rsus",
+                        (
+                            "Restricted stock units Stock units Weighted-average "
+                            "grant date fair value. Outstanding as of March 31, "
+                            "2026 28,565,398 $ 5.99."
+                        ),
+                    ),
+                    passage(
+                        "financing:atm",
+                        (
+                            "At-The-Market Offerings. As of March 31, 2026, "
+                            "an amount of $300 million remained available for "
+                            "future sales."
+                        ),
+                    ),
+                    passage(
+                        "financing:warrants",
+                        (
+                            "Summary (in thousands), detail (in millions): "
+                            "December 31, 2025 Warrants outstanding 58,482."
+                        ),
+                    ),
+                )
+            )
+
+    def test_normalizes_convertible_share_equivalents(self) -> None:
+        metrics = normalize_filing_financing_metrics(
+            (
+                passage(
+                    "financing:options",
+                    (
+                        "Stock options Shares Weighted-Average Exercise Price. "
+                        "Outstanding as of December 31, 2025 "
+                        "17,315,721 $ 6.53."
+                    ),
+                ),
+                passage(
+                    "financing:rsus",
+                    (
+                        "Restricted stock units Stock units Weighted-average "
+                        "grant date fair value. Outstanding as of March 31, "
+                        "2026 28,565,398 $ 5.99."
+                    ),
+                ),
+                passage(
+                    "financing:atm",
+                    (
+                        "At-The-Market Offerings. As of March 31, 2026, "
+                        "an amount of $300 million remained available for "
+                        "future sales."
+                    ),
+                ),
+                passage(
+                    "financing:convertibles",
+                    (
+                        "As of December 31, 2025, convertible notes were "
+                        "convertible into 1,250,000 shares of common stock."
+                    ),
+                ),
+            )
+        )
+
+        convertible = next(
+            metric
+            for metric in metrics
+            if metric.metric_key == "convertible_share_equivalents"
+        )
+        self.assertEqual(convertible.value, "1250000")
+        self.assertEqual(convertible.unit, "shares")
+        self.assertEqual(convertible.period_end.isoformat(), "2025-12-31")
+
+    def test_normalizes_explicit_zero_preferred_shares(self) -> None:
+        metrics = normalize_filing_financing_metrics(
+            (
+                passage(
+                    "financing:options",
+                    (
+                        "Stock options Shares Weighted-Average Exercise Price. "
+                        "Outstanding as of December 31, 2025 "
+                        "17,315,721 $ 6.53."
+                    ),
+                ),
+                passage(
+                    "financing:rsus",
+                    (
+                        "Restricted stock units Stock units Weighted-average "
+                        "grant date fair value. Outstanding as of March 31, "
+                        "2026 28,565,398 $ 5.99."
+                    ),
+                ),
+                passage(
+                    "financing:atm",
+                    (
+                        "At-The-Market Offerings. As of March 31, 2026, "
+                        "an amount of $300 million remained available for "
+                        "future sales."
+                    ),
+                ),
+                passage(
+                    "financing:preferreds",
+                    (
+                        "There were no preferred shares outstanding as of "
+                        "December 31, 2025 and 2024."
+                    ),
+                ),
+            )
+        )
+
+        preferred = next(
+            metric
+            for metric in metrics
+            if metric.metric_key == "preferred_shares_outstanding"
+        )
+        self.assertEqual(preferred.value, "0")
+        self.assertEqual(preferred.unit, "shares")
+        self.assertEqual(preferred.period_end.isoformat(), "2025-12-31")
+        self.assertEqual(preferred.calculation_method, "reported")
+
+    def test_normalizes_positive_preferred_share_balance(self) -> None:
+        metrics = normalize_filing_financing_metrics(
+            (
+                passage(
+                    "financing:options",
+                    (
+                        "Stock options Shares Weighted-Average Exercise Price. "
+                        "Outstanding as of December 31, 2025 "
+                        "17,315,721 $ 6.53."
+                    ),
+                ),
+                passage(
+                    "financing:rsus",
+                    (
+                        "Restricted stock units Stock units Weighted-average "
+                        "grant date fair value. Outstanding as of March 31, "
+                        "2026 28,565,398 $ 5.99."
+                    ),
+                ),
+                passage(
+                    "financing:atm",
+                    (
+                        "At-The-Market Offerings. As of March 31, 2026, "
+                        "an amount of $300 million remained available for "
+                        "future sales."
+                    ),
+                ),
+                passage(
+                    "financing:preferreds",
+                    (
+                        "Preferred shares outstanding as of December 31, "
+                        "2025 125,000 shares."
+                    ),
+                ),
+            )
+        )
+
+        preferred = next(
+            metric
+            for metric in metrics
+            if metric.metric_key == "preferred_shares_outstanding"
+        )
+        self.assertEqual(preferred.value, "125000")
+        self.assertEqual(preferred.period_end.isoformat(), "2025-12-31")
+
+    def test_does_not_treat_common_share_balance_as_preferred_balance(self) -> None:
+        metrics = normalize_filing_financing_metrics(
+            (
+                passage(
+                    "financing:options",
+                    (
+                        "Stock options Shares Weighted-Average Exercise Price. "
+                        "Outstanding as of December 31, 2025 "
+                        "17,315,721 $ 6.53."
+                    ),
+                ),
+                passage(
+                    "financing:rsus",
+                    (
+                        "Restricted stock units Stock units Weighted-average "
+                        "grant date fair value. Outstanding as of March 31, "
+                        "2026 28,565,398 $ 5.99."
+                    ),
+                ),
+                passage(
+                    "financing:atm",
+                    (
+                        "At-The-Market Offerings. As of March 31, 2026, "
+                        "an amount of $300 million remained available for "
+                        "future sales."
+                    ),
+                ),
+                passage(
+                    "financing:preferreds",
+                    (
+                        "Preferred stock has been authorized. Common stock "
+                        "outstanding as of December 31, 2025 125,000 shares."
+                    ),
+                ),
+            )
+        )
+
+        self.assertNotIn(
+            "preferred_shares_outstanding",
+            {metric.metric_key for metric in metrics},
+        )
+
     def test_normalizes_literal_rxrx_filing_tables(self) -> None:
         source_plan = json.loads(
             Path(

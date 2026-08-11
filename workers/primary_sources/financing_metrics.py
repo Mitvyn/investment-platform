@@ -17,7 +17,10 @@ _DATE = (
     r"(?:January|February|March|April|May|June|July|August|September|"
     r"October|November|December) [0-9]{1,2}, [0-9]{4})"
 )
-_SHARES = r"(?P<value>[0-9][0-9,]*)"
+_SHARES = (
+    r"(?P<value>[0-9][0-9,]*(?:\.[0-9]+)?)"
+    r"(?:\s+(?P<scale>thousand|million|billion))?"
+)
 _AMOUNT = r"(?P<value>[0-9][0-9,]*(?:\.[0-9]+)?)"
 
 
@@ -27,6 +30,7 @@ class _MetricSpec:
     metric_key: str
     unit: str
     pattern: re.Pattern[str]
+    required: bool = True
 
 
 @dataclass(frozen=True, slots=True)
@@ -52,6 +56,23 @@ _SPECS = (
         ),
     ),
     _MetricSpec(
+        field_id="warrants",
+        metric_key="warrant_shares_outstanding",
+        unit="shares",
+        pattern=re.compile(r"\bwarrants?\b", re.IGNORECASE),
+        required=False,
+    ),
+    _MetricSpec(
+        field_id="convertibles",
+        metric_key="convertible_share_equivalents",
+        unit="shares",
+        pattern=re.compile(
+            r"\bconvertible (?:notes?|debt|securities)\b",
+            re.IGNORECASE,
+        ),
+        required=False,
+    ),
+    _MetricSpec(
         field_id="rsus",
         metric_key="rsu_shares_outstanding",
         unit="shares",
@@ -63,6 +84,16 @@ _SPECS = (
             ),
             re.IGNORECASE,
         ),
+    ),
+    _MetricSpec(
+        field_id="preferreds",
+        metric_key="preferred_shares_outstanding",
+        unit="shares",
+        pattern=re.compile(
+            r"\bpreferred (?:stock|shares?|securities)\b",
+            re.IGNORECASE,
+        ),
+        required=False,
     ),
     _MetricSpec(
         field_id="atm_shelf_capacity",
@@ -84,6 +115,49 @@ _SPECS = (
 )
 _SHARE_OBSERVATION = re.compile(
     r"\boutstanding as of " + _DATE + r"\s+" + _SHARES + r"\b",
+    re.IGNORECASE,
+)
+_WARRANT_OBSERVATION = re.compile(
+    _DATE + r"\s+warrants? outstanding\s+" + _SHARES + r"\b",
+    re.IGNORECASE,
+)
+_CONVERTIBLE_OBSERVATION = re.compile(
+    (
+        r"\bas of "
+        + _DATE
+        + r",?\s+convertible (?:notes?|debt|securities)\b"
+        + r".*?\bconvertible into\s+"
+        + _SHARES
+        + r"\s+shares?\b"
+    ),
+    re.IGNORECASE,
+)
+_PREFERRED_ZERO_OBSERVATION = re.compile(
+    r"\bno preferred shares? outstanding as of " + _DATE + r"\b",
+    re.IGNORECASE,
+)
+_PREFERRED_OBSERVATION = re.compile(
+    (
+        r"\bpreferred (?:stock|shares?|securities)\b"
+        r"\s+outstanding as of " + _DATE + r"\s+" + _SHARES + r"(?:\s+shares?)?\b"
+    ),
+    re.IGNORECASE,
+)
+_TABLE_SCALE_MARKER = re.compile(
+    r"\(\s*in\s+(?P<scale_description>[^)]+)\)",
+    re.IGNORECASE,
+)
+_POTENTIAL_SCALE_PREFIX = re.compile(
+    r"^(?:hundreds?|thousands?|millions?|billions?)\b",
+    re.IGNORECASE,
+)
+_TABLE_CONTEXT_BOUNDARY = re.compile(r"[.!?]\s+")
+_TABLE_CONTEXT_HEADING = re.compile(
+    (
+        r"\b[A-Za-z][A-Za-z0-9/-]*"
+        r"(?:\s+[A-Za-z][A-Za-z0-9/-]*){0,5}"
+        r"\s+(?:table|schedule)\s*:"
+    ),
     re.IGNORECASE,
 )
 _SCALE = {
@@ -126,9 +200,38 @@ def _canonical_decimal(value: Decimal) -> str:
     return rendered or "0"
 
 
+def _table_scale(text: str, *, before: int) -> str | None:
+    context_start = 0
+    for boundary in _TABLE_CONTEXT_BOUNDARY.finditer(text[:before]):
+        context_start = boundary.end()
+    heading_context_start = context_start
+    for heading in _TABLE_CONTEXT_HEADING.finditer(text[heading_context_start:before]):
+        context_start = heading_context_start + heading.end()
+    scale_names: list[str] = []
+    for marker in _TABLE_SCALE_MARKER.finditer(text[context_start:before]):
+        marker_end = context_start + marker.end()
+        if any(character.isdigit() for character in text[marker_end:before]):
+            continue
+        description = " ".join(marker.group("scale_description").split()).casefold()
+        if not _POTENTIAL_SCALE_PREFIX.match(description):
+            continue
+        if description.endswith("except share and per share amounts"):
+            continue
+        candidate = description.removesuffix("s")
+        if candidate not in _SCALE:
+            raise FilingFinancingMetricError(
+                "filing financing table scale is unrecognized"
+            )
+        scale_names.append(candidate)
+    if len(scale_names) > 1:
+        raise FilingFinancingMetricError("filing financing table scale is ambiguous")
+    return scale_names[0] if scale_names else None
+
+
 def _observation(
     spec: _MetricSpec,
     passage: PrimaryEvidencePassage,
+    text: str,
     match: re.Match[str],
 ) -> _Observation:
     if (
@@ -141,9 +244,19 @@ def _observation(
             "filing financing metric provenance is invalid"
         )
     scale_name = match.groupdict().get("scale")
-    scale = _SCALE[scale_name.casefold() if isinstance(scale_name, str) else None]
-    value = _decimal(match.group("value"))
-    if spec.unit == "shares" and value != value.to_integral_value():
+    if spec.unit == "shares":
+        table_scale = _table_scale(text, before=match.start())
+        if scale_name is not None and table_scale is not None:
+            raise FilingFinancingMetricError(
+                "filing financing table scale is ambiguous"
+            )
+        scale_name = scale_name or table_scale
+    scale_key = scale_name.casefold().removesuffix("s") if scale_name else None
+    scale = _SCALE[scale_key]
+    value_text = match.groupdict().get("value")
+    value = _decimal(value_text) if value_text is not None else Decimal(0)
+    scaled_value = value * scale
+    if spec.unit == "shares" and scaled_value != scaled_value.to_integral_value():
         raise FilingFinancingMetricError(
             "filing financing share value must be integral"
         )
@@ -153,6 +266,29 @@ def _observation(
         period_end=_period_end(match.group("date")),
         value=value,
         scale=scale,
+    )
+
+
+def _matches_for_spec(
+    spec: _MetricSpec,
+    text: str,
+) -> tuple[re.Match[str], ...]:
+    if not spec.pattern.search(text):
+        return ()
+    if spec.field_id == "warrants":
+        patterns = (_WARRANT_OBSERVATION,)
+    elif spec.field_id == "convertibles":
+        patterns = (_CONVERTIBLE_OBSERVATION,)
+    elif spec.field_id == "preferreds":
+        patterns = (_PREFERRED_ZERO_OBSERVATION, _PREFERRED_OBSERVATION)
+    elif spec.unit == "shares":
+        patterns = (_SHARE_OBSERVATION,)
+    else:
+        patterns = (spec.pattern,)
+    return tuple(
+        match
+        for observation_pattern in patterns
+        for match in observation_pattern.finditer(text)
     )
 
 
@@ -166,19 +302,17 @@ def normalize_filing_financing_metrics(
     for passage in passages:
         text = _normalized_text(passage.passage_text)
         for spec in _SPECS:
-            matches = (
-                _SHARE_OBSERVATION.finditer(text)
-                if spec.unit == "shares" and spec.pattern.search(text)
-                else spec.pattern.finditer(text)
-            )
             by_field[spec.field_id].extend(
-                _observation(spec, passage, match) for match in matches
+                _observation(spec, passage, text, match)
+                for match in _matches_for_spec(spec, text)
             )
 
     metrics: list[NormalizedMetricFact] = []
     for spec in _SPECS:
         observations = by_field[spec.field_id]
         if not observations:
+            if not spec.required:
+                continue
             raise FilingFinancingMetricError(
                 f"{spec.field_id} filing financing passage is missing"
             )

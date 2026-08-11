@@ -246,7 +246,7 @@ def companyfacts_snapshot() -> SecCompanyFactsSnapshot:
         cik="0001601830",
         issuer_name=ISSUER_NAME,
         as_of_cutoff=CUTOFF,
-        policy_version="sec-companyfacts-core-metrics-v1",
+        policy_version="sec-companyfacts-core-metrics-v2",
         coverage_state="complete",
         reason_codes=("sec_companyfacts_core_metrics_complete",),
         source_url=("https://data.sec.gov/api/xbrl/companyfacts/CIK0001601830.json"),
@@ -409,6 +409,234 @@ class EligibilitySourceAdapterTests(unittest.TestCase):
         self.assertEqual(common_equity.normalized_values, ("unknown",))
         self.assertEqual(profile.security_type, "unknown")
         self.assertFalse(profile.eligible)
+
+    def test_item_12b_common_stock_tables_prove_common_equity_listing(self) -> None:
+        table_passages = (
+            (
+                "Securities registered pursuant to Section 12(b) of the Act: "
+                "Title of each class Trading symbol(s) Name of each exchange on "
+                "which registered Class A Common Stock, par value $0.00001 RXRX "
+                "Nasdaq Global Select Market",
+                "RXRX",
+            ),
+            (
+                "Securities registered pursuant to Section 12(b) of the Exchange "
+                "Act: Title of Each Class Trading Symbol(s) Name of Each Exchange "
+                "on Which Registered Common Stock, $0.0001 Par Value per share SLS "
+                "The Nasdaq Stock Market LLC Securities registered pursuant to "
+                "Section 12(g) of the Exchange Act: None",
+                "SLS",
+            ),
+        )
+
+        for table_passage, ticker in table_passages:
+            with self.subTest(table_passage=table_passage):
+                passages = tuple(
+                    (
+                        replace(item, passage_text=table_passage)
+                        if item.reference_key == "sec:identity-and-listing"
+                        else item
+                    )
+                    for item in source_passages()
+                )
+
+                profile = derive_biotech_eligibility_profile(
+                    request=request(),
+                    registered_security=replace(
+                        registered_security(),
+                        ticker=ticker,
+                    ),
+                    submissions=collected_snapshot(
+                        fixture="rxrx-submissions.json",
+                        security_id=SECURITY_ID,
+                        cik="0001601830",
+                        issuer_name=ISSUER_NAME,
+                    ),
+                    issuer=issuer_snapshot(),
+                    clinical_trials=clinical_snapshot(),
+                    companyfacts=companyfacts_snapshot(),
+                    passages=passages,
+                )
+
+                common_equity = next(
+                    outcome
+                    for outcome in profile.outcomes
+                    if outcome.rule_id == "common_equity"
+                )
+                self.assertEqual(common_equity.state, "pass")
+                self.assertEqual(profile.security_type, "common_equity")
+
+    def test_item_12b_table_requires_common_equity_and_exchange_column(self) -> None:
+        invalid_table_passages = (
+            (
+                "Securities registered pursuant to Section 12(b) of the Act: "
+                "Title of each class Trading symbol(s) Name of each exchange on "
+                "which registered Series A Preferred Stock, par value $0.0001 "
+                "PREF Nasdaq Capital Market"
+            ),
+            (
+                "Securities registered pursuant to Section 12(b) of the Act: "
+                "Title of each class Trading symbol(s) Class A Common Stock, "
+                "par value $0.0001 TEST"
+            ),
+        )
+
+        for table_passage in invalid_table_passages:
+            with self.subTest(table_passage=table_passage):
+                passages = tuple(
+                    (
+                        replace(item, passage_text=table_passage)
+                        if item.reference_key == "sec:identity-and-listing"
+                        else item
+                    )
+                    for item in source_passages()
+                )
+
+                profile = derive_biotech_eligibility_profile(
+                    request=request(),
+                    registered_security=registered_security(),
+                    submissions=collected_snapshot(
+                        fixture="rxrx-submissions.json",
+                        security_id=SECURITY_ID,
+                        cik="0001601830",
+                        issuer_name=ISSUER_NAME,
+                    ),
+                    issuer=issuer_snapshot(),
+                    clinical_trials=clinical_snapshot(),
+                    companyfacts=companyfacts_snapshot(),
+                    passages=passages,
+                )
+
+                common_equity = next(
+                    outcome
+                    for outcome in profile.outcomes
+                    if outcome.rule_id == "common_equity"
+                )
+                self.assertEqual(common_equity.state, "fail")
+                self.assertEqual(profile.security_type, "unknown")
+
+    def test_item_12b_common_equity_must_be_bound_to_a_listing_row(self) -> None:
+        table_passage = (
+            "Securities registered pursuant to Section 12(b) of the Act: "
+            "Title of each class Trading symbol(s) Name of each exchange on "
+            "which registered Series A Preferred Stock, par value $0.0001 "
+            "PREF Nasdaq Capital Market. The certificate of incorporation "
+            "authorizes common stock, but no common stock is listed on an "
+            "exchange."
+        )
+        passages = tuple(
+            (
+                replace(item, passage_text=table_passage)
+                if item.reference_key == "sec:identity-and-listing"
+                else item
+            )
+            for item in source_passages()
+        )
+
+        profile = derive_biotech_eligibility_profile(
+            request=request(),
+            registered_security=registered_security(),
+            submissions=collected_snapshot(
+                fixture="rxrx-submissions.json",
+                security_id=SECURITY_ID,
+                cik="0001601830",
+                issuer_name=ISSUER_NAME,
+            ),
+            issuer=issuer_snapshot(),
+            clinical_trials=clinical_snapshot(),
+            companyfacts=companyfacts_snapshot(),
+            passages=passages,
+        )
+
+        common_equity = next(
+            outcome
+            for outcome in profile.outcomes
+            if outcome.rule_id == "common_equity"
+        )
+        self.assertEqual(common_equity.state, "fail")
+        self.assertEqual(profile.security_type, "unknown")
+
+    def test_item_12b_common_equity_cannot_cross_listing_rows(self) -> None:
+        table_passage = (
+            "Securities registered pursuant to Section 12(b) of the Act: "
+            "Title of each class Trading symbol(s) Name of each exchange on "
+            "which registered Common Stock, par value $0.0001 OTHER NYSE "
+            "Series A Preferred Stock, par value $0.0001 RXRX Nasdaq Global "
+            "Select Market"
+        )
+        passages = tuple(
+            (
+                replace(item, passage_text=table_passage)
+                if item.reference_key == "sec:identity-and-listing"
+                else item
+            )
+            for item in source_passages()
+        )
+
+        profile = derive_biotech_eligibility_profile(
+            request=request(),
+            registered_security=registered_security(),
+            submissions=collected_snapshot(
+                fixture="rxrx-submissions.json",
+                security_id=SECURITY_ID,
+                cik="0001601830",
+                issuer_name=ISSUER_NAME,
+            ),
+            issuer=issuer_snapshot(),
+            clinical_trials=clinical_snapshot(),
+            companyfacts=companyfacts_snapshot(),
+            passages=passages,
+        )
+
+        common_equity = next(
+            outcome
+            for outcome in profile.outcomes
+            if outcome.rule_id == "common_equity"
+        )
+        self.assertEqual(common_equity.state, "fail")
+        self.assertEqual(profile.security_type, "unknown")
+
+    def test_item_12b_common_equity_cannot_cross_instrument_row_boundary(
+        self,
+    ) -> None:
+        table_passage = (
+            "Securities registered pursuant to Section 12(b) of the Act: "
+            "Title of each class Trading symbol(s) Name of each exchange on "
+            "which registered Common Stock, par value $0.0001 OTHER OTCQB "
+            "Series A Preferred Stock, par value $0.0001 RXRX Nasdaq Global "
+            "Select Market"
+        )
+        passages = tuple(
+            (
+                replace(item, passage_text=table_passage)
+                if item.reference_key == "sec:identity-and-listing"
+                else item
+            )
+            for item in source_passages()
+        )
+
+        profile = derive_biotech_eligibility_profile(
+            request=request(),
+            registered_security=registered_security(),
+            submissions=collected_snapshot(
+                fixture="rxrx-submissions.json",
+                security_id=SECURITY_ID,
+                cik="0001601830",
+                issuer_name=ISSUER_NAME,
+            ),
+            issuer=issuer_snapshot(),
+            clinical_trials=clinical_snapshot(),
+            companyfacts=companyfacts_snapshot(),
+            passages=passages,
+        )
+
+        common_equity = next(
+            outcome
+            for outcome in profile.outcomes
+            if outcome.rule_id == "common_equity"
+        )
+        self.assertEqual(common_equity.state, "fail")
+        self.assertEqual(profile.security_type, "unknown")
 
     def test_incidental_common_stock_text_does_not_prove_security_type(
         self,

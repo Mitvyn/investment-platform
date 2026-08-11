@@ -63,6 +63,7 @@ class PrimarySourceRunArtifactBinding:
     question_type_version: str
     workflow_config_version: str
     thesis_contract_id: str
+    evidence_policy_version: str
     capture_id: str
     capture_revision: int
     package_sha256: str
@@ -274,6 +275,7 @@ class FilePrimarySourceCaptureRepository:
         persisted: PersistedPrimarySourceCapture,
         research_run: ResearchRun,
         *,
+        evidence_policy_version: str,
         bound_at: datetime,
     ) -> PrimarySourceRunArtifactBinding:
         stored = self.get_capture(
@@ -310,6 +312,8 @@ class FilePrimarySourceCaptureRepository:
                 "Research Run does not match persisted capture"
             )
         canonical_bound_at = _aware_timestamp(bound_at)
+        if not evidence_policy_version.strip():
+            raise PrimarySourceStorageError("evidence policy version is required")
         if canonical_bound_at < persisted.accepted_at:
             raise PrimarySourceStorageError("capture binding predates acceptance")
         binding = PrimarySourceRunArtifactBinding(
@@ -321,6 +325,7 @@ class FilePrimarySourceCaptureRepository:
             question_type_version=persisted.question_type_version,
             workflow_config_version=persisted.workflow_config_version,
             thesis_contract_id=persisted.thesis_contract_id,
+            evidence_policy_version=evidence_policy_version,
             capture_id=persisted.capture_id,
             capture_revision=persisted.capture_revision,
             package_sha256=persisted.package_sha256,
@@ -533,7 +538,7 @@ def _canonical_binding(
     binding: PrimarySourceRunArtifactBinding,
 ) -> bytes:
     payload = {
-        "contract_version": "primary_source_run_artifact_binding.v1",
+        "contract_version": "primary_source_run_artifact_binding.v2",
         **{
             key: (value.isoformat() if isinstance(value, datetime) else value)
             for key, value in asdict(binding).items()
@@ -551,12 +556,18 @@ def _binding_from_dict(
 ) -> PrimarySourceRunArtifactBinding:
     if not isinstance(payload, dict):
         raise ValueError("binding must be an object")
-    expected = {
+    contract_version = payload.get("contract_version")
+    v2_expected = {
         "contract_version",
         *PrimarySourceRunArtifactBinding.__dataclass_fields__,
     }
-    if set(payload) != expected or payload["contract_version"] != (
-        "primary_source_run_artifact_binding.v1"
+    v1_expected = v2_expected - {"evidence_policy_version"}
+    if not (
+        contract_version == "primary_source_run_artifact_binding.v2"
+        and set(payload) == v2_expected
+    ) and not (
+        contract_version == "primary_source_run_artifact_binding.v1"
+        and set(payload) == v1_expected
     ):
         raise ValueError("binding fields are invalid")
     binding = PrimarySourceRunArtifactBinding(
@@ -568,6 +579,11 @@ def _binding_from_dict(
         question_type_version=str(payload["question_type_version"]),
         workflow_config_version=str(payload["workflow_config_version"]),
         thesis_contract_id=str(payload["thesis_contract_id"]),
+        evidence_policy_version=(
+            str(payload["evidence_policy_version"])
+            if contract_version == "primary_source_run_artifact_binding.v2"
+            else "biotech-primary-evidence-v1"
+        ),
         capture_id=_uuid_text(payload["capture_id"]),
         capture_revision=int(payload["capture_revision"]),
         package_sha256=str(payload["package_sha256"]),
@@ -587,6 +603,7 @@ def _binding_from_dict(
         or not binding.question_type_version
         or not binding.workflow_config_version
         or not binding.thesis_contract_id
+        or not binding.evidence_policy_version
     ):
         raise ValueError("binding values are invalid")
     return binding

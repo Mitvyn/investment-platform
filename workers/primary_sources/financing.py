@@ -68,6 +68,7 @@ FINANCING_PASSAGE_ALIASES_BY_FIELD = {
         "at the market program",
         "at the market offering",
         "atm program",
+        "sales agreement prospectus supplement",
         "shelf registration",
         "shelf capacity",
     ),
@@ -79,6 +80,17 @@ FINANCING_PASSAGE_ALIASES_BY_FIELD = {
         "share growth",
     ),
 }
+_ATM_CAPACITY_AMOUNT_PATTERN = re.compile(
+    r"(?:\$\s*|usd\s+)(?P<amount>\d[\d,]*(?:\.\d+)?)"
+    r"(?:\s*(?P<scale>thousand|million|billion))?",
+    re.IGNORECASE,
+)
+_ATM_CAPACITY_CONTEXT_PATTERN = re.compile(
+    r"\b(?:up to|maximum aggregate offering price|aggregate amount|"
+    r"remained available|remaining capacity|shelf capacity|atm capacity|"
+    r"at[-\s]+the[-\s]+market program capacity)\b",
+    re.IGNORECASE,
+)
 
 
 class FinancingSemanticError(ValueError):
@@ -216,6 +228,21 @@ def _passage_is_hypothetical(
     )
 
 
+def _passage_reports_numeric_atm_capacity(
+    passage: PrimaryEvidencePassage,
+) -> bool:
+    text = unicodedata.normalize("NFKC", passage.passage_text)
+    if _ATM_CAPACITY_CONTEXT_PATTERN.search(text) is None:
+        return False
+    for match in _ATM_CAPACITY_AMOUNT_PATTERN.finditer(text):
+        try:
+            if Decimal(match.group("amount").replace(",", "")) > 0:
+                return True
+        except InvalidOperation:
+            continue
+    return False
+
+
 def _metric_decimal(metric: NormalizedMetricFact) -> Decimal:
     try:
         return Decimal(metric.value)
@@ -300,6 +327,10 @@ def derive_financing_field_evidence(
             not _passage_declares_absence(passage, field_id)
             and not _passage_declares_not_applicable(passage, field_id)
             and not _passage_is_hypothetical(passage)
+            and (
+                field_id != "atm_shelf_capacity"
+                or _passage_reports_numeric_atm_capacity(passage)
+            )
             for passage in field_passages
         )
         metric_values = tuple(_metric_decimal(metric) for metric in field_metrics)
@@ -310,6 +341,14 @@ def derive_financing_field_evidence(
             continue
         if declares_not_applicable and (
             field_metrics or has_positive_passage or hypothetical
+        ):
+            continue
+        if (
+            field_id == "atm_shelf_capacity"
+            and not has_positive_metric
+            and not has_positive_passage
+            and not declares_absence
+            and not declares_not_applicable
         ):
             continue
         if declares_absence:
@@ -455,19 +494,36 @@ def build_financing_semantic_matrix(
                     f"{field_id} absent outcome conflicts with evidence"
                 )
         elif outcome.outcome == "complete":
-            if any(
-                _passage_declares_absence(
-                    passages_by_reference[reference_key], field_id
+            if (
+                any(
+                    _passage_declares_absence(
+                        passages_by_reference[reference_key], field_id
+                    )
+                    or _passage_declares_not_applicable(
+                        passages_by_reference[reference_key], field_id
+                    )
+                    or _passage_is_hypothetical(passages_by_reference[reference_key])
+                    for reference_key in field_passages
                 )
-                or _passage_declares_not_applicable(
-                    passages_by_reference[reference_key], field_id
+                or (
+                    field_id != "share_growth"
+                    and field_metrics
+                    and not any(
+                        _metric_decimal(metric) != 0 for metric in field_metrics
+                    )
                 )
-                or _passage_is_hypothetical(passages_by_reference[reference_key])
-                for reference_key in field_passages
-            ) or (
-                field_id != "share_growth"
-                and field_metrics
-                and not any(_metric_decimal(metric) != 0 for metric in field_metrics)
+                or (
+                    field_id == "atm_shelf_capacity"
+                    and not any(
+                        _metric_decimal(metric) != 0 for metric in field_metrics
+                    )
+                    and not any(
+                        _passage_reports_numeric_atm_capacity(
+                            passages_by_reference[reference_key]
+                        )
+                        for reference_key in field_passages
+                    )
+                )
             ):
                 raise FinancingSemanticError(
                     f"{field_id} complete outcome conflicts with evidence"

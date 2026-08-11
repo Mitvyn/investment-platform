@@ -28,12 +28,13 @@ from investment_research_os.research_runs import (
 from workers.ids import stable_id
 
 from .models import PrimarySourceRequest
+from .regulatory_linkage import has_programme_designation_link
 
 if TYPE_CHECKING:
     from .eligibility import DerivedEligibilityProfile
 
 
-EVIDENCE_POLICY_VERSION = "biotech-primary-evidence-v1"
+EVIDENCE_POLICY_VERSION = "biotech-primary-evidence-v2"
 FRESHNESS_POLICY_VERSION = "biotech-evidence-freshness-v1"
 SOURCE_CLASS_ORDER = ("sec", "issuer", "clinical", "regulatory", "financing")
 _SOURCE_COVERAGE = {
@@ -53,7 +54,7 @@ _COVERAGE_POLICY_VERSION = {
     "required_sec_filings": "biotech-required-sec-filings-v1",
     "issuer_pipeline": "official-issuer-source-v1",
     "authoritative_trial": "clinical-trials-source-v2",
-    "us_regulatory": "fda-regulatory-source-v1",
+    "us_regulatory": "fda-regulatory-source-v2",
     "financing_share_capital": "biotech-financing-share-capital-v1",
 }
 _SOURCE_ORIGIN_POLICY_VERSION = {
@@ -97,6 +98,29 @@ _SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 
 class PrimarySourcePipelineError(ValueError):
     """Raised when collected primary evidence cannot be normalized safely."""
+
+
+def _has_regulatory_programme_linkage(
+    passages: tuple[PrimaryEvidencePassage, ...],
+    program_names: tuple[str, ...],
+    evidence_reference_keys: tuple[str, ...],
+) -> bool:
+    cited_references = frozenset(evidence_reference_keys)
+    grouped_text: dict[tuple[str, str], list[str]] = {}
+    for passage in passages:
+        if (
+            passage.source_class != "regulatory"
+            or passage.reference_key not in cited_references
+        ):
+            continue
+        grouped_text.setdefault(
+            (passage.canonical_url, passage.document_content_hash),
+            [],
+        ).append(passage.passage_text)
+    return has_programme_designation_link(
+        text_groups=tuple(tuple(texts) for texts in grouped_text.values()),
+        program_names=program_names,
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -395,6 +419,7 @@ class PrimarySourcePipeline:
         metrics: tuple[NormalizedMetricFact, ...] = (),
         catalysts: tuple[NormalizedCatalystFact, ...] = (),
         risks: tuple[NormalizedRiskFact, ...] = (),
+        regulatory_program_names: tuple[str, ...] = (),
     ) -> PrimarySourcePipelineResult:
         if not passages:
             raise PrimarySourcePipelineError("primary evidence is required")
@@ -668,6 +693,25 @@ class PrimarySourcePipeline:
             if proof.state == "complete" and not proof.evidence_reference_keys:
                 raise PrimarySourcePipelineError(
                     "complete primary source coverage requires evidence"
+                )
+            if (
+                proof.requirement_id == "us_regulatory"
+                and proof.state == "complete"
+                and not _has_regulatory_programme_linkage(
+                    passages,
+                    tuple(
+                        dict.fromkeys(
+                            (
+                                *profile.active_therapeutic_programs,
+                                *regulatory_program_names,
+                            )
+                        )
+                    ),
+                    proof.evidence_reference_keys,
+                )
+            ):
+                raise PrimarySourcePipelineError(
+                    "regulatory programme linkage is unresolved"
                 )
         coverage = frozenset(
             proof.requirement_id

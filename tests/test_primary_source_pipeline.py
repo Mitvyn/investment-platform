@@ -45,7 +45,11 @@ def passage(
     source_class: str,
     coverage_key: str,
 ) -> PrimaryEvidencePassage:
-    text = f"Exact primary-source text for {reference_key}."
+    text = (
+        "FDA ORPHAN DRUG designation for EX-101."
+        if source_class == "regulatory"
+        else f"Exact primary-source text for {reference_key}."
+    )
     document = f"Primary document containing {text}"
     hosts = {
         "sec": "www.sec.gov",
@@ -131,7 +135,7 @@ def required_coverage_proofs() -> tuple[PrimarySourceCoverageProof, ...]:
         PrimarySourceCoverageProof(
             "us_regulatory",
             "regulatory",
-            "fda-regulatory-source-v1",
+            "fda-regulatory-source-v2",
             "complete",
             ("us_regulatory_complete",),
             ("regulatory-record",),
@@ -308,6 +312,10 @@ class PrimarySourcePipelineTests(unittest.TestCase):
             <= {item.evidence_id for item in result.bundle_candidate.items},
             True,
         )
+        self.assertEqual(
+            result.bundle_candidate.evidence_policy_version,
+            "biotech-primary-evidence-v2",
+        )
         self.assertEqual(result.reason_codes, ("primary_source_coverage_complete",))
 
     def test_coverage_policy_version_must_match_requirement_contract(
@@ -428,6 +436,59 @@ class PrimarySourcePipelineTests(unittest.TestCase):
             ("primary_source_coverage_complete",),
         )
 
+    def test_complete_regulatory_proof_requires_programme_designation_bridge(
+        self,
+    ) -> None:
+        regulatory = replace(
+            required_passages()[4],
+            passage_text=(
+                "Designation Date 10/10/2023. Sponsor Example Therapeutics, Inc."
+            ),
+        )
+
+        with self.assertRaisesRegex(
+            PrimarySourcePipelineError,
+            "regulatory programme linkage is unresolved",
+        ):
+            PrimarySourcePipeline().assemble(
+                request=source_request(),
+                profile=security_profile(),
+                passages=(
+                    *required_passages()[:4],
+                    regulatory,
+                    required_passages()[5],
+                ),
+                coverage_proofs=required_coverage_proofs(),
+            )
+
+    def test_regulatory_proof_cannot_borrow_uncited_programme_passage(self) -> None:
+        regulatory = replace(
+            required_passages()[4],
+            passage_text="FDA ORPHAN DRUG designation record.",
+        )
+        uncited_programme = replace(
+            regulatory,
+            reference_key="uncited-regulatory-programme",
+            coverage_keys=frozenset(),
+            passage_text="EX-101",
+        )
+
+        with self.assertRaisesRegex(
+            PrimarySourcePipelineError,
+            "regulatory programme linkage is unresolved",
+        ):
+            PrimarySourcePipeline().assemble(
+                request=source_request(),
+                profile=security_profile(),
+                passages=(
+                    *required_passages()[:4],
+                    regulatory,
+                    uncited_programme,
+                    required_passages()[5],
+                ),
+                coverage_proofs=required_coverage_proofs(),
+            )
+
     def test_eligibility_rule_requires_owned_source_class(
         self,
     ) -> None:
@@ -492,7 +553,7 @@ class PrimarySourcePipelineTests(unittest.TestCase):
                 else PrimarySourceCoverageProof(
                     "us_regulatory",
                     "regulatory",
-                    "fda-regulatory-source-v1",
+                    "fda-regulatory-source-v2",
                     "incomplete",
                     ("us_regulatory_unavailable",),
                     (),

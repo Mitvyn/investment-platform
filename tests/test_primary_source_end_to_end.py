@@ -383,10 +383,7 @@ def capture_archive(
     add_response(
         "companyfacts",
         {"role": "sec_companyfacts"},
-        (
-            "https://data.sec.gov/api/xbrl/companyfacts/"
-            f"CIK{case.cik}.json"
-        ),
+        (f"https://data.sec.gov/api/xbrl/companyfacts/CIK{case.cik}.json"),
         companyfacts_body,
         "application/json",
     )
@@ -596,9 +593,7 @@ class PrimarySourceEndToEndTests(unittest.TestCase):
             .joinpath(case.submissions_fixture)
             .read_bytes()
         )
-        submissions_url = (
-            f"https://data.sec.gov/submissions/CIK{case.cik}.json"
-        )
+        submissions_url = f"https://data.sec.gov/submissions/CIK{case.cik}.json"
         preflight_submissions = SecSubmissionsCollector(
             SecSettings(
                 user_agent="Investment Research OS research@example.com",
@@ -607,9 +602,7 @@ class PrimarySourceEndToEndTests(unittest.TestCase):
             transport=SecTransport(submissions_body, submissions_url),
             clock=lambda: CREATED_AT,
         ).discover(source_request)
-        preflight_selection = RequiredSecFilingSelector().select(
-            preflight_submissions
-        )
+        preflight_selection = RequiredSecFilingSelector().select(preflight_submissions)
         document_bodies: dict[str, bytes] = {}
         index_bodies: dict[str, bytes] = {}
         for filing in preflight_selection.selected_filings:
@@ -618,9 +611,7 @@ class PrimarySourceEndToEndTests(unittest.TestCase):
                 for plan in source_plan.sec_passages
                 if plan.selected_form == filing.form
             )
-            passage_html = "".join(
-                f"<p>{passage}</p>" for passage in planned_passages
-            )
+            passage_html = "".join(f"<p>{passage}</p>" for passage in planned_passages)
             document_bodies[filing.archive_url] = (
                 f"<html><body>{passage_html or 'selected filing'}</body></html>"
             ).encode()
@@ -666,10 +657,10 @@ class PrimarySourceEndToEndTests(unittest.TestCase):
                 "application/json",
             ),
             submissions_url: (submissions_body, "application/json"),
-            (
-                "https://data.sec.gov/api/xbrl/companyfacts/"
-                f"CIK{case.cik}.json"
-            ): (companyfacts_body, "application/json"),
+            (f"https://data.sec.gov/api/xbrl/companyfacts/CIK{case.cik}.json"): (
+                companyfacts_body,
+                "application/json",
+            ),
             case.issuer_url: (issuer_body, "text/html"),
             clinical_trials_url(case.clinical_terms): (
                 trial_body,
@@ -702,9 +693,7 @@ class PrimarySourceEndToEndTests(unittest.TestCase):
                 ticker=case.display_symbol,
                 source_plan=source_plan_bytes,
                 trusted_issuer_hosts=case.issuer_trusted_hosts,
-                user_agent=(
-                    "Investment Research OS research@example.com"
-                ),
+                user_agent=("Investment Research OS research@example.com"),
                 transport=CaptureTransport(),
                 clock=lambda: CREATED_AT,
                 capture_id=str(
@@ -758,17 +747,13 @@ class PrimarySourceEndToEndTests(unittest.TestCase):
         self.assertEqual(selection, preflight_selection)
         document_transport = session.sec_transport()
         documents = SecFilingDocumentCollector(
-            SecSettings(
-                user_agent="Investment Research OS research@example.com"
-            ),
+            SecSettings(user_agent="Investment Research OS research@example.com"),
             transport=document_transport,
             clock=document_transport.clock,
         ).collect(selection)
         exhibit_transport = session.sec_transport()
         exhibits = SecFilingExhibitCollector(
-            SecSettings(
-                user_agent="Investment Research OS research@example.com"
-            ),
+            SecSettings(user_agent="Investment Research OS research@example.com"),
             transport=exhibit_transport,
             clock=exhibit_transport.clock,
         ).collect(documents)
@@ -837,9 +822,7 @@ class PrimarySourceEndToEndTests(unittest.TestCase):
         clinical_passages = clinical_trials_pipeline_inputs(trial_snapshot)
         clinical_proof = clinical_trials_coverage_proof(trial_snapshot)
 
-        regulatory_transport = session.official_transport(
-            "regulatory_document"
-        )
+        regulatory_transport = session.official_transport("regulatory_document")
         regulatory_snapshot = FDARegulatoryEvidenceAdapter(
             allowed_hosts=source_plan.regulatory_allowed_hosts,
             transport=regulatory_transport,
@@ -848,8 +831,22 @@ class PrimarySourceEndToEndTests(unittest.TestCase):
             source_request,
             source_plan.regulatory_sources,
         )
-        regulatory_passages = official_snapshot_pipeline_inputs(regulatory_snapshot)
-        regulatory_proofs = official_snapshot_coverage_proofs(regulatory_snapshot)
+        regulatory_program_names = tuple(
+            dict.fromkeys(
+                (
+                    source_plan.clinical_trial_search.program_name,
+                    *source_plan.clinical_trial_search.search_terms,
+                )
+            )
+        )
+        regulatory_passages = official_snapshot_pipeline_inputs(
+            regulatory_snapshot,
+            regulatory_program_names=regulatory_program_names,
+        )
+        regulatory_proofs = official_snapshot_coverage_proofs(
+            regulatory_snapshot,
+            regulatory_program_names=regulatory_program_names,
+        )
 
         companyfacts_transport = session.sec_transport()
         companyfacts_snapshot = SecCompanyFactsCollector(
@@ -867,9 +864,7 @@ class PrimarySourceEndToEndTests(unittest.TestCase):
                     "sec_security_registry": 1,
                     "sec_submissions_root": 1,
                     "sec_companyfacts": 1,
-                    "sec_filing_document": len(
-                        selection.selected_filings
-                    ),
+                    "sec_filing_document": len(selection.selected_filings),
                     "sec_filing_index": len(selection.selected_filings),
                     "issuer_document": 1,
                     "clinical_trials_page": 1,
@@ -903,10 +898,7 @@ class PrimarySourceEndToEndTests(unittest.TestCase):
         )
         filing_metrics = financing_field_metrics(
             capital_passage.reference_key,
-            (
-                resolved_sec_sources["financing"].document.report_date
-                or CUTOFF.date()
-            ),
+            (resolved_sec_sources["financing"].document.report_date or CUTOFF.date()),
         )
         (
             financing_passages,
@@ -993,6 +985,7 @@ class PrimarySourceEndToEndTests(unittest.TestCase):
                 )
                 for fact in financing_facts
             ),
+            regulatory_program_names=regulatory_program_names,
         )
 
         run_repository = InMemoryResearchRunRepository()
@@ -1104,9 +1097,7 @@ class PrimarySourceEndToEndTests(unittest.TestCase):
                     json.dumps(candidate).encode(),
                 ),
                 request(PLATFORM_CASE),
-                trusted_issuer_hosts=(
-                    PLATFORM_CASE.issuer_trusted_hosts
-                ),
+                trusted_issuer_hosts=(PLATFORM_CASE.issuer_trusted_hosts),
             )
 
 
