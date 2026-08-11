@@ -52,6 +52,25 @@ class HostedVerificationV3RegistryTests(unittest.TestCase):
             )
         self.assertEqual(caught.exception.reason_code, "dispatch_target_absent")
 
+    def test_privileged_invoker_probe_requires_target_table_privileges(self) -> None:
+        migration_paths = tuple(sorted(MIGRATION_ROOT.glob("*_iros_*.sql")))
+        with tempfile.TemporaryDirectory() as directory:
+            revoke = Path(directory) / "20260811999999_iros_revoke_probe_target.sql"
+            revoke.write_text(
+                "revoke update on table public.iros_research_runs from service_role;\n"
+            )
+
+            with self.assertRaises(HostedVerificationContractError) as caught:
+                build_default_iros_hosted_execution_contract(
+                    migration_paths=(*migration_paths, revoke),
+                )
+
+        self.assertEqual(caught.exception.reason_code, "mutation_path_unreachable")
+        self.assertIn(
+            "immutable.research_run",
+            caught.exception.blocking_probe_ids,
+        )
+
     def test_commented_object_declaration_cannot_satisfy_target_discovery(
         self,
     ) -> None:

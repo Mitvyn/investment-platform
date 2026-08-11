@@ -53,9 +53,9 @@ class IrosObjectInventoryTests(unittest.TestCase):
             migration_paths=MIGRATION_PATHS
         )
 
-        self.assertEqual(inventory.declared_count, 213)
+        self.assertEqual(inventory.declared_count, 214)
         self.assertEqual(
-            inventory.kind_counts, {"table": 62, "view": 37, "function": 114}
+            inventory.kind_counts, {"table": 62, "view": 37, "function": 115}
         )
         self.assertEqual(inventory.client_exposed_count, 96)
         self.assertEqual(
@@ -86,6 +86,19 @@ class IrosObjectInventoryTests(unittest.TestCase):
 
         by_name = inventory.entries_by_name
         self.assertTrue(set(IROS_HOSTED_VERIFICATION_TARGETS) <= set(by_name))
+        self.assertEqual(
+            by_name["iros_run_hosted_negative_probe"].service_role_privileges,
+            ("execute",),
+        )
+        self.assertEqual(
+            by_name["iros_run_hosted_negative_probe"].authenticated_privileges,
+            (),
+        )
+        self.assertFalse(by_name["iros_run_hosted_negative_probe"].security_definer)
+        self.assertEqual(
+            by_name["iros_research_runs"].service_role_privileges,
+            ("delete", "insert", "select", "update"),
+        )
         self.assertEqual(
             {
                 entry.object_name

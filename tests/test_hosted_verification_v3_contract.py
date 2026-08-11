@@ -251,6 +251,21 @@ class HostedVerificationV3ContractTests(unittest.TestCase):
                 rollback_assertion="required_and_verified",
             )
 
+    def test_privileged_rpc_is_bound_to_exact_probe(self) -> None:
+        with self.assertRaisesRegex(ValueError, "privileged RPC is invalid"):
+            HostedProbeDispatch.freeze(
+                probe_id="immutable.memo",
+                transport_owner="database",
+                operation="attempt_update",
+                target_objects=("iros_committee_memos",),
+                subject_role="audit_permitted",
+                fixture_id="fixture.immutable_memo",
+                mutation_field="requested_disposition",
+                privileged_rpc="iros_run_hosted_negative_probe",
+                expected_constraint="iros_committee_memos_immutable",
+                rollback_assertion="required_and_verified",
+            )
+
     def test_raw_access_event_is_residue_assertion_on_rpc_result(self) -> None:
         with self.assertRaisesRegex(
             ValueError,

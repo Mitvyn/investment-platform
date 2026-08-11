@@ -35,6 +35,7 @@ class HostedVerificationV3CliTests(unittest.TestCase):
         self.assertEqual(payload["error"], "hosted_verification_dry_run_blocked")
         self.assertEqual(payload["reason"], "mutation_path_unreachable")
         self.assertEqual(len(payload["blocking_probe_ids"]), 21)
+        self.assertIn("immutable.research_run", payload["blocking_probe_ids"])
         self.assertGreater(payload["migration_count"], 0)
         self.assertFalse(payload["connection_attempted"])
 

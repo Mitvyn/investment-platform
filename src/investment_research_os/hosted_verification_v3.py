@@ -52,6 +52,9 @@ _SETUP_STATES = frozenset(
         "raw_provider_payload",
     }
 )
+# Static RPC/grant presence is not executable reachability. Add an ID only when
+# the production worker maps that exact dispatch to its authorization-bound port.
+_RUNNABLE_PRIVILEGED_PROBE_IDS: frozenset[str] = frozenset()
 
 
 class HostedVerificationContractError(ValueError):
@@ -135,6 +138,7 @@ class HostedProbeDispatch:
     fixture_id: str
     mutation_field: str | None
     conflict_key: tuple[str, ...] | None
+    privileged_rpc: str | None
     expected_constraint: str | None
     residue_assertion: str | None
     residue_source_probe_id: str | None
@@ -154,6 +158,7 @@ class HostedProbeDispatch:
         fixture_id: str,
         mutation_field: str | None,
         conflict_key: tuple[str, ...] | None = None,
+        privileged_rpc: str | None = None,
         expected_constraint: str | None,
         residue_assertion: str | None = None,
         residue_source_probe_id: str | None = None,
@@ -196,6 +201,13 @@ class HostedProbeDispatch:
             "attempt_invalid_insert",
             "attempt_update",
         }
+        if privileged_rpc is not None and (
+            not mutating
+            or privileged_rpc != "iros_run_hosted_negative_probe"
+            or probe_id != "immutable.research_run"
+            or subject_role != "audit_permitted"
+        ):
+            raise ValueError("hosted verification privileged RPC is invalid")
         ordered_conflict_key = (
             tuple(sorted(set(conflict_key))) if conflict_key is not None else None
         )
@@ -258,6 +270,7 @@ class HostedProbeDispatch:
             "conflict_key": (
                 list(ordered_conflict_key) if ordered_conflict_key is not None else None
             ),
+            "privileged_rpc": privileged_rpc,
             "expected_constraint": expected_constraint,
             "residue_assertion": residue_assertion,
             "residue_source_probe_id": residue_source_probe_id,
@@ -273,6 +286,7 @@ class HostedProbeDispatch:
             fixture_id=fixture_id,
             mutation_field=mutation_field,
             conflict_key=ordered_conflict_key,
+            privileged_rpc=privileged_rpc,
             expected_constraint=expected_constraint,
             residue_assertion=residue_assertion,
             residue_source_probe_id=residue_source_probe_id,
@@ -294,6 +308,7 @@ class HostedProbeDispatch:
                 "conflict_key": (
                     list(self.conflict_key) if self.conflict_key is not None else None
                 ),
+                "privileged_rpc": self.privileged_rpc,
                 "expected_constraint": self.expected_constraint,
                 "residue_assertion": self.residue_assertion,
                 "residue_source_probe_id": self.residue_source_probe_id,
@@ -301,6 +316,13 @@ class HostedProbeDispatch:
                 "rollback_assertion": self.rollback_assertion,
             }
         )
+
+    @property
+    def execution_targets(self) -> tuple[str, ...]:
+        targets = set(self.target_objects)
+        if self.privileged_rpc is not None:
+            targets.add(self.privileged_rpc)
+        return tuple(sorted(targets))
 
 
 @dataclass(frozen=True, slots=True)
@@ -417,7 +439,7 @@ class HostedVerificationExecutionContract:
                 {
                     target
                     for dispatch in ordered_dispatches
-                    for target in dispatch.target_objects
+                    for target in dispatch.execution_targets
                 }
             )
         )
@@ -474,7 +496,7 @@ class HostedVerificationExecutionContract:
                     {
                         target
                         for dispatch in self.dispatches
-                        for target in dispatch.target_objects
+                        for target in dispatch.execution_targets
                     }
                 )
             )
@@ -582,7 +604,7 @@ _MUTATION_TARGETS = {
     "market_series": "iros_market_series",
 }
 _MUTATION_FIELDS = {
-    "research_run": "status",
+    "research_run": "idempotency_key",
     "grader_execution": "execution_state",
     "committee": "committee_status",
     "memo": "requested_disposition",
@@ -714,6 +736,7 @@ def _default_dispatches(
             "transport_owner": "database",
             "mutation_field": None,
             "conflict_key": None,
+            "privileged_rpc": None,
             "expected_constraint": None,
             "residue_assertion": None,
             "residue_source_probe_id": None,
@@ -822,6 +845,11 @@ def _default_dispatches(
                 conflict_key=(
                     _DUPLICATE_KEYS[identity] if prefix == "duplicate" else None
                 ),
+                privileged_rpc=(
+                    "iros_run_hosted_negative_probe"
+                    if probe_id == "immutable.research_run"
+                    else None
+                ),
                 expected_constraint=expected_constraint,
                 rollback_assertion="required_and_verified",
             )
@@ -861,6 +889,7 @@ def build_default_iros_hosted_execution_contract(
         *_MUTATION_TARGETS.values(),
         "iros_readiness_gate_results",
         "iros_read_raw_provider_payload",
+        "iros_run_hosted_negative_probe",
     }
     missing_required_targets = tuple(sorted(required_targets - declared_objects))
     if missing_required_targets:
@@ -885,6 +914,20 @@ def build_default_iros_hosted_execution_contract(
         not in inventory.entries_by_name[
             dispatch.target_objects[0]
         ].authenticated_privileges
+        and not (
+            dispatch.privileged_rpc is not None
+            and dispatch.probe_id in _RUNNABLE_PRIVILEGED_PROBE_IDS
+            and "execute"
+            in inventory.entries_by_name[
+                dispatch.privileged_rpc
+            ].service_role_privileges
+            and {"select", "update"}
+            <= set(
+                inventory.entries_by_name[
+                    dispatch.target_objects[0]
+                ].service_role_privileges
+            )
+        )
     )
     if unreachable_mutations:
         raise HostedVerificationContractError(
