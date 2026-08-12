@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import unittest
 from dataclasses import replace
 from datetime import UTC, date, datetime
@@ -13,6 +14,7 @@ from investment_research_os.evidence_bundles import (
 from investment_research_os.valuation_snapshots import (
     InMemoryValuationSnapshotRepository,
     PersonalResearchValuationSnapshotWorkflow,
+    ValuationSnapshotError,
 )
 from investment_research_os.valuation_snapshots.capital import (
     FrozenEvidenceCapitalPort,
@@ -45,6 +47,8 @@ def metric(
     key: str,
     value: str,
     unit: str,
+    calculation_method: str = "reported",
+    formula: str | None = None,
 ) -> VerifiedMetricSnapshot:
     support = bundle.manifest[0]
     return VerifiedMetricSnapshot(
@@ -54,8 +58,8 @@ def metric(
         unit=unit,
         period_start=None,
         period_end=REPORT_DATE,
-        calculation_method="reported",
-        formula=None,
+        calculation_method=calculation_method,
+        formula=formula,
         supporting_evidence_ids=(support.evidence_id,),
     )
 
@@ -72,7 +76,43 @@ def complete_bundle():
         ("cash_and_cash_equivalents", "80000000", "USD"),
         ("restricted_cash", "5000000", "USD"),
         ("debt_total", "20000000", "USD"),
-        ("other_included_claims", "7000000", "USD"),
+        (
+            "other_enterprise_claims",
+            "7000000",
+            "USD",
+            "derived",
+            "sum(other_enterprise_claim_components)",
+        ),
+        *tuple(
+            (
+                f"other_enterprise_claim:{component_id}",
+                value,
+                "USD",
+                "derived",
+                json.dumps(
+                    {
+                        "policy_version": "biotech-other-enterprise-claims-v1",
+                        "reason_code": (
+                            "other_claims_value_reported"
+                            if value != "0"
+                            else "other_claims_zero_tagged"
+                        ),
+                        "resolution": "reported" if value != "0" else "tagged_zero",
+                        "source_concept": f"us-gaap:{component_id}",
+                    },
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ),
+            )
+            for component_id, value in (
+                ("redeemable_preferred_claim", "0"),
+                ("noncontrolling_interest_claim", "7000000"),
+                ("royalty_monetization_liability", "0"),
+                ("contingent_consideration_claim", "0"),
+                ("pension_underfunded_claim", "0"),
+                ("finance_lease_claim", "0"),
+            )
+        ),
     )
     return replace(
         bundle,
@@ -83,6 +123,75 @@ def complete_bundle():
 
 
 class FrozenEvidenceCapitalPortTests(unittest.TestCase):
+    def test_rejects_claim_resolution_metadata_not_emitted_by_resolver(self) -> None:
+        bundle = complete_bundle()
+        target_key = "other_enterprise_claim:redeemable_preferred_claim"
+        forged = tuple(
+            replace(
+                item,
+                formula=json.dumps(
+                    {
+                        "policy_version": "biotech-other-enterprise-claims-v1",
+                        "reason_code": "made_up_zero_reason",
+                        "resolution": "tagged_zero",
+                        "source_concept": None,
+                    },
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ),
+            )
+            if item.metric_key == target_key
+            else item
+            for item in bundle.metrics
+        )
+
+        with self.assertRaisesRegex(
+            ValuationSnapshotError,
+            "other enterprise claim component resolution invalid",
+        ):
+            FrozenEvidenceCapitalPort().load(
+                replace(bundle, metrics=forged),
+                SESSION,
+            )
+
+    def test_rejects_claim_aggregate_evidence_not_equal_to_component_union(
+        self,
+    ) -> None:
+        bundle = complete_bundle()
+        aggregate = next(
+            item
+            for item in bundle.metrics
+            if item.metric_key == "other_enterprise_claims"
+        )
+        primary_support = bundle.manifest[0]
+        secondary_support = replace(
+            bundle.manifest[1],
+            source_class="sec",
+            canonical_url="https://www.sec.gov/Archives/example/rxrx-note.htm",
+        )
+        bundle = replace(
+            bundle,
+            manifest=(primary_support, secondary_support, *bundle.manifest[2:]),
+        )
+        forged = tuple(
+            replace(
+                aggregate,
+                supporting_evidence_ids=(secondary_support.evidence_id,),
+            )
+            if item is aggregate
+            else item
+            for item in bundle.metrics
+        )
+
+        with self.assertRaisesRegex(
+            ValuationSnapshotError,
+            "other enterprise claim evidence mismatch",
+        ):
+            FrozenEvidenceCapitalPort().load(
+                replace(bundle, metrics=forged),
+                SESSION,
+            )
+
     def test_reconstructs_complete_capital_from_frozen_primary_filing_metrics(
         self,
     ) -> None:
@@ -98,7 +207,8 @@ class FrozenEvidenceCapitalPortTests(unittest.TestCase):
         self.assertEqual(capital.restricted_cash_treatment, "excluded")
         self.assertEqual(capital.included_cash, "75000000")
         self.assertEqual(capital.debt, "20000000")
-        self.assertEqual(capital.other_included_claims, "7000000")
+        self.assertEqual(capital.other_enterprise_claims, "7000000")
+        self.assertEqual(len(capital.other_enterprise_claim_components), 6)
         self.assertEqual(
             tuple(
                 (item.instrument_type, item.diluted_share_increment)
@@ -263,7 +373,7 @@ class FrozenEvidenceCapitalPortTests(unittest.TestCase):
         )
         self.assertEqual(
             wire["enterprise_value"]["formula"],
-            "market_capitalization + debt + other_included_claims - included_cash",
+            "market_capitalization + debt + other_enterprise_claims - included_cash",
         )
         self.assertIn(
             bundle.manifest[0].evidence_id,

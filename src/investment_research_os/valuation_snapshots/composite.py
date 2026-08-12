@@ -309,7 +309,7 @@ class PersonalResearchValuationInputSource:
             capital=freshness.capital,
             corporate_action=corporate_action,
             materiality_assessments=materiality.assessments,
-            valuation_policy_version="personal_research_valuation_v1",
+            valuation_policy_version="personal_research_valuation_v2",
             materiality_policy_version=materiality.policy_version,
             freshness_policy_version=freshness.policy_version,
             source_references=(

@@ -3,6 +3,8 @@ import {
   validateValuationSnapshotStructure,
   type PriceBasis,
   type ValuationSnapshot,
+  type ValuationSnapshotV1,
+  type ValuationSnapshotV2,
   type ValuationSourceReference,
 } from "./valuation-snapshot.ts";
 
@@ -37,8 +39,8 @@ export type PersonalResearchValuationSourceReference = Omit<
   provider_limitation_codes: string[];
 };
 
-export type PersonalResearchValuationSnapshot = Omit<
-  ValuationSnapshot,
+type PersonalResearchValuationSnapshotV1 = Omit<
+  ValuationSnapshotV1,
   "contract_version" | "price_basis" | "source_references"
 > & {
   contract_version: "valuation_snapshot.personal_research.v1";
@@ -47,11 +49,25 @@ export type PersonalResearchValuationSnapshot = Omit<
   source_references: PersonalResearchValuationSourceReference[];
 };
 
+type PersonalResearchValuationSnapshotV2 = Omit<
+  ValuationSnapshotV2,
+  "contract_version" | "price_basis" | "source_references"
+> & {
+  contract_version: "valuation_snapshot.personal_research.v2";
+  valuation_assurance: PersonalResearchValuationAssurance;
+  price_basis: PersonalResearchPriceBasis | null;
+  source_references: PersonalResearchValuationSourceReference[];
+};
+
+export type PersonalResearchValuationSnapshot =
+  | PersonalResearchValuationSnapshotV1
+  | PersonalResearchValuationSnapshotV2;
+
 export type ResearchValuationSnapshot =
   | ValuationSnapshot
   | PersonalResearchValuationSnapshot;
 
-const SNAPSHOT_KEYS = [
+const SNAPSHOT_KEYS_BASE = [
   "contract_version",
   "id",
   "operator_id",
@@ -71,7 +87,6 @@ const SNAPSHOT_KEYS = [
   "cash",
   "cash_treatment",
   "debt",
-  "other_included_claims",
   "market_capitalization",
   "enterprise_value",
   "source_references",
@@ -85,6 +100,17 @@ const SNAPSHOT_KEYS = [
   "freshness_policy_version",
   "materiality_policy_version",
   "created_at",
+] as const;
+
+const SNAPSHOT_KEYS_V1 = [
+  ...SNAPSHOT_KEYS_BASE,
+  "other_included_claims",
+] as const;
+
+const SNAPSHOT_KEYS_V2 = [
+  ...SNAPSHOT_KEYS_BASE,
+  "other_enterprise_claims",
+  "other_enterprise_claim_components",
 ] as const;
 
 const ASSURANCE_KEYS = [
@@ -299,12 +325,19 @@ export function parsePersonalResearchValuationSnapshot(
   value: unknown,
 ): PersonalResearchValuationSnapshot {
   const snapshot = record(value, "Personal Research Valuation Snapshot");
-  exactKeys(snapshot, SNAPSHOT_KEYS, "Personal Research Valuation Snapshot");
   if (
-    snapshot.contract_version !== "valuation_snapshot.personal_research.v1"
+    snapshot.contract_version !== "valuation_snapshot.personal_research.v1" &&
+    snapshot.contract_version !== "valuation_snapshot.personal_research.v2"
   ) {
     throw new TypeError("invalid personal research valuation contract version");
   }
+  exactKeys(
+    snapshot,
+    snapshot.contract_version === "valuation_snapshot.personal_research.v2"
+      ? SNAPSHOT_KEYS_V2
+      : SNAPSHOT_KEYS_V1,
+    "Personal Research Valuation Snapshot",
+  );
   parseAssurance(snapshot.valuation_assurance);
   nonEmptyString(snapshot.as_of_cutoff, "as_of_cutoff");
   const price =
@@ -385,7 +418,17 @@ export function parseResearchValuationSnapshot(
   value: unknown,
 ): ResearchValuationSnapshot {
   const snapshot = record(value, "Research Valuation Snapshot");
-  return snapshot.contract_version === "valuation_snapshot.personal_research.v1"
-    ? parsePersonalResearchValuationSnapshot(snapshot)
-    : parseValuationSnapshot(snapshot);
+  if (
+    snapshot.contract_version === "valuation_snapshot.personal_research.v1" ||
+    snapshot.contract_version === "valuation_snapshot.personal_research.v2"
+  ) {
+    return parsePersonalResearchValuationSnapshot(snapshot);
+  }
+  if (
+    snapshot.contract_version === "valuation_snapshot.v1" ||
+    snapshot.contract_version === "valuation_snapshot.v2"
+  ) {
+    return parseValuationSnapshot(snapshot);
+  }
+  throw new TypeError("invalid research valuation contract version");
 }

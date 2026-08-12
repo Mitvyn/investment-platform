@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, time
 from decimal import Decimal, InvalidOperation
+import json
 from urllib.parse import urlparse
 
 from investment_research_os.evidence_bundles import (
@@ -13,6 +14,7 @@ from investment_research_os.ids import stable_id
 from investment_research_os.valuation_snapshots import (
     CapitalStructureInput,
     DilutionInstrument,
+    EnterpriseClaimComponent,
     MarketSession,
     ValuationSnapshotError,
     ValuationSourceReference,
@@ -32,11 +34,30 @@ _DILUTION_METRICS = (
     ("rsu_shares_outstanding", "restricted_stock_units"),
     ("preferred_shares_outstanding", "preferred_securities"),
 )
+_ENTERPRISE_CLAIM_COMPONENTS = (
+    "redeemable_preferred_claim",
+    "noncontrolling_interest_claim",
+    "royalty_monetization_liability",
+    "contingent_consideration_claim",
+    "pension_underfunded_claim",
+    "finance_lease_claim",
+)
+_ENTERPRISE_CLAIM_METRICS = tuple(
+    (f"other_enterprise_claim:{component_id}", component_id)
+    for component_id in _ENTERPRISE_CLAIM_COMPONENTS
+)
+_CLAIM_RESOLUTION_REASONS = {
+    "reported": "other_claims_value_reported",
+    "tagged_zero": "other_claims_zero_tagged",
+    "explicit_negation": "other_claims_zero_negated",
+    "structural_absence": "other_claims_zero_structural",
+}
 _MONETARY_METRICS = (
     "cash_and_cash_equivalents",
     "restricted_cash",
     "debt_total",
-    "other_included_claims",
+    "other_enterprise_claims",
+    *tuple(key for key, _component_id in _ENTERPRISE_CLAIM_METRICS),
 )
 _REQUIRED_METRICS = (
     "basic_shares_outstanding",
@@ -153,6 +174,66 @@ def _evidence_ids(metric: VerifiedMetricSnapshot) -> tuple[str, ...]:
     return tuple(dict.fromkeys(metric.supporting_evidence_ids))
 
 
+def _enterprise_claim_component(
+    metric: VerifiedMetricSnapshot,
+    *,
+    component_id: str,
+    aggregate: VerifiedMetricSnapshot,
+) -> EnterpriseClaimComponent:
+    if metric.period_end is None or metric.period_end != aggregate.period_end:
+        raise ValuationSnapshotError(
+            f"other enterprise claim component period mismatch:{component_id}"
+        )
+    if metric.calculation_method != "derived" or metric.formula is None:
+        raise ValuationSnapshotError(
+            f"other enterprise claim component resolution invalid:{component_id}"
+        )
+    try:
+        resolution_payload = json.loads(metric.formula)
+    except json.JSONDecodeError as error:
+        raise ValuationSnapshotError(
+            f"other enterprise claim component resolution invalid:{component_id}"
+        ) from error
+    if not isinstance(resolution_payload, dict) or set(resolution_payload) != {
+        "policy_version",
+        "reason_code",
+        "resolution",
+        "source_concept",
+    }:
+        raise ValuationSnapshotError(
+            f"other enterprise claim component resolution invalid:{component_id}"
+        )
+    resolution = resolution_payload["resolution"]
+    reason_code = resolution_payload["reason_code"]
+    source_concept = resolution_payload["source_concept"]
+    if (
+        resolution_payload["policy_version"] != "biotech-other-enterprise-claims-v1"
+        or resolution not in _CLAIM_RESOLUTION_REASONS
+        or reason_code != _CLAIM_RESOLUTION_REASONS.get(resolution)
+        or (source_concept is not None and not isinstance(source_concept, str))
+        or (resolution in {"reported", "tagged_zero"}) is not bool(source_concept)
+    ):
+        raise ValuationSnapshotError(
+            f"other enterprise claim component resolution invalid:{component_id}"
+        )
+    value = _number(metric)
+    if (resolution == "reported") is not (value > 0):
+        raise ValuationSnapshotError(
+            f"other enterprise claim component resolution invalid:{component_id}"
+        )
+    return EnterpriseClaimComponent(
+        component_id=component_id,
+        value=_canonical_decimal(value),
+        unit=metric.unit,
+        period_end=metric.period_end,
+        effective_at=_effective_at(metric),
+        resolution=resolution,
+        reason_code=reason_code,
+        source_concept=source_concept,
+        supporting_evidence_ids=_evidence_ids(metric),
+    )
+
+
 class FrozenEvidenceCapitalPort:
     """Build capital inputs only from one immutable primary-evidence bundle."""
 
@@ -241,7 +322,29 @@ class FrozenEvidenceCapitalPort:
             *(instrument.effective_at for instrument in dilution_instruments),
         )
         debt = metrics["debt_total"]
-        other_claims = metrics["other_included_claims"]
+        other_claims = metrics["other_enterprise_claims"]
+        claim_components = tuple(
+            _enterprise_claim_component(
+                metrics[metric_key],
+                component_id=component_id,
+                aggregate=other_claims,
+            )
+            for metric_key, component_id in _ENTERPRISE_CLAIM_METRICS
+        )
+        if sum(
+            (Decimal(component.value) for component in claim_components),
+            Decimal(0),
+        ) != _number(other_claims):
+            raise ValuationSnapshotError("other enterprise claim total mismatch")
+        component_evidence_ids = tuple(
+            dict.fromkeys(
+                evidence_id
+                for component in claim_components
+                for evidence_id in component.supporting_evidence_ids
+            )
+        )
+        if set(component_evidence_ids) != set(_evidence_ids(other_claims)):
+            raise ValuationSnapshotError("other enterprise claim evidence mismatch")
         cash_effective_at = _effective_at(cash)
         current_reason = "latest_required_filing_at_cutoff"
         capital = CapitalStructureInput(
@@ -251,7 +354,7 @@ class FrozenEvidenceCapitalPort:
             restricted_cash=_canonical_decimal(restricted_cash_value),
             restricted_cash_treatment="excluded",
             debt=_canonical_decimal(_number(debt)),
-            other_included_claims=_canonical_decimal(_number(other_claims)),
+            other_enterprise_claims=_canonical_decimal(_number(other_claims)),
             included_cash=_canonical_decimal(cash_value - restricted_cash_value),
             currency="USD",
             basic_shares_effective_at=_effective_at(basic),
@@ -260,21 +363,22 @@ class FrozenEvidenceCapitalPort:
             restricted_cash_effective_at=cash_effective_at,
             included_cash_effective_at=cash_effective_at,
             debt_effective_at=_effective_at(debt),
-            other_included_claims_effective_at=_effective_at(other_claims),
+            other_enterprise_claims_effective_at=_effective_at(other_claims),
             basic_shares_evidence_ids=_evidence_ids(basic),
             diluted_shares_evidence_ids=diluted_evidence_ids,
             cash_evidence_ids=_evidence_ids(cash),
             restricted_cash_evidence_ids=_evidence_ids(restricted_cash),
             debt_evidence_ids=_evidence_ids(debt),
-            other_included_claims_evidence_ids=_evidence_ids(other_claims),
+            other_enterprise_claims_evidence_ids=_evidence_ids(other_claims),
             basic_shares_freshness_reason_code=current_reason,
             diluted_shares_freshness_reason_code=current_reason,
             cash_freshness_reason_code=current_reason,
             restricted_cash_freshness_reason_code=current_reason,
             debt_freshness_reason_code=current_reason,
-            other_included_claims_freshness_reason_code=current_reason,
+            other_enterprise_claims_freshness_reason_code=current_reason,
             freshness_policy_version=FRESHNESS_POLICY_VERSION,
             dilution_instruments=dilution_instruments,
+            other_enterprise_claim_components=claim_components,
         )
         source_references = tuple(
             ValuationSourceReference(
@@ -312,7 +416,7 @@ class FrozenEvidenceCapitalFreshnessPort:
             capital.cash_freshness_state,
             capital.restricted_cash_freshness_state,
             capital.debt_freshness_state,
-            capital.other_included_claims_freshness_state,
+            capital.other_enterprise_claims_freshness_state,
         )
         if any(state != "current" for state in states):
             raise ValuationSnapshotError("capital_freshness_not_current")
@@ -323,7 +427,7 @@ class FrozenEvidenceCapitalFreshnessPort:
             capital.restricted_cash_effective_at,
             capital.included_cash_effective_at,
             capital.debt_effective_at,
-            capital.other_included_claims_effective_at,
+            capital.other_enterprise_claims_effective_at,
         )
         if any(value > bundle.as_of_cutoff for value in effective_times):
             raise ValuationSnapshotError("capital_effective_time_after_cutoff")

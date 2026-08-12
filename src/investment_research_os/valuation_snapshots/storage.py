@@ -17,6 +17,7 @@ from . import (
     CorporateActionReconciliation,
     DerivedValuation,
     DilutionInstrument,
+    EnterpriseClaimComponent,
     MarketSession,
     MaterialityAssessment,
     PriceObservation,
@@ -188,6 +189,15 @@ class SupabaseValuationSnapshotRepository:
         diluted = _optional_mapping(wire["fully_diluted_shares"])
         cash = _optional_mapping(wire["cash"])
         debt = _optional_mapping(wire["debt"])
+        cash_treatment = _mapping(wire["cash_treatment"])
+        reported_cash = _optional_mapping(cash_treatment["reported_cash"])
+        restricted_cash = _optional_mapping(cash_treatment["restricted_cash"])
+        other_enterprise_claims = _optional_mapping(
+            wire["other_enterprise_claims"]
+        )
+        other_claim_components = _sequence(
+            wire["other_enterprise_claim_components"]
+        )
         market_cap = _optional_mapping(wire["market_capitalization"])
         enterprise_value = _optional_mapping(wire["enterprise_value"])
         records: list[tuple[str, str, Mapping[str, Any]]] = [
@@ -274,8 +284,11 @@ class SupabaseValuationSnapshotRepository:
         capital = (
             ("basic_shares_outstanding", basic),
             ("fully_diluted_shares", diluted),
-            ("cash", cash),
+            ("included_cash", cash),
+            ("reported_cash", reported_cash),
+            ("restricted_cash", restricted_cash),
             ("debt", debt),
+            ("other_enterprise_claims", other_enterprise_claims),
         )
         records.extend(
             _capital_record(snapshot, input_type, measure)
@@ -285,6 +298,10 @@ class SupabaseValuationSnapshotRepository:
         records.extend(
             _dilution_record(snapshot, _mapping(instrument))
             for instrument in _sequence(wire["dilution_instruments"])
+        )
+        records.extend(
+            _other_claim_component_record(snapshot, _mapping(component))
+            for component in other_claim_components
         )
         calculations = [
             _fully_diluted_calculation(diluted),
@@ -392,6 +409,38 @@ def _dilution_record(
     )
 
 
+def _other_claim_component_record(
+    snapshot: ValuationSnapshot,
+    component: Mapping[str, Any],
+) -> tuple[str, str, Mapping[str, Any]]:
+    component_id = str(component["component_id"])
+    return (
+        "iros_valuation_other_claim_components",
+        "operator_id,valuation_snapshot_id,component_id",
+        {
+            "id": stable_id(
+                snapshot.operator_id,
+                "valuation-other-claim-component",
+                f"{snapshot.id}:{component_id}",
+            ),
+            "operator_id": snapshot.operator_id,
+            "valuation_snapshot_id": snapshot.id,
+            "component_id": component_id,
+            "value": component["value"],
+            "unit": component["unit"],
+            "period_end": component["period_end"],
+            "effective_at": component["effective_at"],
+            "resolution": component["resolution"],
+            "reason_code": component["reason_code"],
+            "source_concept": component["source_concept"],
+            "supporting_evidence_ids": component["supporting_evidence_ids"],
+            "policy_version": component["policy_version"],
+            "canonical_payload": component,
+            "created_at": snapshot.created_at.isoformat(),
+        },
+    )
+
+
 def _fully_diluted_calculation(
     diluted: Mapping[str, Any] | None,
 ) -> Mapping[str, Any] | None:
@@ -490,7 +539,10 @@ def _capital_from_wire(payload: Mapping[str, Any]) -> CapitalStructureInput:
     cash_treatment = _mapping(payload["cash_treatment"])
     reported_cash = _mapping(cash_treatment["reported_cash"])
     restricted_cash = _mapping(cash_treatment["restricted_cash"])
-    other_claims = _mapping(payload["other_included_claims"])
+    other_claims_payload = payload.get("other_enterprise_claims")
+    if other_claims_payload is None:
+        other_claims_payload = payload["other_included_claims"]
+    other_claims = _mapping(other_claims_payload)
     return CapitalStructureInput(
         basic_shares_outstanding=str(basic["value"]),
         fully_diluted_shares=str(diluted["value"]),
@@ -498,7 +550,7 @@ def _capital_from_wire(payload: Mapping[str, Any]) -> CapitalStructureInput:
         restricted_cash=str(restricted_cash["value"]),
         restricted_cash_treatment=str(cash_treatment["restricted_cash_treatment"]),
         debt=str(debt["value"]),
-        other_included_claims=str(other_claims["value"]),
+        other_enterprise_claims=str(other_claims["value"]),
         included_cash=str(included_cash["value"]),
         currency=str(payload["currency"]),
         basic_shares_effective_at=_required_timestamp(basic["effective_at"]),
@@ -509,7 +561,7 @@ def _capital_from_wire(payload: Mapping[str, Any]) -> CapitalStructureInput:
         ),
         included_cash_effective_at=_required_timestamp(included_cash["effective_at"]),
         debt_effective_at=_required_timestamp(debt["effective_at"]),
-        other_included_claims_effective_at=_required_timestamp(
+        other_enterprise_claims_effective_at=_required_timestamp(
             other_claims["effective_at"]
         ),
         basic_shares_evidence_ids=tuple(basic["supporting_evidence_ids"]),
@@ -517,7 +569,7 @@ def _capital_from_wire(payload: Mapping[str, Any]) -> CapitalStructureInput:
         cash_evidence_ids=tuple(reported_cash["supporting_evidence_ids"]),
         restricted_cash_evidence_ids=tuple(restricted_cash["supporting_evidence_ids"]),
         debt_evidence_ids=tuple(debt["supporting_evidence_ids"]),
-        other_included_claims_evidence_ids=tuple(
+        other_enterprise_claims_evidence_ids=tuple(
             other_claims["supporting_evidence_ids"]
         ),
         basic_shares_freshness_state=str(basic["freshness_state"]),
@@ -532,8 +584,8 @@ def _capital_from_wire(payload: Mapping[str, Any]) -> CapitalStructureInput:
         ),
         debt_freshness_state=str(debt["freshness_state"]),
         debt_freshness_reason_code=str(debt["freshness_reason_code"]),
-        other_included_claims_freshness_state=str(other_claims["freshness_state"]),
-        other_included_claims_freshness_reason_code=str(
+        other_enterprise_claims_freshness_state=str(other_claims["freshness_state"]),
+        other_enterprise_claims_freshness_reason_code=str(
             other_claims["freshness_reason_code"]
         ),
         freshness_policy_version=str(basic["freshness_policy_version"]),
@@ -546,6 +598,28 @@ def _capital_from_wire(payload: Mapping[str, Any]) -> CapitalStructureInput:
                 supporting_evidence_ids=tuple(item["supporting_evidence_ids"]),
             )
             for raw in _sequence(payload["dilution_instruments"])
+            for item in (_mapping(raw),)
+        ),
+        other_enterprise_claim_components=tuple(
+            EnterpriseClaimComponent(
+                component_id=str(item["component_id"]),
+                value=str(item["value"]),
+                unit=str(item["unit"]),
+                period_end=date.fromisoformat(str(item["period_end"])),
+                effective_at=_required_timestamp(item["effective_at"]),
+                resolution=str(item["resolution"]),
+                reason_code=str(item["reason_code"]),
+                source_concept=(
+                    str(item["source_concept"])
+                    if item.get("source_concept") is not None
+                    else None
+                ),
+                supporting_evidence_ids=tuple(item["supporting_evidence_ids"]),
+                policy_version=str(item["policy_version"]),
+            )
+            for raw in _sequence(
+                payload.get("other_enterprise_claim_components", [])
+            )
             for item in (_mapping(raw),)
         ),
     )
@@ -577,10 +651,14 @@ def _snapshot_from_wire(payload: Mapping[str, Any]) -> ValuationSnapshot:
     contract_version = str(payload["contract_version"])
     if contract_version not in {
         "valuation_snapshot.v1",
+        "valuation_snapshot.v2",
         "valuation_snapshot.personal_research.v1",
+        "valuation_snapshot.personal_research.v2",
     }:
         raise ValueError("unsupported valuation snapshot contract")
-    personal_research = contract_version == "valuation_snapshot.personal_research.v1"
+    personal_research = contract_version.startswith(
+        "valuation_snapshot.personal_research."
+    )
     assurance = None
     if personal_research:
         raw_assurance = _mapping(payload["valuation_assurance"])

@@ -803,7 +803,7 @@ class PersistentCommitteeWorkerCompositionTests(unittest.TestCase):
             captures.bind_to_run(
                 persisted,
                 run,
-                evidence_policy_version="biotech-primary-evidence-v2",
+                evidence_policy_version="biotech-primary-evidence-v3",
                 bound_at=datetime(2026, 5, 7, 4, tzinfo=UTC),
             )
             runs = InMemoryResearchRunRepository()

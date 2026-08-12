@@ -32,6 +32,29 @@ export type CapitalMeasure = {
   freshness_policy_version: string;
 };
 
+export type EnterpriseClaimComponent = {
+  component_id:
+    | "redeemable_preferred_claim"
+    | "noncontrolling_interest_claim"
+    | "royalty_monetization_liability"
+    | "contingent_consideration_claim"
+    | "pension_underfunded_claim"
+    | "finance_lease_claim";
+  value: string;
+  unit: string;
+  period_end: string;
+  effective_at: string;
+  resolution:
+    | "reported"
+    | "tagged_zero"
+    | "explicit_negation"
+    | "structural_absence";
+  reason_code: string;
+  source_concept: string | null;
+  supporting_evidence_ids: string[];
+  policy_version: "biotech-other-enterprise-claims-v1";
+};
+
 export type CashTreatment = {
   reported_cash: CapitalMeasure;
   restricted_cash: CapitalMeasure;
@@ -126,8 +149,8 @@ export type MarketMateriality = {
   >;
 };
 
-export type ValuationSnapshot = {
-  contract_version: "valuation_snapshot.v1";
+type ValuationSnapshotBase = {
+  contract_version: string;
   id: string;
   operator_id: string;
   research_run_id: string;
@@ -145,7 +168,6 @@ export type ValuationSnapshot = {
   cash: CapitalMeasure | null;
   cash_treatment: CashTreatment | null;
   debt: CapitalMeasure | null;
-  other_included_claims: CapitalMeasure | null;
   market_capitalization: DerivedValuation | null;
   enterprise_value: DerivedValuation | null;
   source_references: ValuationSourceReference[];
@@ -161,7 +183,20 @@ export type ValuationSnapshot = {
   created_at: string;
 };
 
-const SNAPSHOT_KEYS = [
+export type ValuationSnapshotV1 = ValuationSnapshotBase & {
+  contract_version: "valuation_snapshot.v1";
+  other_included_claims: CapitalMeasure | null;
+};
+
+export type ValuationSnapshotV2 = ValuationSnapshotBase & {
+  contract_version: "valuation_snapshot.v2";
+  other_enterprise_claims: CapitalMeasure;
+  other_enterprise_claim_components: EnterpriseClaimComponent[];
+};
+
+export type ValuationSnapshot = ValuationSnapshotV1 | ValuationSnapshotV2;
+
+const SNAPSHOT_KEYS_BASE = [
   "contract_version",
   "id",
   "operator_id",
@@ -180,7 +215,6 @@ const SNAPSHOT_KEYS = [
   "cash",
   "cash_treatment",
   "debt",
-  "other_included_claims",
   "market_capitalization",
   "enterprise_value",
   "source_references",
@@ -194,6 +228,17 @@ const SNAPSHOT_KEYS = [
   "freshness_policy_version",
   "materiality_policy_version",
   "created_at",
+] as const;
+
+const SNAPSHOT_KEYS_V1 = [
+  ...SNAPSHOT_KEYS_BASE,
+  "other_included_claims",
+] as const;
+
+const SNAPSHOT_KEYS_V2 = [
+  ...SNAPSHOT_KEYS_BASE,
+  "other_enterprise_claims",
+  "other_enterprise_claim_components",
 ] as const;
 
 const PRICE_BASIS_KEYS = [
@@ -223,6 +268,28 @@ const CAPITAL_MEASURE_KEYS = [
   "freshness_state",
   "freshness_reason_code",
   "freshness_policy_version",
+] as const;
+
+const ENTERPRISE_CLAIM_COMPONENT_KEYS = [
+  "component_id",
+  "value",
+  "unit",
+  "period_end",
+  "effective_at",
+  "resolution",
+  "reason_code",
+  "source_concept",
+  "supporting_evidence_ids",
+  "policy_version",
+] as const;
+
+const ENTERPRISE_CLAIM_COMPONENT_IDS = [
+  "redeemable_preferred_claim",
+  "noncontrolling_interest_claim",
+  "royalty_monetization_liability",
+  "contingent_consideration_claim",
+  "pension_underfunded_claim",
+  "finance_lease_claim",
 ] as const;
 
 const CASH_TREATMENT_KEYS = [
@@ -371,6 +438,25 @@ function subtractDecimalValues(left: string, right: string): string {
   const scale = Math.max(leftParts.scale, rightParts.scale);
   const coefficient =
     leftParts.coefficient * BigInt(10) ** BigInt(scale - leftParts.scale) -
+    rightParts.coefficient * BigInt(10) ** BigInt(scale - rightParts.scale);
+  if (scale === 0) return coefficient.toString();
+  const sign = coefficient < BigInt(0) ? "-" : "";
+  const digits = (coefficient < BigInt(0) ? -coefficient : coefficient)
+    .toString()
+    .padStart(scale + 1, "0");
+  const integer = digits.slice(0, -scale);
+  const fraction = digits.slice(-scale).replace(/0+$/, "");
+  return fraction.length === 0
+    ? `${sign}${integer}`
+    : `${sign}${integer}.${fraction}`;
+}
+
+function addDecimalValues(left: string, right: string): string {
+  const leftParts = decimalParts(left);
+  const rightParts = decimalParts(right);
+  const scale = Math.max(leftParts.scale, rightParts.scale);
+  const coefficient =
+    leftParts.coefficient * BigInt(10) ** BigInt(scale - leftParts.scale) +
     rightParts.coefficient * BigInt(10) ** BigInt(scale - rightParts.scale);
   if (scale === 0) return coefficient.toString();
   const sign = coefficient < BigInt(0) ? "-" : "";
@@ -580,6 +666,63 @@ function parseCashTreatment(
     throw new TypeError("restricted cash reconciliation mismatch");
   }
   return treatment as CashTreatment;
+}
+
+function parseEnterpriseClaimComponent(
+  value: unknown,
+  cutoff: string,
+  aggregate: CapitalMeasure,
+): EnterpriseClaimComponent {
+  const component = record(value, "other enterprise claim component");
+  exactKeys(
+    component,
+    ENTERPRISE_CLAIM_COMPONENT_KEYS,
+    "other enterprise claim component",
+  );
+  oneOf(
+    component.component_id,
+    ENTERPRISE_CLAIM_COMPONENT_IDS,
+    "other enterprise claim component ID",
+  );
+  decimal(component.value, "other enterprise claim component value");
+  if (component.unit !== aggregate.unit) {
+    throw new TypeError("other enterprise claim component unit mismatch");
+  }
+  date(component.period_end, "other enterprise claim component period_end");
+  timestamp(
+    component.effective_at,
+    "other enterprise claim component effective_at",
+  );
+  if (
+    Date.parse(component.effective_at as string) > Date.parse(cutoff) ||
+    (component.effective_at as string).slice(0, 10) !== component.period_end ||
+    component.period_end !== aggregate.effective_at.slice(0, 10)
+  ) {
+    throw new TypeError("other enterprise claim component timing mismatch");
+  }
+  oneOf(
+    component.resolution,
+    ["reported", "tagged_zero", "explicit_negation", "structural_absence"],
+    "other enterprise claim component resolution",
+  );
+  nonEmptyString(component.reason_code, "other enterprise claim reason code");
+  if (component.source_concept !== null) {
+    nonEmptyString(
+      component.source_concept,
+      "other enterprise claim source concept",
+    );
+  }
+  stringArray(
+    component.supporting_evidence_ids,
+    "other enterprise claim supporting evidence IDs",
+  );
+  if ((component.supporting_evidence_ids as string[]).length === 0) {
+    throw new TypeError("other enterprise claim requires supporting evidence");
+  }
+  if (component.policy_version !== "biotech-other-enterprise-claims-v1") {
+    throw new TypeError("invalid other enterprise claim policy");
+  }
+  return component as EnterpriseClaimComponent;
 }
 
 function parseDilutionInstrument(
@@ -805,12 +948,19 @@ export function validateValuationSnapshotStructure(
   if (typeof snapshot.currency !== "string" || !/^[A-Z]{3}$/.test(snapshot.currency)) {
     throw new TypeError("invalid currency");
   }
+  const v2Contract =
+    snapshot.contract_version === "valuation_snapshot.v2" ||
+    snapshot.contract_version === "valuation_snapshot.personal_research.v2";
+  const claimMeasureKey =
+    v2Contract
+      ? "other_enterprise_claims"
+      : "other_included_claims";
   const measures = [
     "basic_shares_outstanding",
     "fully_diluted_shares",
     "cash",
     "debt",
-    "other_included_claims",
+    claimMeasureKey,
   ] as const;
   const parsedMeasures = new Map<string, CapitalMeasure>();
   for (const label of measures) {
@@ -833,6 +983,43 @@ export function validateValuationSnapshotStructure(
           snapshot.as_of_cutoff as string,
           parsedMeasures.get("cash") ?? null,
         );
+  let enterpriseClaimComponents: EnterpriseClaimComponent[] = [];
+  if (v2Contract) {
+    const aggregate = parsedMeasures.get("other_enterprise_claims") ?? null;
+    if (aggregate === null) {
+      throw new TypeError("other enterprise claim aggregate is required");
+    }
+    if (!Array.isArray(snapshot.other_enterprise_claim_components)) {
+      throw new TypeError("invalid other enterprise claim components");
+    }
+    enterpriseClaimComponents = snapshot.other_enterprise_claim_components.map(
+      (component) =>
+        parseEnterpriseClaimComponent(
+          component,
+          snapshot.as_of_cutoff as string,
+          aggregate,
+        ),
+    );
+    const componentIds = enterpriseClaimComponents.map(
+      (component) => component.component_id,
+    );
+    if (
+      componentIds.length !== ENTERPRISE_CLAIM_COMPONENT_IDS.length ||
+      new Set(componentIds).size !== ENTERPRISE_CLAIM_COMPONENT_IDS.length ||
+      ENTERPRISE_CLAIM_COMPONENT_IDS.some(
+        (componentId) => !componentIds.includes(componentId),
+      )
+    ) {
+      throw new TypeError("other enterprise claim component vector is incomplete");
+    }
+    const componentTotal = enterpriseClaimComponents.reduce(
+      (total, component) => addDecimalValues(total, component.value),
+      "0",
+    );
+    if (compareDecimalValues(componentTotal, aggregate.value) !== 0) {
+      throw new TypeError("other enterprise claim total mismatch");
+    }
+  }
   if (!Array.isArray(snapshot.dilution_instruments)) {
     throw new TypeError("invalid dilution_instruments");
   }
@@ -923,6 +1110,7 @@ export function validateValuationSnapshotStructure(
     ...dilution,
     ...(marketCapitalization === null ? [] : [marketCapitalization]),
     ...(enterpriseValue === null ? [] : [enterpriseValue]),
+    ...enterpriseClaimComponents,
   ]) {
     if (item.supporting_evidence_ids.some((id) => !declaredEvidence.has(id))) {
       throw new TypeError("unresolved supporting evidence");
@@ -1040,11 +1228,17 @@ export function validateValuationSnapshotStructure(
 
 export function parseValuationSnapshot(value: unknown): ValuationSnapshot {
   const snapshot = record(value, "Valuation Snapshot");
-  exactKeys(snapshot, SNAPSHOT_KEYS, "Valuation Snapshot");
   oneOf(
     snapshot.contract_version,
-    ["valuation_snapshot.v1"],
+    ["valuation_snapshot.v1", "valuation_snapshot.v2"],
     "contract_version",
+  );
+  exactKeys(
+    snapshot,
+    snapshot.contract_version === "valuation_snapshot.v2"
+      ? SNAPSHOT_KEYS_V2
+      : SNAPSHOT_KEYS_V1,
+    "Valuation Snapshot",
   );
   const priceBasis =
     snapshot.price_basis === null

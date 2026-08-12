@@ -1,0 +1,260 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://investment-research-os.local/contracts/valuation_snapshot.personal_research.v2.schema.json",
+  "title": "Personal Research Valuation Snapshot v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "contract_version",
+    "id",
+    "operator_id",
+    "research_run_id",
+    "evidence_bundle_id",
+    "evidence_bundle_hash",
+    "security_id",
+    "as_of_cutoff",
+    "snapshot_status",
+    "invalid_reason_codes",
+    "currency",
+    "valuation_assurance",
+    "price_basis",
+    "basic_shares_outstanding",
+    "dilution_instruments",
+    "fully_diluted_shares",
+    "cash",
+    "cash_treatment",
+    "debt",
+    "other_enterprise_claims",
+    "other_enterprise_claim_components",
+    "market_capitalization",
+    "enterprise_value",
+    "source_references",
+    "evidence_ids",
+    "calculation_ids",
+    "corporate_action_reconciliation",
+    "evidence_materiality",
+    "price_information_state",
+    "market_relative_analysis_permitted",
+    "price_basis_policy_version",
+    "freshness_policy_version",
+    "materiality_policy_version",
+    "created_at"
+  ],
+  "properties": {
+    "contract_version": {
+      "const": "valuation_snapshot.personal_research.v2"
+    },
+    "id": { "$ref": "valuation-snapshot.v2.schema.json#/$defs/uuid" },
+    "operator_id": { "$ref": "valuation-snapshot.v2.schema.json#/$defs/uuid" },
+    "research_run_id": { "$ref": "valuation-snapshot.v2.schema.json#/$defs/uuid" },
+    "evidence_bundle_id": { "$ref": "valuation-snapshot.v2.schema.json#/$defs/uuid" },
+    "evidence_bundle_hash": { "$ref": "valuation-snapshot.v2.schema.json#/$defs/sha256" },
+    "security_id": { "$ref": "valuation-snapshot.v2.schema.json#/$defs/uuid" },
+    "as_of_cutoff": { "$ref": "valuation-snapshot.v2.schema.json#/$defs/timestamp" },
+    "snapshot_status": { "enum": ["valid", "invalid"] },
+    "invalid_reason_codes": { "$ref": "valuation-snapshot.v2.schema.json#/$defs/non_empty_string_array" },
+    "currency": { "type": "string", "pattern": "^[A-Z]{3}$" },
+    "valuation_assurance": { "$ref": "#/$defs/valuation_assurance" },
+    "price_basis": {
+      "oneOf": [{ "$ref": "#/$defs/price_basis" }, { "type": "null" }]
+    },
+    "basic_shares_outstanding": {
+      "oneOf": [{ "$ref": "valuation-snapshot.v2.schema.json#/$defs/capital_measure" }, { "type": "null" }]
+    },
+    "dilution_instruments": {
+      "type": "array",
+      "items": { "$ref": "valuation-snapshot.v2.schema.json#/$defs/dilution_instrument" }
+    },
+    "fully_diluted_shares": {
+      "oneOf": [{ "$ref": "valuation-snapshot.v2.schema.json#/$defs/capital_measure" }, { "type": "null" }]
+    },
+    "cash": {
+      "oneOf": [{ "$ref": "valuation-snapshot.v2.schema.json#/$defs/capital_measure" }, { "type": "null" }]
+    },
+    "cash_treatment": {
+      "oneOf": [{ "$ref": "valuation-snapshot.v2.schema.json#/$defs/cash_treatment" }, { "type": "null" }]
+    },
+    "debt": {
+      "oneOf": [{ "$ref": "valuation-snapshot.v2.schema.json#/$defs/capital_measure" }, { "type": "null" }]
+    },
+    "other_enterprise_claims": { "$ref": "valuation-snapshot.v2.schema.json#/$defs/capital_measure" },
+    "other_enterprise_claim_components": {
+      "type": "array",
+      "minItems": 6,
+      "maxItems": 6,
+      "items": { "$ref": "valuation-snapshot.v2.schema.json#/$defs/enterprise_claim_component" }
+    },
+    "market_capitalization": {
+      "oneOf": [{ "$ref": "valuation-snapshot.v2.schema.json#/$defs/derived_valuation" }, { "type": "null" }]
+    },
+    "enterprise_value": {
+      "oneOf": [{ "$ref": "valuation-snapshot.v2.schema.json#/$defs/derived_valuation" }, { "type": "null" }]
+    },
+    "source_references": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/source_reference" }
+    },
+    "evidence_ids": { "$ref": "valuation-snapshot.v2.schema.json#/$defs/non_empty_string_array" },
+    "calculation_ids": { "$ref": "valuation-snapshot.v2.schema.json#/$defs/non_empty_string_array" },
+    "corporate_action_reconciliation": {
+      "$ref": "valuation-snapshot.v2.schema.json#/$defs/corporate_action_reconciliation"
+    },
+    "evidence_materiality": {
+      "type": "array",
+      "items": { "$ref": "valuation-snapshot.v2.schema.json#/$defs/market_materiality" }
+    },
+    "price_information_state": {
+      "enum": ["aligned", "pre_material_evidence", "indeterminate"]
+    },
+    "market_relative_analysis_permitted": { "type": "boolean" },
+    "price_basis_policy_version": { "$ref": "valuation-snapshot.v2.schema.json#/$defs/non_empty_string" },
+    "freshness_policy_version": { "$ref": "valuation-snapshot.v2.schema.json#/$defs/non_empty_string" },
+    "materiality_policy_version": { "$ref": "valuation-snapshot.v2.schema.json#/$defs/non_empty_string" },
+    "created_at": { "$ref": "valuation-snapshot.v2.schema.json#/$defs/timestamp" }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "snapshot_status": { "const": "valid" } } },
+      "then": {
+        "properties": {
+          "invalid_reason_codes": { "maxItems": 0 },
+          "price_basis": {
+            "allOf": [
+              { "$ref": "#/$defs/price_basis" },
+              {
+                "properties": {
+                  "market_status": { "const": "closed" },
+                  "halt_verification_status": { "const": "verified_not_halted" },
+                  "corporate_action_adjustment_status": { "const": "unadjusted" }
+                }
+              }
+            ]
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "invalid_reason_codes": { "minItems": 1 },
+          "market_relative_analysis_permitted": { "const": false }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "price_information_state": { "const": "aligned" } }
+      },
+      "else": {
+        "properties": {
+          "market_relative_analysis_permitted": { "const": false }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "valuation_assurance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["level", "usage_scope", "rights_assurance", "limitation_codes"],
+      "properties": {
+        "level": { "const": "personal_research" },
+        "usage_scope": { "const": "private_personal_research" },
+        "rights_assurance": { "const": "not_independently_verified" },
+        "limitation_codes": {
+          "type": "array",
+          "uniqueItems": true,
+          "allOf": [
+            { "contains": { "const": "not_primary_venue_official_close" } },
+            { "contains": { "const": "not_institutional_grade" } },
+            { "contains": { "const": "not_for_trade_execution" } }
+          ],
+          "items": { "$ref": "valuation-snapshot.v2.schema.json#/$defs/non_empty_string" }
+        }
+      }
+    },
+    "price_basis": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "input_id",
+        "price_type",
+        "session_type",
+        "session_date",
+        "primary_listing_exchange",
+        "share_price",
+        "price_timestamp",
+        "timestamp_basis",
+        "market_calendar_version",
+        "market_status",
+        "halt_verification_status",
+        "corporate_action_adjustment_status",
+        "provider_source_reference_id"
+      ],
+      "properties": {
+        "input_id": { "$ref": "valuation-snapshot.v2.schema.json#/$defs/non_empty_string" },
+        "price_type": { "const": "verified_consolidated_end_of_day_close" },
+        "session_type": { "const": "regular_us_trading_session" },
+        "session_date": { "$ref": "valuation-snapshot.v2.schema.json#/$defs/date" },
+        "primary_listing_exchange": { "$ref": "valuation-snapshot.v2.schema.json#/$defs/non_empty_string" },
+        "share_price": { "$ref": "valuation-snapshot.v2.schema.json#/$defs/decimal" },
+        "price_timestamp": { "$ref": "valuation-snapshot.v2.schema.json#/$defs/timestamp" },
+        "timestamp_basis": { "const": "market_calendar_session_close" },
+        "market_calendar_version": { "$ref": "valuation-snapshot.v2.schema.json#/$defs/non_empty_string" },
+        "market_status": { "enum": ["closed", "halted"] },
+        "halt_verification_status": {
+          "enum": ["verified_not_halted", "halted", "indeterminate"]
+        },
+        "corporate_action_adjustment_status": {
+          "enum": ["unadjusted", "indeterminate"]
+        },
+        "provider_source_reference_id": { "$ref": "valuation-snapshot.v2.schema.json#/$defs/non_empty_string" }
+      }
+    },
+    "source_reference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source_reference_id",
+        "source_type",
+        "provider",
+        "provider_plan_id",
+        "provider_contract_status",
+        "provider_limitation_codes",
+        "locator",
+        "published_at",
+        "retrieved_at",
+        "effective_at",
+        "response_sha256"
+      ],
+      "properties": {
+        "source_reference_id": { "$ref": "valuation-snapshot.v2.schema.json#/$defs/non_empty_string" },
+        "source_type": { "enum": ["personal_market_data", "primary_filing"] },
+        "provider": { "$ref": "valuation-snapshot.v2.schema.json#/$defs/non_empty_string" },
+        "provider_plan_id": {
+          "oneOf": [{ "$ref": "valuation-snapshot.v2.schema.json#/$defs/non_empty_string" }, { "type": "null" }]
+        },
+        "provider_contract_status": {
+          "oneOf": [{ "$ref": "valuation-snapshot.v2.schema.json#/$defs/non_empty_string" }, { "type": "null" }]
+        },
+        "provider_limitation_codes": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]{0,127}$"
+          }
+        },
+        "locator": { "$ref": "valuation-snapshot.v2.schema.json#/$defs/non_empty_string" },
+        "published_at": {
+          "oneOf": [{ "$ref": "valuation-snapshot.v2.schema.json#/$defs/timestamp" }, { "type": "null" }]
+        },
+        "retrieved_at": { "$ref": "valuation-snapshot.v2.schema.json#/$defs/timestamp" },
+        "effective_at": {
+          "oneOf": [{ "$ref": "valuation-snapshot.v2.schema.json#/$defs/timestamp" }, { "type": "null" }]
+        },
+        "response_sha256": {
+          "oneOf": [{ "$ref": "valuation-snapshot.v2.schema.json#/$defs/sha256" }, { "type": "null" }]
+        }
+      }
+    }
+  }
+}

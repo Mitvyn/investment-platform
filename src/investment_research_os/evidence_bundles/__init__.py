@@ -73,6 +73,7 @@ class FixedEvidencePolicyRegistry:
                 for version in (
                     "biotech-primary-evidence-v1",
                     "biotech-primary-evidence-v2",
+                    "biotech-primary-evidence-v3",
                 )
             )
         )

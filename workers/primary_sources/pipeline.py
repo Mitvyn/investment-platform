@@ -34,7 +34,7 @@ if TYPE_CHECKING:
     from .eligibility import DerivedEligibilityProfile
 
 
-EVIDENCE_POLICY_VERSION = "biotech-primary-evidence-v2"
+EVIDENCE_POLICY_VERSION = "biotech-primary-evidence-v3"
 FRESHNESS_POLICY_VERSION = "biotech-evidence-freshness-v1"
 SOURCE_CLASS_ORDER = ("sec", "issuer", "clinical", "regulatory", "financing")
 _SOURCE_COVERAGE = {

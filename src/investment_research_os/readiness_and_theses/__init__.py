@@ -680,9 +680,9 @@ def _readiness_checks(
         and memo.review_trigger.statement_id
     )
     expected_valuation_contract = (
-        "valuation_snapshot.personal_research.v1"
+        "valuation_snapshot.personal_research.v2"
         if thesis_contract_id == PERSONAL_RESEARCH_THESIS_CONTRACT_ID
-        else "valuation_snapshot.v1"
+        else "valuation_snapshot.v2"
     )
     personal_valuation_contract_valid = bool(
         valuation_snapshot is not None

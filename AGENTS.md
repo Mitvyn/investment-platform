@@ -59,7 +59,8 @@
 Run:
 
 ```bash
-python3 -m unittest discover -s tests -v
+PYTHONPATH=src .venv/bin/python -m unittest discover -s tests -v
+pnpm contracts:test
 python3 -m compileall -q src tests workers
 pnpm dashboard:typecheck
 pnpm dashboard:build

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from calendar import monthrange
 from dataclasses import replace
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, time
 from typing import Protocol
 
 from investment_research_os.evidence_bundles import (
@@ -25,9 +25,11 @@ from .adapters import (
     sec_snapshot_coverage_proofs,
 )
 from .companyfacts import (
+    SecCompanyFactsCollectorError,
     companyfacts_basic_share_growth_observations,
     companyfacts_basic_share_growth_passages,
     companyfacts_pipeline_inputs,
+    companyfacts_other_enterprise_claim_inputs,
 )
 from .corporate_actions import reconcile_corporate_actions
 from .eligibility import derive_biotech_eligibility_profile
@@ -36,12 +38,17 @@ from .financing_metrics import (
     FilingFinancingMetricError,
     normalize_filing_financing_metrics,
 )
+from .other_enterprise_claims import (
+    OtherEnterpriseClaimsError,
+    extract_reconciled_balance_sheet,
+)
 from .models import PrimarySourceRequest
 from .plans import PRIMARY_SOURCE_PLAN_V3
 from .pipeline import (
     NormalizedCatalystFact,
     NormalizedMetricFact,
     NormalizedRiskFact,
+    PrimaryEvidencePassage,
     PrimarySourcePipeline,
 )
 from .replay import replay_primary_source_capture
@@ -341,6 +348,72 @@ class ReplayEvidenceCandidateAssembler:
             )
         filing_metrics = (*filing_metrics, *absence_metrics)
         field_evidence = tuple(normalized_field_evidence)
+        enterprise_claim_metrics: tuple[NormalizedMetricFact, ...] = ()
+        enterprise_claim_risk: NormalizedRiskFact | None = None
+        balance_sheet_passage: PrimaryEvidencePassage | None = None
+        try:
+            balance_sheet_period = next(
+                item.period_end
+                for item in replay.companyfacts.facts
+                if item.metric_key == "cash_and_cash_equivalents"
+            )
+            present_claim_ids = tuple(
+                fact.metric_key.removeprefix("other_enterprise_claim:")
+                for fact in replay.companyfacts.facts
+                if fact.metric_key.startswith("other_enterprise_claim:")
+                and fact.period_end == balance_sheet_period
+            )
+            balance_sheet_proof = extract_reconciled_balance_sheet(
+                replay.documents.documents,
+                period_end=balance_sheet_period,
+                present_component_ids=present_claim_ids,
+            )
+            balance_sheet_passage = PrimaryEvidencePassage(
+                reference_key=balance_sheet_proof.reference_key,
+                source_class="financing",
+                coverage_keys=frozenset(),
+                source_locator=balance_sheet_proof.source_locator,
+                canonical_url=balance_sheet_proof.canonical_url,
+                publication_at=balance_sheet_proof.publication_at,
+                retrieved_at=balance_sheet_proof.retrieved_at,
+                effective_at=datetime.combine(
+                    balance_sheet_period,
+                    time.max,
+                    tzinfo=UTC,
+                ),
+                filing_period_start=None,
+                filing_period_end=balance_sheet_period,
+                document_content_hash=balance_sheet_proof.content_hash,
+                passage_text=balance_sheet_proof.passage_text,
+                freshness="current",
+                origin_policy_version="sec-origin-v1",
+                available_at=balance_sheet_proof.publication_at,
+            )
+            enterprise_claim_metrics = companyfacts_other_enterprise_claim_inputs(
+                replay.companyfacts,
+                financing_metrics=filing_metrics,
+                balance_sheet=balance_sheet_proof.balance_sheet,
+            )
+        except (
+            OtherEnterpriseClaimsError,
+            SecCompanyFactsCollectorError,
+            ValueError,
+        ) as error:
+            reason_code = str(error)
+            enterprise_claim_risk = NormalizedRiskFact(
+                reference_key=f"valuation:{reason_code}",
+                source_class="financing",
+                title="Other enterprise claims unresolved",
+                risk_type="valuation_evidence_gap",
+                severity="blocking_for_valuation",
+                status=reason_code,
+                supporting_passage_keys=tuple(
+                    f"sec-companyfacts:{fact.metric_key}"
+                    for fact in replay.companyfacts.facts
+                    if fact.metric_key
+                    in {"cash_and_cash_equivalents", "debt_total", "debt_current"}
+                )[:1],
+            )
         (
             normalized_financing_passages,
             financing_proof,
@@ -373,6 +446,7 @@ class ReplayEvidenceCandidateAssembler:
             *clinical_passages,
             *regulatory_passages,
             *normalized_financing_passages,
+            *((balance_sheet_passage,) if balance_sheet_passage is not None else ()),
         )
         catalysts = []
         for study in replay.clinical_trials.included_studies:
@@ -410,6 +484,8 @@ class ReplayEvidenceCandidateAssembler:
             )
             for fact in financing_facts
         )
+        if enterprise_claim_risk is not None:
+            risks = (*risks, enterprise_claim_risk)
         pipeline_result = PrimarySourcePipeline().assemble(
             request=request,
             profile=derive_biotech_eligibility_profile(
@@ -433,6 +509,7 @@ class ReplayEvidenceCandidateAssembler:
                 *companyfacts_metrics,
                 *filing_metrics,
                 *share_growth_metrics,
+                *enterprise_claim_metrics,
             ),
             catalysts=tuple(catalysts),
             risks=risks,

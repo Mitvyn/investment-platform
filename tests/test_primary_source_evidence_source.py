@@ -32,13 +32,14 @@ from workers.primary_sources.evidence_source import (
     PersistedPrimarySourceEvidenceSource,
     ReplayEvidenceCandidateAssembler,
 )
+from workers.primary_sources.models import PrimarySourceRequest
 from workers.primary_sources.storage import FilePrimarySourceCaptureRepository
 
 
 class CandidateAssemblerFake:
     def __init__(
         self,
-        evidence_policy_version: str = "biotech-primary-evidence-v2",
+        evidence_policy_version: str = "biotech-primary-evidence-v3",
     ) -> None:
         self.evidence_policy_version = evidence_policy_version
 
@@ -68,6 +69,54 @@ class CandidateAssemblerFake:
 
 
 class PersistedPrimarySourceEvidenceSourceTests(unittest.TestCase):
+    def test_rxrx_capture_without_dilution_evidence_blocks_claim_vector(self) -> None:
+        run = replace(
+            research_run(),
+            security_id="a657d245-6bda-5476-930a-911667ea6c64",
+            security_identity=SecurityIdentity(
+                id="a657d245-6bda-5476-930a-911667ea6c64",
+                cik="0001601830",
+                issuer_name="Recursion Pharmaceuticals, Inc.",
+                symbol="RXRX",
+                primary_listing_exchange="NASDAQ",
+            ),
+        )
+        candidate = ReplayEvidenceCandidateAssembler().assemble(
+            Path("data/primary-source-captures/rxrx-2026-05-06-v3.zip").read_bytes(),
+            request=PrimarySourceRequest(
+                operator_id=run.operator_id,
+                security_id=run.security_id,
+                cik=run.security_identity.cik,
+                issuer_name=run.security_identity.issuer_name,
+                primary_listing_exchange=run.security_identity.primary_listing_exchange,
+                as_of_cutoff=run.as_of_cutoff,
+            ),
+            ticker="RXRX",
+            sec_user_agent="Investment Research OS research@example.com",
+            trusted_issuer_hosts=("www.sec.gov",),
+            accepted_at=datetime(2026, 8, 4, 12, tzinfo=UTC),
+        )
+
+        metrics = {metric.metric_key: metric for metric in candidate.metrics}
+        self.assertEqual(metrics["debt_total"].value, "246000")
+        self.assertNotIn("convertible_share_equivalents", metrics)
+        self.assertNotIn("preferred_shares_outstanding", metrics)
+        self.assertNotIn("other_enterprise_claims", metrics)
+        self.assertFalse(
+            any(key.startswith("other_enterprise_claim:") for key in metrics)
+        )
+        valuation_risks = tuple(
+            risk
+            for risk in candidate.risks
+            if risk.risk_type == "valuation_evidence_gap"
+        )
+        self.assertEqual(len(valuation_risks), 1)
+        self.assertEqual(valuation_risks[0].severity, "blocking_for_valuation")
+        self.assertEqual(
+            valuation_risks[0].status,
+            "other_claims_dilution_context_unavailable",
+        )
+
     def test_bound_capture_materializes_grader_ready_bundle_after_restart(
         self,
     ) -> None:
@@ -99,7 +148,7 @@ class PersistedPrimarySourceEvidenceSourceTests(unittest.TestCase):
             first.bind_to_run(
                 persisted,
                 run,
-                evidence_policy_version="biotech-primary-evidence-v2",
+                evidence_policy_version="biotech-primary-evidence-v3",
                 bound_at=datetime(2026, 5, 7, 4, tzinfo=UTC),
             )
             source = PersistedPrimarySourceEvidenceSource(
@@ -143,6 +192,10 @@ class PersistedPrimarySourceEvidenceSourceTests(unittest.TestCase):
             {"sec", "issuer", "clinical", "regulatory", "financing"},
         )
         self.assertEqual(candidate.declared_gaps, ())
+        self.assertIn(
+            "other_claims_balance_sheet_proof_unavailable",
+            {risk.status for risk in candidate.risks},
+        )
         self.assertEqual(len(candidate.catalysts), 2)
         share_observations = tuple(
             item
@@ -174,6 +227,10 @@ class PersistedPrimarySourceEvidenceSourceTests(unittest.TestCase):
         self.assertEqual(growth.unit, "percent")
         self.assertEqual(len(growth.supporting_evidence_ids), 3)
         self.assertEqual(candidate.declared_gaps, ())
+        self.assertIn(
+            "other_claims_balance_sheet_proof_unavailable",
+            {risk.status for risk in candidate.risks},
+        )
         self.assertEqual(
             len(
                 tuple(
@@ -255,7 +312,7 @@ class PersistedPrimarySourceEvidenceSourceTests(unittest.TestCase):
             repository.bind_to_run(
                 persisted,
                 run,
-                evidence_policy_version="biotech-primary-evidence-v2",
+                evidence_policy_version="biotech-primary-evidence-v3",
                 bound_at=datetime(2026, 5, 7, 4, tzinfo=UTC),
             )
             restarted = FilePrimarySourceCaptureRepository(root)
@@ -299,7 +356,7 @@ class PersistedPrimarySourceEvidenceSourceTests(unittest.TestCase):
             repository.bind_to_run(
                 persisted,
                 run,
-                evidence_policy_version="biotech-primary-evidence-v2",
+                evidence_policy_version="biotech-primary-evidence-v3",
                 bound_at=datetime(2026, 5, 7, 4, tzinfo=UTC),
             )
             source = PersistedPrimarySourceEvidenceSource(

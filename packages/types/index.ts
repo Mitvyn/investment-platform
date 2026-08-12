@@ -156,10 +156,13 @@ export {
   type CorporateActionReconciliation,
   type DerivedValuation,
   type DilutionInstrument,
+  type EnterpriseClaimComponent,
   type MarketMateriality,
   type PriceBasis,
   type PriceInformationState,
   type ValuationSnapshot,
+  type ValuationSnapshotV1,
+  type ValuationSnapshotV2,
   type ValuationSourceReference,
 } from "./valuation-snapshot";
 export {

@@ -11,7 +11,7 @@ from uuid import UUID
 SECOND_FIXTURE_SELECTION_POLICY_VERSION = "second-live-fixture-selection.v1"
 _PERSONAL_QUESTION_TYPE = "biotech_moonshot_catalyst_personal_research_assessment"
 _PERSONAL_WORKFLOW_CONFIG = "biotech-moonshot-catalyst-personal-research-v1"
-_PERSONAL_VALUATION_CONTRACT = "valuation_snapshot.personal_research.v1"
+_PERSONAL_VALUATION_CONTRACT = "valuation_snapshot.personal_research.v2"
 _REQUIRED_SOURCE_PLAN_CONTRACT = "primary_source_plan.v3"
 _REQUIRED_ELIGIBILITY_POLICY = "biotech-eligibility-sources-v1"
 REQUIRED_ELIGIBILITY_RULE_IDS = (

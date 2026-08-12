@@ -107,7 +107,7 @@ class MassivePersonalResearchCloseAdapterTests(unittest.TestCase):
         self.assertEqual(snapshot.snapshot_status, "valid")
         self.assertEqual(
             snapshot.contract_version,
-            "valuation_snapshot.personal_research.v1",
+            "valuation_snapshot.personal_research.v2",
         )
         self.assertTrue(snapshot.market_relative_analysis_permitted)
         market_source = next(

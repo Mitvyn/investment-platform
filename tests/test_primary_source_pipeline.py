@@ -314,7 +314,7 @@ class PrimarySourcePipelineTests(unittest.TestCase):
         )
         self.assertEqual(
             result.bundle_candidate.evidence_policy_version,
-            "biotech-primary-evidence-v2",
+            "biotech-primary-evidence-v3",
         )
         self.assertEqual(result.reason_codes, ("primary_source_coverage_complete",))
 

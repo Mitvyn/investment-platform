@@ -23,8 +23,8 @@ LIVE_INTERACTIONS = (
 )
 STRICT_THESIS_CONTRACT_ID = "biotech_moonshot_catalyst_assessment"
 PERSONAL_RESEARCH_THESIS_CONTRACT_ID = "biotech_moonshot_catalyst_personal_research_v1"
-STRICT_VALUATION_CONTRACT_VERSION = "valuation_snapshot.v1"
-PERSONAL_RESEARCH_VALUATION_CONTRACT_VERSION = "valuation_snapshot.personal_research.v1"
+STRICT_VALUATION_CONTRACT_VERSION = "valuation_snapshot.v2"
+PERSONAL_RESEARCH_VALUATION_CONTRACT_VERSION = "valuation_snapshot.personal_research.v2"
 APPROVED_RUN_BUDGET_USD = Decimal("7.00")
 APPROVED_DAILY_BUDGET_USD = Decimal("14.00")
 APPROVED_MONTHLY_BUDGET_USD = Decimal("30.00")

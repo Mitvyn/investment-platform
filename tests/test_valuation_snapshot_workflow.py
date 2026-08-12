@@ -12,6 +12,7 @@ from investment_research_os.valuation_snapshots import (
     CapitalStructureInput,
     CorporateActionReconciliation,
     DilutionInstrument,
+    EnterpriseClaimComponent,
     InMemoryValuationSnapshotRepository,
     MarketSession,
     MaterialityAssessment,
@@ -79,7 +80,7 @@ def input_candidate() -> ValuationInputCandidate:
             restricted_cash="4300000",
             restricted_cash_treatment="excluded",
             debt="128000000",
-            other_included_claims="12000000",
+            other_enterprise_claims="12000000",
             included_cash="470000000",
             currency="USD",
             basic_shares_effective_at=datetime(2026, 3, 31, 23, 59, 59, tzinfo=UTC),
@@ -90,15 +91,15 @@ def input_candidate() -> ValuationInputCandidate:
             restricted_cash_effective_at=datetime(2026, 3, 31, 23, 59, 59, tzinfo=UTC),
             included_cash_effective_at=datetime(2026, 3, 31, 23, 59, 59, tzinfo=UTC),
             debt_effective_at=datetime(2025, 12, 31, 23, 59, 59, tzinfo=UTC),
-            other_included_claims_effective_at=datetime(
-                2026, 2, 28, 23, 59, 59, tzinfo=UTC
+            other_enterprise_claims_effective_at=datetime(
+                2026, 3, 31, 23, 59, 59, tzinfo=UTC
             ),
             basic_shares_evidence_ids=("c72e8a02-c5a6-5b05-af51-d6bd2d08ce55",),
             diluted_shares_evidence_ids=("635e63a1-ed42-540c-99cd-114aacb0ef51",),
             cash_evidence_ids=("635e63a1-ed42-540c-99cd-114aacb0ef51",),
             restricted_cash_evidence_ids=("635e63a1-ed42-540c-99cd-114aacb0ef51",),
             debt_evidence_ids=("635e63a1-ed42-540c-99cd-114aacb0ef51",),
-            other_included_claims_evidence_ids=(
+            other_enterprise_claims_evidence_ids=(
                 "635e63a1-ed42-540c-99cd-114aacb0ef51",
             ),
             dilution_instruments=(
@@ -109,6 +110,43 @@ def input_candidate() -> ValuationInputCandidate:
                     effective_at=datetime(2026, 3, 31, 23, 59, 59, tzinfo=UTC),
                     supporting_evidence_ids=("635e63a1-ed42-540c-99cd-114aacb0ef51",),
                 ),
+            ),
+            other_enterprise_claim_components=tuple(
+                EnterpriseClaimComponent(
+                    component_id=component_id,
+                    value="12000000" if index == 1 else "0",
+                    unit="USD",
+                    period_end=date(2026, 3, 31),
+                    effective_at=datetime(
+                        2026,
+                        3,
+                        31,
+                        23,
+                        59,
+                        59,
+                        tzinfo=UTC,
+                    ),
+                    resolution="reported" if index == 1 else "tagged_zero",
+                    reason_code=(
+                        "other_claims_value_reported"
+                        if index == 1
+                        else "other_claims_zero_tagged"
+                    ),
+                    source_concept=f"Concept{index}",
+                    supporting_evidence_ids=(
+                        "635e63a1-ed42-540c-99cd-114aacb0ef51",
+                    ),
+                )
+                for index, component_id in enumerate(
+                    (
+                        "redeemable_preferred_claim",
+                        "noncontrolling_interest_claim",
+                        "royalty_monetization_liability",
+                        "contingent_consideration_claim",
+                        "pension_underfunded_claim",
+                        "finance_lease_claim",
+                    )
+                )
             ),
         ),
         corporate_action=CorporateActionReconciliation(
@@ -197,7 +235,7 @@ def personal_input_candidate() -> ValuationInputCandidate:
                 provider="massive",
             ),
         ),
-        valuation_policy_version="personal_research_valuation_v1",
+        valuation_policy_version="personal_research_valuation_v2",
         source_references=(
             replace(
                 candidate.source_references[0],
@@ -248,7 +286,7 @@ class ValuationSnapshotWorkflowTests(unittest.TestCase):
         wire = snapshot.as_dict()
         self.assertEqual(
             wire["contract_version"],
-            "valuation_snapshot.personal_research.v1",
+            "valuation_snapshot.personal_research.v2",
         )
         self.assertEqual(wire["snapshot_status"], "valid")
         self.assertEqual(
@@ -326,7 +364,7 @@ class ValuationSnapshotWorkflowTests(unittest.TestCase):
                 replace(
                     candidate,
                     prices=(price,),
-                    valuation_policy_version="personal_research_valuation_v1",
+                    valuation_policy_version="personal_research_valuation_v2",
                     source_references=(
                         incomplete_source,
                         *candidate.source_references[1:],
@@ -407,7 +445,7 @@ class ValuationSnapshotWorkflowTests(unittest.TestCase):
         self.assertEqual(snapshot.enterprise_value.value, "1657500000.00")
         self.assertEqual(
             snapshot.enterprise_value.formula,
-            ("market_capitalization + debt + other_included_claims - included_cash"),
+            ("market_capitalization + debt + other_enterprise_claims - included_cash"),
         )
         self.assertEqual(snapshot.market_capitalization.unit, "USD")
         self.assertEqual(snapshot.enterprise_value.unit, "USD")
@@ -438,7 +476,7 @@ class ValuationSnapshotWorkflowTests(unittest.TestCase):
             "2026-03-31T23:59:59+00:00",
         )
         self.assertEqual(
-            wire["other_included_claims"]["value"],
+            wire["other_enterprise_claims"]["value"],
             "12000000",
         )
 
@@ -456,7 +494,9 @@ class ValuationSnapshotWorkflowTests(unittest.TestCase):
 
         wire = snapshot.as_dict()
 
-        self.assertEqual(wire["contract_version"], "valuation_snapshot.v1")
+        self.assertEqual(wire["contract_version"], "valuation_snapshot.v2")
+        self.assertIn("other_enterprise_claims", wire)
+        self.assertNotIn("other_included_claims", wire)
         self.assertEqual(wire["price_basis"]["share_price"], "6.25")
         self.assertEqual(
             wire["market_capitalization"]["formula"],
@@ -788,6 +828,37 @@ class ValuationSnapshotWorkflowTests(unittest.TestCase):
                 bundle.id,
             )
 
+    def test_rejects_incomplete_other_enterprise_claim_component_vector(self) -> None:
+        bundle = materialized_bundle()
+        bundle_repository = InMemoryEvidenceBundleRepository()
+        bundle_repository.save(bundle)
+        candidate = input_candidate()
+        invalid_capital = replace(
+            candidate.capital,
+            other_enterprise_claim_components=(
+                candidate.capital.other_enterprise_claim_components[:-1]
+            ),
+        )
+
+        workflow = ValuationSnapshotWorkflow(
+            evidence_bundle_repository=bundle_repository,
+            valuation_snapshot_repository=InMemoryValuationSnapshotRepository(),
+            market_calendar=FixedCalendar(),
+            input_source=FixedValuationSource(
+                replace(candidate, capital=invalid_capital)
+            ),
+            clock=lambda: datetime(2026, 5, 7, 2, 0, tzinfo=UTC),
+        )
+
+        with self.assertRaisesRegex(
+            ValuationSnapshotError,
+            "other enterprise claim component vector is incomplete",
+        ):
+            workflow.materialize(
+                AuthenticatedOperator(bundle.operator_id),
+                bundle.id,
+            )
+
     def test_rejects_price_and_action_adjustment_mismatch(self) -> None:
         bundle = materialized_bundle()
         bundle_repository = InMemoryEvidenceBundleRepository()
@@ -875,7 +946,7 @@ class ValuationSnapshotWorkflowTests(unittest.TestCase):
         candidate = input_candidate()
         incomplete_capital = replace(
             candidate.capital,
-            other_included_claims_evidence_ids=(),
+            other_enterprise_claims_evidence_ids=(),
         )
         workflow = ValuationSnapshotWorkflow(
             evidence_bundle_repository=bundle_repository,

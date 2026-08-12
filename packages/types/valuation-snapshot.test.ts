@@ -14,6 +14,105 @@ const fixture = JSON.parse(
   ),
 ) as unknown;
 
+function v2Fixture(): Record<string, any> {
+  const candidate = structuredClone(fixture) as Record<string, any>;
+  candidate.contract_version = "valuation_snapshot.v2";
+  candidate.other_enterprise_claims = {
+    ...candidate.other_included_claims,
+    input_id: "other_enterprise_claims",
+  };
+  delete candidate.other_included_claims;
+  candidate.other_enterprise_claim_components = [
+    "redeemable_preferred_claim",
+    "noncontrolling_interest_claim",
+    "royalty_monetization_liability",
+    "contingent_consideration_claim",
+    "pension_underfunded_claim",
+    "finance_lease_claim",
+  ].map((componentId, index) => ({
+    component_id: componentId,
+    value: index === 0 ? "12000000" : "0",
+    unit: "USD",
+    period_end: "2026-02-28",
+    effective_at: "2026-02-28T23:59:59+00:00",
+    resolution: index === 0 ? "reported" : "structural_absence",
+    reason_code: index === 0 ? "reported_balance" : "no_qualifying_claim",
+    source_concept: index === 0 ? "RedeemablePreferredStock" : null,
+    supporting_evidence_ids: ["55555555-5555-4555-8555-555555555555"],
+    policy_version: "biotech-other-enterprise-claims-v1",
+  }));
+  candidate.enterprise_value.input_ids = candidate.enterprise_value.input_ids.map(
+    (inputId: string) =>
+      inputId === "other_included_claims"
+        ? "other_enterprise_claims"
+        : inputId,
+  );
+  candidate.enterprise_value.formula =
+    "market capitalization + debt + other enterprise claims - included cash";
+  return candidate;
+}
+
+test("Valuation Snapshot v2 parses strict enterprise claims while v1 remains readable", () => {
+  const v2 = v2Fixture();
+
+  assert.deepEqual(parseValuationSnapshot(v2), v2);
+  assert.deepEqual(parseValuationSnapshot(fixture), fixture);
+});
+
+test("Valuation Snapshot v2 rejects legacy claim keys and incomplete component vectors", () => {
+  const legacyKey = v2Fixture();
+  legacyKey.other_included_claims = legacyKey.other_enterprise_claims;
+
+  const missingAggregate = v2Fixture();
+  delete missingAggregate.other_enterprise_claims;
+
+  const incompleteComponents = v2Fixture();
+  incompleteComponents.other_enterprise_claim_components.pop();
+
+  const wrongTotal = v2Fixture();
+  wrongTotal.other_enterprise_claim_components[0].value = "1";
+
+  for (const invalid of [
+    legacyKey,
+    missingAggregate,
+    incompleteComponents,
+    wrongTotal,
+  ]) {
+    assert.throws(() => parseValuationSnapshot(invalid), TypeError);
+  }
+});
+
+test("Valuation Snapshot v2 requires the aggregate for its six claim components", () => {
+  const missingAggregate = v2Fixture();
+  missingAggregate.snapshot_status = "invalid";
+  missingAggregate.invalid_reason_codes = ["enterprise_claims_unresolved"];
+  missingAggregate.market_relative_analysis_permitted = false;
+  missingAggregate.other_enterprise_claims = null;
+  missingAggregate.other_enterprise_claim_components[0].value = "1";
+  missingAggregate.enterprise_value = null;
+  missingAggregate.calculation_ids = missingAggregate.calculation_ids.filter(
+    (calculationId: string) => calculationId !== "enterprise-value-result",
+  );
+
+  assert.throws(
+    () => parseValuationSnapshot(missingAggregate),
+    /other enterprise claim aggregate is required/,
+  );
+});
+
+test("Valuation Snapshot v2 checks each claim component against the aggregate period", () => {
+  const mismatchedPeriod = v2Fixture();
+  mismatchedPeriod.other_enterprise_claim_components[0].period_end =
+    "2026-02-27";
+  mismatchedPeriod.other_enterprise_claim_components[0].effective_at =
+    "2026-02-27T23:59:59+00:00";
+
+  assert.throws(
+    () => parseValuationSnapshot(mismatchedPeriod),
+    /other enterprise claim component timing mismatch/,
+  );
+});
+
 test("TypeScript accepts canonical valid aligned valuation snapshot without semantic drift", () => {
   assert.deepEqual(parseValuationSnapshot(fixture), fixture);
 });
@@ -202,6 +301,12 @@ test("Valuation Snapshot contract is published through package root and strict J
       "utf8",
     ),
   ) as Record<string, any>;
+  const v2Schema = JSON.parse(
+    readFileSync(
+      new URL("./valuation-snapshot.v2.schema.json", import.meta.url),
+      "utf8",
+    ),
+  ) as Record<string, any>;
 
   assert.match(publicTypes, /parseValuationSnapshot/);
   assert.match(publicTypes, /type ValuationSnapshot/);
@@ -222,4 +327,19 @@ test("Valuation Snapshot contract is published through package root and strict J
   );
   assert.equal(schema.$defs.capital_measure.additionalProperties, false);
   assert.equal(schema.$defs.cash_treatment.additionalProperties, false);
+  assert.equal(v2Schema.properties.contract_version.const, "valuation_snapshot.v2");
+  assert.equal(v2Schema.additionalProperties, false);
+  assert.equal(v2Schema.required.includes("other_included_claims"), false);
+  assert.equal(v2Schema.required.includes("other_enterprise_claims"), true);
+  assert.deepEqual(v2Schema.properties.other_enterprise_claims, {
+    $ref: "#/$defs/capital_measure",
+  });
+  assert.equal(
+    v2Schema.$defs.enterprise_claim_component.additionalProperties,
+    false,
+  );
+  assert.equal(
+    v2Schema.properties.other_enterprise_claim_components.minItems,
+    6,
+  );
 });

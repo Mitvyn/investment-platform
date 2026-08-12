@@ -249,7 +249,7 @@ class LiveMvpPreflightTests(unittest.TestCase):
         inputs = replace(
             passing_inputs(),
             thesis_contract_id=("biotech_moonshot_catalyst_personal_research_v1"),
-            valuation_contract_version="valuation_snapshot.personal_research.v1",
+            valuation_contract_version="valuation_snapshot.personal_research.v2",
             licensed_official_close_rights=False,
             licensed_authenticated_display_rights=False,
             personal_research_valuation_pipeline_verified=True,

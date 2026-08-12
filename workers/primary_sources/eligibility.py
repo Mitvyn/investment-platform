@@ -330,7 +330,7 @@ def derive_biotech_eligibility_profile(
         )
     )
     companyfacts_valid = (
-        companyfacts.policy_version == "sec-companyfacts-core-metrics-v2"
+        companyfacts.policy_version == "sec-companyfacts-core-metrics-v3"
         and companyfacts.coverage_state == "complete"
         and _REQUIRED_COMPANYFACT_KEYS
         <= frozenset(fact.metric_key for fact in companyfacts.facts)

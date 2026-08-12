@@ -126,7 +126,7 @@ class SupabaseValuationSnapshotRepositoryTests(unittest.TestCase):
         self.assertEqual(loaded.as_dict(), wire)
         self.assertEqual(
             loaded.contract_version,
-            "valuation_snapshot.personal_research.v1",
+            "valuation_snapshot.personal_research.v2",
         )
         self.assertEqual(
             loaded.valuation_assurance.level,
@@ -157,8 +157,9 @@ class SupabaseValuationSnapshotRepositoryTests(unittest.TestCase):
         snapshot = materialized_snapshot()
         wire = snapshot.as_dict()
         component_count = (
-            4
+            7
             + len(wire["dilution_instruments"])
+            + len(wire["other_enterprise_claim_components"])
             + len(wire["calculation_ids"])
             + len(wire["evidence_materiality"])
         )
@@ -191,10 +192,30 @@ class SupabaseValuationSnapshotRepositoryTests(unittest.TestCase):
             [
                 "iros_valuation_snapshots",
                 *["iros_valuation_capital_inputs"]
-                * (4 + len(wire["dilution_instruments"])),
+                * (7 + len(wire["dilution_instruments"])),
+                *["iros_valuation_other_claim_components"]
+                * len(wire["other_enterprise_claim_components"]),
                 *["iros_valuation_calculation_results"] * len(wire["calculation_ids"]),
                 *["iros_valuation_materiality_assessments"]
                 * len(wire["evidence_materiality"]),
+            ],
+        )
+        capital_input_types = [
+            request["payload"]["input_type"]
+            for request in transport.requests
+            if request["method"] == "POST"
+            and "iros_valuation_capital_inputs" in request["url"]
+        ]
+        self.assertEqual(
+            capital_input_types[:7],
+            [
+                "basic_shares_outstanding",
+                "fully_diluted_shares",
+                "included_cash",
+                "reported_cash",
+                "restricted_cash",
+                "debt",
+                "other_enterprise_claims",
             ],
         )
         finalize = next(

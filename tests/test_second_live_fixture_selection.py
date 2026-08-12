@@ -52,7 +52,7 @@ def record(
         evidence_bundle_ready=True,
         blocking_gap_codes=(),
         valuation_snapshot_id=f"valuation-{security_id}",
-        valuation_contract_version="valuation_snapshot.personal_research.v1",
+        valuation_contract_version="valuation_snapshot.personal_research.v2",
         valuation_status="valid",
         price_information_state="aligned",
         corporate_action_reconciliation_result="reconciled",

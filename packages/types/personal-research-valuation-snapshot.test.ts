@@ -74,6 +74,115 @@ function personalFixture(): Record<string, any> {
   return fixture;
 }
 
+function personalV2Fixture(): Record<string, any> {
+  const fixture = personalFixture();
+  fixture.contract_version = "valuation_snapshot.personal_research.v2";
+  fixture.other_enterprise_claims = {
+    ...fixture.other_included_claims,
+    input_id: "other_enterprise_claims",
+  };
+  delete fixture.other_included_claims;
+  fixture.other_enterprise_claim_components = [
+    "redeemable_preferred_claim",
+    "noncontrolling_interest_claim",
+    "royalty_monetization_liability",
+    "contingent_consideration_claim",
+    "pension_underfunded_claim",
+    "finance_lease_claim",
+  ].map((componentId, index) => ({
+    component_id: componentId,
+    value: index === 0 ? "12000000" : "0",
+    unit: "USD",
+    period_end: "2026-02-28",
+    effective_at: "2026-02-28T23:59:59+00:00",
+    resolution: index === 0 ? "reported" : "structural_absence",
+    reason_code: index === 0 ? "reported_balance" : "no_qualifying_claim",
+    source_concept: index === 0 ? "RedeemablePreferredStock" : null,
+    supporting_evidence_ids: ["55555555-5555-4555-8555-555555555555"],
+    policy_version: "biotech-other-enterprise-claims-v1",
+  }));
+  fixture.enterprise_value.input_ids = fixture.enterprise_value.input_ids.map(
+    (inputId: string) =>
+      inputId === "other_included_claims"
+        ? "other_enterprise_claims"
+        : inputId,
+  );
+  fixture.enterprise_value.formula =
+    "market capitalization + debt + other enterprise claims - included cash";
+  return fixture;
+}
+
+test("personal research v2 dispatch preserves required research-only limitations", () => {
+  const fixture = personalV2Fixture();
+
+  const parsed = parseResearchValuationSnapshot(fixture);
+
+  assert.deepEqual(parsed, fixture);
+  assert.deepEqual(parsePersonalResearchValuationSnapshot(fixture), fixture);
+  assert.deepEqual(parsed.valuation_assurance.limitation_codes, [
+    "not_primary_venue_official_close",
+    "not_institutional_grade",
+    "not_for_trade_execution",
+  ]);
+});
+
+test("research valuation dispatch rejects unknown versions and v2 legacy claim keys", () => {
+  const unknownVersion = personalV2Fixture();
+  unknownVersion.contract_version = "valuation_snapshot.personal_research.v3";
+
+  const legacyClaim = personalV2Fixture();
+  legacyClaim.other_included_claims = legacyClaim.other_enterprise_claims;
+
+  assert.throws(
+    () => parseResearchValuationSnapshot(unknownVersion),
+    /invalid research valuation contract version/,
+  );
+  assert.throws(
+    () => parsePersonalResearchValuationSnapshot(legacyClaim),
+    TypeError,
+  );
+});
+
+test("research valuation dispatch recognizes strict v2 without mixing assurance families", () => {
+  const strictV2 = structuredClone(strictFixture);
+  strictV2.contract_version = "valuation_snapshot.v2";
+  strictV2.other_enterprise_claims = {
+    ...strictV2.other_included_claims,
+    input_id: "other_enterprise_claims",
+  };
+  delete strictV2.other_included_claims;
+  strictV2.other_enterprise_claim_components = [
+    "redeemable_preferred_claim",
+    "noncontrolling_interest_claim",
+    "royalty_monetization_liability",
+    "contingent_consideration_claim",
+    "pension_underfunded_claim",
+    "finance_lease_claim",
+  ].map((componentId, index) => ({
+    component_id: componentId,
+    value: index === 0 ? "12000000" : "0",
+    unit: "USD",
+    period_end: "2026-02-28",
+    effective_at: "2026-02-28T23:59:59+00:00",
+    resolution: index === 0 ? "reported" : "structural_absence",
+    reason_code: index === 0 ? "reported_balance" : "no_qualifying_claim",
+    source_concept: index === 0 ? "RedeemablePreferredStock" : null,
+    supporting_evidence_ids: ["55555555-5555-4555-8555-555555555555"],
+    policy_version: "biotech-other-enterprise-claims-v1",
+  }));
+  strictV2.enterprise_value.input_ids = strictV2.enterprise_value.input_ids.map(
+    (inputId: string) =>
+      inputId === "other_included_claims"
+        ? "other_enterprise_claims"
+        : inputId,
+  );
+
+  const parsed = parseResearchValuationSnapshot(strictV2);
+
+  assert.equal(parsed.contract_version, "valuation_snapshot.v2");
+  assert.equal("valuation_assurance" in parsed, false);
+});
+
 test("personal research valuation accepts verified consolidated EOD with explicit assurance and provenance", () => {
   const fixture = personalFixture();
 
@@ -174,6 +283,15 @@ test("personal research valuation contract is separately published", () => {
       "utf8",
     ),
   ) as Record<string, any>;
+  const v2Schema = JSON.parse(
+    readFileSync(
+      new URL(
+        "./personal-research-valuation-snapshot.v2.schema.json",
+        import.meta.url,
+      ),
+      "utf8",
+    ),
+  ) as Record<string, any>;
 
   assert.match(publicTypes, /parsePersonalResearchValuationSnapshot/);
   assert.match(publicTypes, /type PersonalResearchValuationSnapshot/);
@@ -190,6 +308,24 @@ test("personal research valuation contract is separately published", () => {
     schema.$defs.price_basis.properties.halt_verification_status.enum,
     ["verified_not_halted", "halted", "indeterminate"],
   );
+  assert.equal(
+    v2Schema.properties.contract_version.const,
+    "valuation_snapshot.personal_research.v2",
+  );
+  assert.equal(v2Schema.required.includes("other_included_claims"), false);
+  assert.equal(v2Schema.required.includes("other_enterprise_claims"), true);
+  assert.deepEqual(v2Schema.properties.other_enterprise_claims, {
+    $ref: "valuation-snapshot.v2.schema.json#/$defs/capital_measure",
+  });
+  const requiredLimitations = v2Schema.$defs.valuation_assurance.properties
+    .limitation_codes.allOf.map(
+      (rule: Record<string, any>) => rule.contains.const,
+    );
+  assert.deepEqual(requiredLimitations, [
+    "not_primary_venue_official_close",
+    "not_institutional_grade",
+    "not_for_trade_execution",
+  ]);
 });
 
 void (undefined as unknown as PersonalResearchValuationSnapshot);

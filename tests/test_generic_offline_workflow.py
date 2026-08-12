@@ -40,6 +40,7 @@ from investment_research_os.valuation_snapshots import (
     CapitalStructureInput,
     CorporateActionReconciliation,
     DilutionInstrument,
+    EnterpriseClaimComponent,
     MarketSession,
     MaterialityAssessment,
     PriceObservation,
@@ -267,7 +268,7 @@ class FixtureValuationSource:
                 restricted_cash="0",
                 restricted_cash_treatment="none",
                 debt=str(valuation["debt"]),
-                other_included_claims="0",
+                other_enterprise_claims="0",
                 included_cash=str(valuation["cash"]),
                 currency="USD",
                 basic_shares_effective_at=capital_effective_at,
@@ -276,13 +277,13 @@ class FixtureValuationSource:
                 restricted_cash_effective_at=capital_effective_at,
                 included_cash_effective_at=capital_effective_at,
                 debt_effective_at=capital_effective_at,
-                other_included_claims_effective_at=capital_effective_at,
+                other_enterprise_claims_effective_at=capital_effective_at,
                 basic_shares_evidence_ids=(evidence_ids["sec"],),
                 diluted_shares_evidence_ids=(evidence_ids["financing"],),
                 cash_evidence_ids=(evidence_ids["financing"],),
                 restricted_cash_evidence_ids=(evidence_ids["financing"],),
                 debt_evidence_ids=(evidence_ids["financing"],),
-                other_included_claims_evidence_ids=(evidence_ids["financing"],),
+                other_enterprise_claims_evidence_ids=(evidence_ids["financing"],),
                 dilution_instruments=(
                     DilutionInstrument(
                         instrument_id="fixture-dilution",
@@ -291,6 +292,27 @@ class FixtureValuationSource:
                         effective_at=datetime(2026, 3, 31, 23, 59, tzinfo=UTC),
                         supporting_evidence_ids=(evidence_ids["financing"],),
                     ),
+                ),
+                other_enterprise_claim_components=tuple(
+                    EnterpriseClaimComponent(
+                        component_id=component_id,
+                        value="0",
+                        unit="USD",
+                        period_end=capital_effective_at.date(),
+                        effective_at=capital_effective_at,
+                        resolution="structural_absence",
+                        reason_code="other_claims_zero_structural",
+                        source_concept=None,
+                        supporting_evidence_ids=(evidence_ids["financing"],),
+                    )
+                    for component_id in (
+                        "redeemable_preferred_claim",
+                        "noncontrolling_interest_claim",
+                        "royalty_monetization_liability",
+                        "contingent_consideration_claim",
+                        "pension_underfunded_claim",
+                        "finance_lease_claim",
+                    )
                 ),
             ),
             corporate_action=CorporateActionReconciliation(

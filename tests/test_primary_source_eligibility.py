@@ -246,7 +246,7 @@ def companyfacts_snapshot() -> SecCompanyFactsSnapshot:
         cik="0001601830",
         issuer_name=ISSUER_NAME,
         as_of_cutoff=CUTOFF,
-        policy_version="sec-companyfacts-core-metrics-v2",
+        policy_version="sec-companyfacts-core-metrics-v3",
         coverage_state="complete",
         reason_codes=("sec_companyfacts_core_metrics_complete",),
         source_url=("https://data.sec.gov/api/xbrl/companyfacts/CIK0001601830.json"),

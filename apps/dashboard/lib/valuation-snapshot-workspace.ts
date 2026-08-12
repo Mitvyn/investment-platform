@@ -57,7 +57,10 @@ function presentDerivedValue(
 function isPersonalResearchSnapshot(
   snapshot: ResearchValuationSnapshot,
 ): snapshot is PersonalResearchValuationSnapshot {
-  return snapshot.contract_version === "valuation_snapshot.personal_research.v1";
+  return (
+    snapshot.contract_version === "valuation_snapshot.personal_research.v1" ||
+    snapshot.contract_version === "valuation_snapshot.personal_research.v2"
+  );
 }
 
 function alignmentPresentation(snapshot: ResearchValuationSnapshot): {
@@ -161,10 +164,15 @@ export function presentValuationSnapshotWorkspace(
     ),
     presentCapitalInput("Included cash", snapshot.cash),
     presentCapitalInput("Debt", snapshot.debt),
-    presentCapitalInput(
-      "Other included claims",
-      snapshot.other_included_claims,
-    ),
+    "other_enterprise_claims" in snapshot
+      ? presentCapitalInput(
+          "Other enterprise claims",
+          snapshot.other_enterprise_claims,
+        )
+      : presentCapitalInput(
+          "Other included claims",
+          snapshot.other_included_claims,
+        ),
   ].filter((value) => value !== null);
   const derivedValues = [
     presentDerivedValue("Market capitalization", snapshot.market_capitalization),
@@ -251,6 +259,21 @@ export function presentValuationSnapshotWorkspace(
       effective: instrument.effective_at,
       evidenceIds: instrument.supporting_evidence_ids,
     })),
+    enterpriseClaimComponents:
+      "other_enterprise_claim_components" in snapshot
+        ? snapshot.other_enterprise_claim_components.map((component) => ({
+            id: component.component_id,
+            value: component.value,
+            unit: component.unit,
+            periodEnd: component.period_end,
+            effective: component.effective_at,
+            resolution: component.resolution,
+            reasonCode: component.reason_code,
+            sourceConcept: component.source_concept ?? "Not applicable",
+            evidenceIds: component.supporting_evidence_ids,
+            policyVersion: component.policy_version,
+          }))
+        : [],
     derivedValues,
     corporateAction: {
       event: snapshot.corporate_action_reconciliation.event_type,

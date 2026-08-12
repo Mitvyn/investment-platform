@@ -756,7 +756,7 @@ class PersistentCommitteeWorkerTests(unittest.TestCase):
         self.assertEqual(snapshot.id, snapshot_id)
         self.assertEqual(
             snapshot.contract_version,
-            "valuation_snapshot.personal_research.v1",
+            "valuation_snapshot.personal_research.v2",
         )
         self.assertEqual(strict_source.requests, [])
         self.assertEqual(personal_source.requests, [(bundle, SESSION)])

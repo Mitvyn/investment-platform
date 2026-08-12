@@ -53,16 +53,16 @@ class IrosObjectInventoryTests(unittest.TestCase):
             migration_paths=MIGRATION_PATHS
         )
 
-        self.assertEqual(inventory.declared_count, 214)
+        self.assertEqual(inventory.declared_count, 215)
         self.assertEqual(
-            inventory.kind_counts, {"table": 62, "view": 37, "function": 115}
+            inventory.kind_counts, {"table": 63, "view": 37, "function": 115}
         )
         self.assertEqual(inventory.client_exposed_count, 96)
         self.assertEqual(
             inventory.client_exposed_role_counts, {"anon": 0, "authenticated": 96}
         )
-        self.assertEqual(inventory.deny_all_probe_count, 5)
-        self.assertEqual(inventory.rls_enabled_table_count, 62)
+        self.assertEqual(inventory.deny_all_probe_count, 6)
+        self.assertEqual(inventory.rls_enabled_table_count, 63)
         self.assertEqual(inventory.rls_forced_table_count, 0)
         self.assertEqual(inventory.security_invoker_view_count, 37)
         self.assertEqual(
@@ -110,6 +110,7 @@ class IrosObjectInventoryTests(unittest.TestCase):
                 "iros_provider_input_token_preflights",
                 "iros_raw_provider_payload_access_events",
                 "iros_synthesis_attempt_payloads",
+                "iros_valuation_other_claim_components",
                 "iros_workflow_configs",
             },
         )

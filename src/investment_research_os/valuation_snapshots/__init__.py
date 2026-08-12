@@ -23,6 +23,19 @@ class ValuationSnapshotNotFound(LookupError):
     """Raised when snapshot is absent or outside operator boundary."""
 
 
+_ENTERPRISE_CLAIM_COMPONENT_IDS = frozenset(
+    {
+        "redeemable_preferred_claim",
+        "noncontrolling_interest_claim",
+        "royalty_monetization_liability",
+        "contingent_consideration_claim",
+        "pension_underfunded_claim",
+        "finance_lease_claim",
+    }
+)
+_ENTERPRISE_CLAIMS_POLICY_VERSION = "biotech-other-enterprise-claims-v1"
+
+
 @dataclass(frozen=True, slots=True)
 class MarketSession:
     session_date: date
@@ -60,6 +73,20 @@ class DilutionInstrument:
 
 
 @dataclass(frozen=True, slots=True)
+class EnterpriseClaimComponent:
+    component_id: str
+    value: str
+    unit: str
+    period_end: date
+    effective_at: datetime
+    resolution: str
+    reason_code: str
+    source_concept: str | None
+    supporting_evidence_ids: tuple[str, ...]
+    policy_version: str = "biotech-other-enterprise-claims-v1"
+
+
+@dataclass(frozen=True, slots=True)
 class CapitalStructureInput:
     basic_shares_outstanding: str
     fully_diluted_shares: str
@@ -67,7 +94,7 @@ class CapitalStructureInput:
     restricted_cash: str
     restricted_cash_treatment: str
     debt: str
-    other_included_claims: str
+    other_enterprise_claims: str
     included_cash: str
     currency: str
     basic_shares_effective_at: datetime
@@ -76,13 +103,13 @@ class CapitalStructureInput:
     restricted_cash_effective_at: datetime
     included_cash_effective_at: datetime
     debt_effective_at: datetime
-    other_included_claims_effective_at: datetime
+    other_enterprise_claims_effective_at: datetime
     basic_shares_evidence_ids: tuple[str, ...]
     diluted_shares_evidence_ids: tuple[str, ...]
     cash_evidence_ids: tuple[str, ...]
     restricted_cash_evidence_ids: tuple[str, ...]
     debt_evidence_ids: tuple[str, ...]
-    other_included_claims_evidence_ids: tuple[str, ...]
+    other_enterprise_claims_evidence_ids: tuple[str, ...]
     basic_shares_freshness_state: str = "current"
     basic_shares_freshness_reason_code: str = "current_at_cutoff"
     diluted_shares_freshness_state: str = "current"
@@ -93,10 +120,11 @@ class CapitalStructureInput:
     restricted_cash_freshness_reason_code: str = "current_at_cutoff"
     debt_freshness_state: str = "current"
     debt_freshness_reason_code: str = "current_at_cutoff"
-    other_included_claims_freshness_state: str = "current"
-    other_included_claims_freshness_reason_code: str = "current_at_cutoff"
+    other_enterprise_claims_freshness_state: str = "current"
+    other_enterprise_claims_freshness_reason_code: str = "current_at_cutoff"
     freshness_policy_version: str = "biotech-valuation-freshness-v1"
     dilution_instruments: tuple[DilutionInstrument, ...] = ()
+    other_enterprise_claim_components: tuple[EnterpriseClaimComponent, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -154,7 +182,7 @@ class ValuationContract:
 
 
 STRICT_VALUATION_CONTRACT = ValuationContract(
-    contract_version="valuation_snapshot.v1",
+    contract_version="valuation_snapshot.v2",
     price_type="official_unadjusted_close",
     missing_price_reason_code="official_close_unavailable",
     snapshot_id_namespace="valuation-snapshot",
@@ -163,11 +191,11 @@ STRICT_VALUATION_CONTRACT = ValuationContract(
 )
 
 PERSONAL_RESEARCH_VALUATION_CONTRACT = ValuationContract(
-    contract_version="valuation_snapshot.personal_research.v1",
+    contract_version="valuation_snapshot.personal_research.v2",
     price_type="verified_consolidated_end_of_day_close",
     missing_price_reason_code="consolidated_close_unavailable",
     snapshot_id_namespace="personal-research-valuation-snapshot",
-    required_policy_version="personal_research_valuation_v1",
+    required_policy_version="personal_research_valuation_v2",
     assurance=ValuationAssurance(
         level="personal_research",
         usage_scope="private_personal_research",
@@ -234,7 +262,7 @@ class ValuationSnapshot:
     freshness_policy_version: str
     materiality_policy_version: str
     created_at: datetime
-    contract_version: str = "valuation_snapshot.v1"
+    contract_version: str = "valuation_snapshot.v2"
     valuation_assurance: ValuationAssurance | None = None
 
     def as_dict(self) -> dict[str, object]:
@@ -519,7 +547,7 @@ class ValuationSnapshotWorkflow:
             candidate.capital.cash_freshness_state,
             candidate.capital.restricted_cash_freshness_state,
             candidate.capital.debt_freshness_state,
-            candidate.capital.other_included_claims_freshness_state,
+            candidate.capital.other_enterprise_claims_freshness_state,
         )
         if any(state != "current" for state in freshness_states):
             reason = (
@@ -692,7 +720,7 @@ def _validate_candidate(
         (capital.cash, "cash"),
         (capital.restricted_cash, "restricted cash"),
         (capital.debt, "debt"),
-        (capital.other_included_claims, "other included claims"),
+        (capital.other_enterprise_claims, "other enterprise claims"),
         (capital.included_cash, "included cash"),
     ):
         _decimal(value, label)
@@ -703,7 +731,7 @@ def _validate_candidate(
         capital.restricted_cash_effective_at,
         capital.included_cash_effective_at,
         capital.debt_effective_at,
-        capital.other_included_claims_effective_at,
+        capital.other_enterprise_claims_effective_at,
     )
     if any(
         value.tzinfo is None or value.utcoffset() is None or value > bundle.as_of_cutoff
@@ -737,6 +765,48 @@ def _validate_candidate(
         raise ValuationSnapshotError("restricted cash treatment is invalid")
     if not valid_restricted_cash or included_cash != expected_included_cash:
         raise ValuationSnapshotError("restricted cash reconciliation mismatch")
+    claim_components = capital.other_enterprise_claim_components
+    component_ids = [component.component_id for component in claim_components]
+    if (
+        len(component_ids) != len(_ENTERPRISE_CLAIM_COMPONENT_IDS)
+        or set(component_ids) != _ENTERPRISE_CLAIM_COMPONENT_IDS
+    ):
+        raise ValuationSnapshotError(
+            "other enterprise claim component vector is incomplete"
+        )
+    claim_total = Decimal(0)
+    for component in claim_components:
+        value = _decimal(
+            component.value,
+            f"other enterprise claim {component.component_id}",
+        )
+        if (
+            component.unit != capital.currency
+            or component.period_end
+            != capital.other_enterprise_claims_effective_at.date()
+            or component.effective_at.tzinfo is None
+            or component.effective_at.utcoffset() is None
+            or component.effective_at.date() != component.period_end
+            or component.effective_at > bundle.as_of_cutoff
+            or component.resolution
+            not in {
+                "reported",
+                "tagged_zero",
+                "explicit_negation",
+                "structural_absence",
+            }
+            or component.policy_version != _ENTERPRISE_CLAIMS_POLICY_VERSION
+            or not component.supporting_evidence_ids
+        ):
+            raise ValuationSnapshotError(
+                f"other enterprise claim component is invalid:{component.component_id}"
+            )
+        claim_total += value
+    if claim_total != _decimal(
+        capital.other_enterprise_claims,
+        "other enterprise claims",
+    ):
+        raise ValuationSnapshotError("other enterprise claim total mismatch")
     if candidate.freshness_policy_version != capital.freshness_policy_version:
         raise ValuationSnapshotError("freshness policy mismatch")
 
@@ -789,10 +859,14 @@ def _validate_candidate(
         capital.cash_evidence_ids,
         capital.restricted_cash_evidence_ids,
         capital.debt_evidence_ids,
-        capital.other_included_claims_evidence_ids,
+        capital.other_enterprise_claims_evidence_ids,
         *(
             instrument.supporting_evidence_ids
             for instrument in capital.dilution_instruments
+        ),
+        *(
+            component.supporting_evidence_ids
+            for component in capital.other_enterprise_claim_components
         ),
     )
     if any(not evidence_ids for evidence_ids in required_evidence_groups):
@@ -803,11 +877,16 @@ def _validate_candidate(
         *capital.cash_evidence_ids,
         *capital.restricted_cash_evidence_ids,
         *capital.debt_evidence_ids,
-        *capital.other_included_claims_evidence_ids,
+        *capital.other_enterprise_claims_evidence_ids,
         *(
             evidence_id
             for instrument in capital.dilution_instruments
             for evidence_id in instrument.supporting_evidence_ids
+        ),
+        *(
+            evidence_id
+            for component in capital.other_enterprise_claim_components
+            for evidence_id in component.supporting_evidence_ids
         ),
     )
     if any(evidence_id not in evidence_ids for evidence_id in supported_evidence):
@@ -1111,16 +1190,33 @@ def _snapshot_wire(snapshot: ValuationSnapshot) -> dict[str, object]:
             ),
             "restricted_cash_treatment": (capital.restricted_cash_treatment),
         },
-        "other_included_claims": _capital_measure_wire(
+        "other_enterprise_claims": _capital_measure_wire(
             snapshot,
-            "other_included_claims",
-            capital.other_included_claims,
+            "other_enterprise_claims",
+            capital.other_enterprise_claims,
             capital.currency,
-            capital.other_included_claims_effective_at,
-            capital.other_included_claims_evidence_ids,
-            capital.other_included_claims_freshness_state,
-            capital.other_included_claims_freshness_reason_code,
+            capital.other_enterprise_claims_effective_at,
+            capital.other_enterprise_claims_evidence_ids,
+            capital.other_enterprise_claims_freshness_state,
+            capital.other_enterprise_claims_freshness_reason_code,
         ),
+        "other_enterprise_claim_components": [
+            {
+                "component_id": component.component_id,
+                "value": component.value,
+                "unit": component.unit,
+                "period_end": component.period_end.isoformat(),
+                "effective_at": component.effective_at.isoformat(),
+                "resolution": component.resolution,
+                "reason_code": component.reason_code,
+                "source_concept": component.source_concept,
+                "supporting_evidence_ids": list(
+                    component.supporting_evidence_ids
+                ),
+                "policy_version": component.policy_version,
+            }
+            for component in capital.other_enterprise_claim_components
+        ],
         "market_capitalization": _derived_wire(snapshot.market_capitalization),
         "enterprise_value": _derived_wire(snapshot.enterprise_value),
         "source_references": [
@@ -1245,13 +1341,13 @@ def _calculate_values(
         "fully diluted shares",
     )
     debt = _decimal(capital.debt, "debt")
-    other_included_claims = _decimal(
-        capital.other_included_claims,
-        "other included claims",
+    other_enterprise_claims = _decimal(
+        capital.other_enterprise_claims,
+        "other enterprise claims",
     )
     included_cash = _decimal(capital.included_cash, "included cash")
     market_cap_value = share_price * fully_diluted_shares
-    enterprise_value = market_cap_value + debt + other_included_claims - included_cash
+    enterprise_value = market_cap_value + debt + other_enterprise_claims - included_cash
     if enterprise_value < 0:
         raise ValuationSnapshotError("enterprise value cannot be negative")
 
@@ -1273,7 +1369,7 @@ def _calculate_values(
     other_claims_input_id = stable_id(
         operator_id,
         "valuation-input",
-        f"{evidence_bundle_id}:other_included_claims",
+        f"{evidence_bundle_id}:other_enterprise_claims",
     )
     cash_input_id = stable_id(
         operator_id,
@@ -1288,7 +1384,7 @@ def _calculate_values(
     enterprise_value_id = stable_id(
         operator_id,
         "valuation-calculation",
-        f"{evidence_bundle_id}:enterprise_value:valuation-formulas-v1",
+        f"{evidence_bundle_id}:enterprise_value:valuation-formulas-v2",
     )
     market_capitalization = DerivedValuation(
         value=format(market_cap_value, "f"),
@@ -1303,9 +1399,9 @@ def _calculate_values(
         value=format(enterprise_value, "f"),
         unit=capital.currency,
         formula=(
-            "market_capitalization + debt + other_included_claims - included_cash"
+            "market_capitalization + debt + other_enterprise_claims - included_cash"
         ),
-        formula_version="enterprise-value-v1",
+        formula_version="enterprise-value-v2",
         input_ids=(
             market_cap_id,
             debt_input_id,
@@ -1318,7 +1414,7 @@ def _calculate_values(
                 (
                     *capital.diluted_shares_evidence_ids,
                     *capital.debt_evidence_ids,
-                    *capital.other_included_claims_evidence_ids,
+                    *capital.other_enterprise_claims_evidence_ids,
                     *capital.cash_evidence_ids,
                 )
             )
@@ -1331,6 +1427,7 @@ __all__ = [
     "CorporateActionReconciliation",
     "DerivedValuation",
     "DilutionInstrument",
+    "EnterpriseClaimComponent",
     "InMemoryValuationSnapshotRepository",
     "MarketSession",
     "MaterialityAssessment",

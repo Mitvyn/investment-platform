@@ -20,7 +20,7 @@ if TYPE_CHECKING:
     from .share_growth import BasicShareObservation
 
 
-_POLICY_VERSION = "sec-companyfacts-core-metrics-v2"
+_POLICY_VERSION = "sec-companyfacts-core-metrics-v3"
 _COMPOSITE_FINANCING_POLICY_VERSION = "biotech-financing-share-capital-v1"
 _REQUIRED_METRIC_KEYS = frozenset(
     {
@@ -74,11 +74,6 @@ _CONCEPTS = (
                 "RestrictedCashAndCashEquivalents",
                 "USD",
             ),
-            _ConceptSpec(
-                "us-gaap",
-                "RestrictedCashCurrent",
-                "USD",
-            ),
         ),
     ),
     (
@@ -122,6 +117,91 @@ _CONCEPTS = (
             ),
         ),
     ),
+)
+
+_RESTRICTED_CASH_COMPONENTS = (
+    _ConceptSpec("us-gaap", "RestrictedCashCurrent", "USD"),
+    _ConceptSpec("us-gaap", "RestrictedCashNoncurrent", "USD"),
+)
+_DEBT_AND_CAPITAL_LEASE_COMPONENTS = (
+    _ConceptSpec(
+        "us-gaap",
+        "LongTermDebtAndCapitalLeaseObligationsCurrent",
+        "USD",
+    ),
+    _ConceptSpec(
+        "us-gaap",
+        "LongTermDebtAndCapitalLeaseObligations",
+        "USD",
+    ),
+)
+
+_ENTERPRISE_CLAIM_CONCEPTS = (
+    (
+        "other_enterprise_claim:redeemable_preferred_claim",
+        (
+            _ConceptSpec(
+                "us-gaap",
+                "TemporaryEquityCarryingAmountAttributableToParent",
+                "USD",
+            ),
+            _ConceptSpec("us-gaap", "TemporaryEquityLiquidationPreference", "USD"),
+        ),
+    ),
+    (
+        "other_enterprise_claim:noncontrolling_interest_claim",
+        (
+            _ConceptSpec(
+                "us-gaap",
+                "MinorityInterest",
+                "USD",
+            ),
+        ),
+    ),
+    (
+        "other_enterprise_claim:royalty_monetization_liability",
+        (
+            _ConceptSpec("us-gaap", "LiabilityForSaleOfFutureRevenue", "USD"),
+            _ConceptSpec(
+                "us-gaap",
+                "DeferredIncomeFromSaleOfFutureRoyalties",
+                "USD",
+            ),
+        ),
+    ),
+    (
+        "other_enterprise_claim:contingent_consideration_claim",
+        (
+            _ConceptSpec(
+                "us-gaap",
+                "BusinessCombinationContingentConsiderationLiability",
+                "USD",
+            ),
+            _ConceptSpec(
+                "us-gaap",
+                "BusinessCombinationContingentConsiderationLiabilityCurrent",
+                "USD",
+            ),
+            _ConceptSpec(
+                "us-gaap",
+                "BusinessCombinationContingentConsiderationLiabilityNoncurrent",
+                "USD",
+            ),
+        ),
+    ),
+    (
+        "other_enterprise_claim:pension_underfunded_claim",
+        (_ConceptSpec("us-gaap", "DefinedBenefitPlanFundedStatusOfPlan", "USD"),),
+    ),
+    (
+        "other_enterprise_claim:finance_lease_claim",
+        (_ConceptSpec("us-gaap", "FinanceLeaseLiability", "USD"),),
+    ),
+)
+
+_FINANCE_LEASE_COMPONENTS = (
+    _ConceptSpec("us-gaap", "FinanceLeaseLiabilityCurrent", "USD"),
+    _ConceptSpec("us-gaap", "FinanceLeaseLiabilityNoncurrent", "USD"),
 )
 
 
@@ -296,6 +376,95 @@ class SecCompanyFactsCollector:
                 selected_facts.append(selected[-1])
                 if metric_key == "basic_shares_outstanding":
                     basic_share_facts = selected
+        for metric_key, concept_specs in _ENTERPRISE_CLAIM_CONCEPTS:
+            candidates = tuple(
+                (priority, facts)
+                for priority, spec in enumerate(concept_specs)
+                if (
+                    facts := self._accepted_facts(
+                        facts_root,
+                        metric_key=metric_key,
+                        spec=spec,
+                        cutoff=request.as_of_cutoff,
+                        publication_times=publication_times,
+                    )
+                )
+            )
+            if candidates:
+                selected = max(
+                    candidates,
+                    key=lambda item: (
+                        item[1][-1].period_end,
+                        item[1][-1].filed_date,
+                        item[1][-1].accession_number,
+                        -item[0],
+                    ),
+                )[1]
+                selected_facts.append(selected[-1])
+        finance_lease_key = "other_enterprise_claim:finance_lease_claim"
+        if not any(fact.metric_key == finance_lease_key for fact in selected_facts):
+            finance_lease = self._summed_components(
+                facts_root,
+                metric_key=finance_lease_key,
+                component_specs=_FINANCE_LEASE_COMPONENTS,
+                formula="finance_lease_liability_current+finance_lease_liability_noncurrent",
+                cutoff=request.as_of_cutoff,
+                publication_times=publication_times,
+            )
+            if finance_lease is not None:
+                selected_facts.append(finance_lease)
+        if not any(fact.metric_key == "restricted_cash" for fact in selected_facts):
+            restricted_cash = self._summed_components(
+                facts_root,
+                metric_key="restricted_cash",
+                component_specs=_RESTRICTED_CASH_COMPONENTS,
+                formula="restricted_cash_current+restricted_cash_noncurrent",
+                cutoff=request.as_of_cutoff,
+                publication_times=publication_times,
+            )
+            if restricted_cash is not None:
+                selected_facts.append(restricted_cash)
+        if not any(fact.metric_key == "debt_total" for fact in selected_facts):
+            debt_total = self._summed_components(
+                facts_root,
+                metric_key="debt_total",
+                component_specs=_DEBT_AND_CAPITAL_LEASE_COMPONENTS,
+                formula=(
+                    "debt_and_capital_lease_current+debt_and_capital_lease_noncurrent"
+                ),
+                cutoff=request.as_of_cutoff,
+                publication_times=publication_times,
+            )
+            if debt_total is not None:
+                selected_facts.append(debt_total)
+        facts_by_key = {fact.metric_key: fact for fact in selected_facts}
+        debt_total = facts_by_key.get("debt_total")
+        finance_lease = facts_by_key.get("other_enterprise_claim:finance_lease_claim")
+        if (
+            debt_total is not None
+            and finance_lease is not None
+            and debt_total.period_end == finance_lease.period_end
+            and (
+                "CapitalLease" in debt_total.concept
+                or "capital_lease" in (debt_total.formula or "")
+            )
+        ):
+            net_debt = Decimal(debt_total.value) - Decimal(finance_lease.value)
+            if net_debt < 0:
+                raise SecCompanyFactsCollectorError(
+                    "SEC Company Facts debt and finance lease reconciliation failed"
+                )
+            selected_facts = [
+                replace(
+                    fact,
+                    value=format(net_debt, "f"),
+                    calculation_method="derived",
+                    formula=("debt_and_capital_lease_total-finance_lease_liability"),
+                )
+                if fact is debt_total
+                else fact
+                for fact in selected_facts
+            ]
         facts = tuple(selected_facts)
         available_keys = {fact.metric_key for fact in facts}
         missing = tuple(
@@ -499,6 +668,84 @@ class SecCompanyFactsCollector:
             )
         )
 
+    @classmethod
+    def _summed_components(
+        cls,
+        facts_root: Mapping[str, object],
+        *,
+        metric_key: str,
+        component_specs: tuple[_ConceptSpec, ...],
+        formula: str,
+        cutoff: datetime,
+        publication_times: Mapping[str, datetime | None] | None,
+    ) -> SecCompanyFact | None:
+        components: list[SecCompanyFact] = []
+        for spec in component_specs:
+            facts = cls._accepted_facts(
+                facts_root,
+                metric_key=metric_key,
+                spec=spec,
+                cutoff=cutoff,
+                publication_times=publication_times,
+            )
+            if not facts:
+                return None
+            components.append(facts[-1])
+        period_end = components[0].period_end
+        if any(component.period_end != period_end for component in components[1:]):
+            return None
+        value = sum((Decimal(component.value) for component in components), Decimal(0))
+        latest = max(
+            components,
+            key=lambda component: (
+                component.filed_date,
+                component.accession_number,
+            ),
+        )
+        published_at = (
+            max(component.published_at for component in components)
+            if all(component.published_at is not None for component in components)
+            else None
+        )
+        source_payload = json.dumps(
+            {
+                "calculation_method": "derived",
+                "components": [
+                    json.loads(component.source_payload) for component in components
+                ],
+                "formula": formula,
+                "normalized_value": format(value, "f"),
+                "unit": latest.unit,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        return SecCompanyFact(
+            metric_key=metric_key,
+            taxonomy="us-gaap",
+            concept="+".join(component.concept for component in components),
+            value=format(value, "f"),
+            unit=latest.unit,
+            period_start=None,
+            period_end=period_end,
+            filed_date=latest.filed_date,
+            accession_number=latest.accession_number,
+            form=latest.form,
+            source_locator="+".join(
+                component.source_locator for component in components
+            ),
+            source_payload=source_payload,
+            freshness=(
+                "stale"
+                if any(component.freshness == "stale" for component in components)
+                else "current"
+            ),
+            reported_value=None,
+            published_at=published_at,
+            calculation_method="derived",
+            formula=formula,
+        )
+
 
 def companyfacts_pipeline_inputs(
     snapshot: SecCompanyFactsSnapshot,
@@ -545,9 +792,19 @@ def companyfacts_pipeline_inputs(
             period_end=fact.period_end,
             calculation_method=fact.calculation_method,
             formula=fact.formula,
-            supporting_passage_keys=(f"sec-companyfacts:{fact.metric_key}",),
+            supporting_passage_keys=(
+                f"sec-companyfacts:{fact.metric_key}",
+                *(
+                    ("sec-companyfacts:other_enterprise_claim:finance_lease_claim",)
+                    if fact.metric_key == "debt_total"
+                    and fact.formula
+                    == "debt_and_capital_lease_total-finance_lease_liability"
+                    else ()
+                ),
+            ),
         )
         for fact in snapshot.facts
+        if not fact.metric_key.startswith("other_enterprise_claim:")
     )
     facts_by_key = {fact.metric_key: fact for fact in snapshot.facts}
     cash_fact = facts_by_key.get("cash_and_cash_equivalents")
@@ -574,6 +831,123 @@ def companyfacts_pipeline_inputs(
             for metric in metrics
         )
     return passages, metrics
+
+
+def companyfacts_other_enterprise_claim_inputs(
+    snapshot: SecCompanyFactsSnapshot,
+    *,
+    financing_metrics: tuple[object, ...] = (),
+    balance_sheet=None,
+):
+    from .other_enterprise_claims import (
+        ClaimObservation,
+        OtherEnterpriseClaimsContext,
+        resolve_other_enterprise_claims,
+    )
+    from .pipeline import NormalizedMetricFact
+
+    facts_by_key = {fact.metric_key: fact for fact in snapshot.facts}
+    cash = facts_by_key.get("cash_and_cash_equivalents")
+    debt = facts_by_key.get("debt_total")
+    if cash is None or debt is None or cash.period_end != debt.period_end:
+        raise SecCompanyFactsCollectorError(
+            "other_claims_balance_sheet_context_unavailable"
+        )
+    claim_facts = tuple(
+        fact
+        for fact in snapshot.facts
+        if fact.metric_key.startswith("other_enterprise_claim:")
+    )
+    financing_by_key = {
+        getattr(metric, "metric_key", ""): getattr(metric, "value", "0")
+        for metric in financing_metrics
+    }
+    required_dilution_context = {
+        "convertible_share_equivalents",
+        "preferred_shares_outstanding",
+    }
+    if not required_dilution_context <= set(financing_by_key):
+        raise SecCompanyFactsCollectorError("other_claims_dilution_context_unavailable")
+    convertible_equivalents = financing_by_key["convertible_share_equivalents"]
+    preferred_equivalents = financing_by_key["preferred_shares_outstanding"]
+    debt_value = Decimal(debt.value)
+    finance_lease_fact = facts_by_key.get("other_enterprise_claim:finance_lease_claim")
+    finance_lease_value = (
+        Decimal(finance_lease_fact.value)
+        if finance_lease_fact is not None
+        else Decimal(0)
+    )
+    result = resolve_other_enterprise_claims(
+        OtherEnterpriseClaimsContext(
+            as_of_cutoff=snapshot.as_of_cutoff,
+            balance_sheet_period_end=cash.period_end,
+            debt_concept=debt.concept,
+            debt_includes_finance_leases=(
+                debt.formula != "debt_and_capital_lease_total-finance_lease_liability"
+                and (
+                    "CapitalLease" in debt.concept
+                    or "capital_lease" in (debt.formula or "")
+                    or (debt_value > 0 and finance_lease_value > 0)
+                )
+            ),
+            debt_includes_convertible_principal=(
+                Decimal(convertible_equivalents) > 0 and debt_value > 0
+            ),
+            convertible_share_equivalents=convertible_equivalents,
+            preferred_share_equivalents=preferred_equivalents,
+        ),
+        observations=tuple(
+            ClaimObservation(
+                component_id=fact.metric_key.removeprefix("other_enterprise_claim:"),
+                value=fact.value,
+                unit=fact.unit,
+                period_end=fact.period_end,
+                source_concept=f"{fact.taxonomy}:{fact.concept}",
+                supporting_evidence_ids=(f"sec-companyfacts:{fact.metric_key}",),
+            )
+            for fact in claim_facts
+        ),
+        balance_sheet=balance_sheet,
+    )
+    component_metrics = tuple(
+        NormalizedMetricFact(
+            reference_key=f"other-enterprise-claim:{component.component_id}",
+            source_class="financing",
+            metric_key=f"other_enterprise_claim:{component.component_id}",
+            value=component.value,
+            unit=component.unit,
+            period_start=None,
+            period_end=component.period_end,
+            calculation_method="derived",
+            formula=json.dumps(
+                {
+                    "policy_version": result.policy_version,
+                    "reason_code": component.reason_code,
+                    "resolution": component.resolution,
+                    "source_concept": component.source_concept,
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            ),
+            supporting_passage_keys=component.supporting_evidence_ids,
+        )
+        for component in result.components
+    )
+    return (
+        *component_metrics,
+        NormalizedMetricFact(
+            reference_key="other-enterprise-claims:aggregate",
+            source_class="financing",
+            metric_key="other_enterprise_claims",
+            value=result.value,
+            unit=result.unit,
+            period_start=None,
+            period_end=result.period_end,
+            calculation_method=result.calculation_method,
+            formula=result.formula,
+            supporting_passage_keys=result.supporting_evidence_ids,
+        ),
+    )
 
 
 def _basic_share_reference_key(fact: SecCompanyFact) -> str:
@@ -673,5 +1047,6 @@ __all__ = [
     "companyfacts_basic_share_growth_passages",
     "companyfacts_basic_share_growth_observations",
     "companyfacts_coverage_proof",
+    "companyfacts_other_enterprise_claim_inputs",
     "companyfacts_pipeline_inputs",
 ]

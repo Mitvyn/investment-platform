@@ -94,6 +94,36 @@ function personalSnapshotFixture(): PersonalResearchValuationSnapshot {
   return fixture as PersonalResearchValuationSnapshot;
 }
 
+function personalV2SnapshotFixture(): PersonalResearchValuationSnapshot {
+  const fixture = personalSnapshotFixture() as Record<string, any>;
+  fixture.contract_version = "valuation_snapshot.personal_research.v2";
+  fixture.other_enterprise_claims = {
+    ...fixture.other_included_claims,
+    input_id: "other_enterprise_claims",
+  };
+  delete fixture.other_included_claims;
+  fixture.other_enterprise_claim_components = [
+    "redeemable_preferred_claim",
+    "noncontrolling_interest_claim",
+    "royalty_monetization_liability",
+    "contingent_consideration_claim",
+    "pension_underfunded_claim",
+    "finance_lease_claim",
+  ].map((componentId, index) => ({
+    component_id: componentId,
+    value: index === 0 ? "12000000" : "0",
+    unit: "USD",
+    period_end: "2026-02-28",
+    effective_at: "2026-02-28T23:59:59+00:00",
+    resolution: index === 0 ? "reported" : "structural_absence",
+    reason_code: index === 0 ? "reported_balance" : "no_qualifying_claim",
+    source_concept: index === 0 ? "RedeemablePreferredStock" : null,
+    supporting_evidence_ids: ["55555555-5555-4555-8555-555555555555"],
+    policy_version: "biotech-other-enterprise-claims-v1",
+  }));
+  return fixture as PersonalResearchValuationSnapshot;
+}
+
 test("a Research Run without a persisted valuation shows an explicit missing state", () => {
   assert.deepEqual(presentValuationSnapshotWorkspace(runFixture, null), {
     kind: "missing",
@@ -266,6 +296,35 @@ test("personal research snapshot exposes assurance and consolidated EOD provenan
     ),
     true,
   );
+});
+
+test("personal research v2 presents enterprise-claim components and research-only limitations", () => {
+  const presentation = presentValuationSnapshotWorkspace(
+    personalRunFixture,
+    personalV2SnapshotFixture(),
+  );
+
+  assert.equal(presentation.kind, "ready");
+  if (presentation.kind !== "ready") return;
+  assert.deepEqual(presentation.assurance?.limitationCodes, [
+    "not_primary_venue_official_close",
+    "not_institutional_grade",
+    "not_for_trade_execution",
+  ]);
+  assert.equal(presentation.capitalInputs.at(-1)?.label, "Other enterprise claims");
+  assert.deepEqual(presentation.enterpriseClaimComponents[0], {
+    id: "redeemable_preferred_claim",
+    value: "12000000",
+    unit: "USD",
+    periodEnd: "2026-02-28",
+    effective: "2026-02-28T23:59:59+00:00",
+    resolution: "reported",
+    reasonCode: "reported_balance",
+    sourceConcept: "RedeemablePreferredStock",
+    evidenceIds: ["55555555-5555-4555-8555-555555555555"],
+    policyVersion: "biotech-other-enterprise-claims-v1",
+  });
+  assert.equal(presentation.enterpriseClaimComponents.length, 6);
 });
 
 test("strict valuation source references do not gain personal provider caveats", () => {
