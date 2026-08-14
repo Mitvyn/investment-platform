@@ -1,0 +1,649 @@
+from __future__ import annotations
+
+import unittest
+from datetime import date, timedelta
+from decimal import Decimal
+
+from investment_research_os.quant import (
+    BacktestConfig,
+    BarSeries,
+    BarWindow,
+    CorporateActionSet,
+    CostModel,
+    LookAheadError,
+    OhlcvBar,
+    ParticipationLimit,
+    QuantContractError,
+    StockSplit,
+    run_backtest,
+)
+from investment_research_os.quant.validation import (
+    CostScenario,
+    CostSensitivityConfig,
+    MultipleTestingDisclosure,
+    VALIDATION_VERSION,
+    WalkForwardConfig,
+    build_walk_forward_windows,
+    validate_walk_forward,
+)
+
+SECURITY_ID = "3f1b0c2e-9d4a-4c7f-b1e2-8a5d6c7f0912"
+START = date(2026, 1, 5)
+
+FREE = CostModel(
+    commission_per_share=Decimal("0"),
+    commission_bps=Decimal("0"),
+    commission_minimum=Decimal("0"),
+    transaction_cost_bps=Decimal("0"),
+    slippage_bps=Decimal("0"),
+)
+
+RETAIL = CostModel(
+    commission_per_share=Decimal("0.01"),
+    commission_bps=Decimal("0"),
+    commission_minimum=Decimal("1.00"),
+    transaction_cost_bps=Decimal("5"),
+    slippage_bps=Decimal("10"),
+)
+
+OPEN_LIQUIDITY = ParticipationLimit(
+    max_participation_bps=Decimal("10000"),
+    volume_basis="execution_bar",
+    zero_volume_policy="block",
+    unfilled_policy="cancel",
+    min_fill_shares=0,
+)
+
+CLOSED_LIQUIDITY = ParticipationLimit(
+    max_participation_bps=Decimal("0"),
+    volume_basis="execution_bar",
+    zero_volume_policy="block",
+    unfilled_policy="cancel",
+    min_fill_shares=0,
+)
+
+CONFIG = BacktestConfig(
+    starting_cash=Decimal("100000"),
+    fractional_share_policy="error",
+)
+
+
+def make_series(prices: list[str], *, volume: int = 1_000_000) -> BarSeries:
+    bars = []
+    for index, price in enumerate(prices):
+        value = Decimal(price)
+        bars.append(
+            OhlcvBar(
+                session=START + timedelta(days=index),
+                open=value,
+                high=value,
+                low=value,
+                close=value,
+                volume=volume,
+            )
+        )
+    return BarSeries(
+        security_id=SECURITY_ID,
+        currency="USD",
+        interval="1d",
+        price_basis="unadjusted",
+        source="fixture",
+        bars=tuple(bars),
+    )
+
+
+def rising_prices(count: int) -> list[str]:
+    """Irregular uptrend, so buy-and-hold is the thing to beat."""
+
+    prices: list[str] = []
+    value = Decimal("300")
+    for index in range(count):
+        value = value + Decimal("1") + Decimal(index % 7) / Decimal("10")
+        prices.append(format(value, "f"))
+    return prices
+
+
+def declining_prices(count: int) -> list[str]:
+    """Irregular downtrend. Deterministic, no RNG, non-zero dispersion."""
+
+    prices: list[str] = []
+    value = Decimal("500")
+    for index in range(count):
+        step = Decimal("1") + Decimal(index % 7) / Decimal("10")
+        value = value - step
+        prices.append(format(value, "f"))
+    return prices
+
+
+def no_actions() -> CorporateActionSet:
+    return CorporateActionSet(security_id=SECURITY_ID, source="fixture", actions=())
+
+
+class AlwaysFlat:
+    def target_exposure(self, window: BarWindow) -> Decimal:
+        return Decimal(0)
+
+
+class AlwaysLong:
+    def target_exposure(self, window: BarWindow) -> Decimal:
+        return Decimal(1)
+
+
+class FlatFactory:
+    """Fits nothing. Deterministic by construction."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+        self.cutoffs: list[date] = []
+        self.window_lengths: list[int] = []
+
+    def build(self, train_window: BarWindow) -> tuple[AlwaysFlat, str]:
+        self.calls += 1
+        self.cutoffs.append(train_window.cutoff)
+        self.window_lengths.append(len(train_window.bars))
+        return AlwaysFlat(), "a" * 64
+
+
+class LongFactory:
+    def build(self, train_window: BarWindow) -> tuple[AlwaysLong, str]:
+        return AlwaysLong(), "b" * 64
+
+
+class PeekingFactory:
+    def build(self, train_window: BarWindow) -> tuple[AlwaysFlat, str]:
+        train_window.at(train_window.cutoff + timedelta(days=1))
+        return AlwaysFlat(), "c" * 64
+
+
+class DriftingFactory:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def build(self, train_window: BarWindow) -> tuple[AlwaysFlat, str]:
+        self.calls += 1
+        return AlwaysFlat(), format(self.calls, "064d")
+
+
+def schedule(**overrides: object) -> WalkForwardConfig:
+    base: dict[str, object] = {
+        "train_sessions": 20,
+        "test_sessions": 5,
+        "step_sessions": 5,
+        "embargo_sessions": 2,
+        "window_mode": "rolling",
+        "min_windows": 11,
+        "min_trades_per_window": 0,
+        "min_total_trades": 0,
+    }
+    base.update(overrides)
+    return WalkForwardConfig(**base)  # type: ignore[arg-type]
+
+
+def sensitivity(*labels_and_costs: tuple[str, CostModel]) -> CostSensitivityConfig:
+    scenarios = tuple(
+        CostScenario(label=label, costs=costs) for label, costs in labels_and_costs
+    )
+    return CostSensitivityConfig(scenarios=scenarios, baseline_label=scenarios[-1].label)
+
+
+def disclosure(**overrides: object) -> MultipleTestingDisclosure:
+    base: dict[str, object] = {
+        "trials_declared": 2,
+        "family_label": "fixture-family",
+        "adjustment": "bonferroni",
+        "alpha": "0.05",
+    }
+    base.update(overrides)
+    return MultipleTestingDisclosure(**base)  # type: ignore[arg-type]
+
+
+def validate(
+    *,
+    series: BarSeries | None = None,
+    factory: object | None = None,
+    liquidity: ParticipationLimit = OPEN_LIQUIDITY,
+    corporate_actions: CorporateActionSet | None = None,
+    walk_forward: WalkForwardConfig | None = None,
+    costs: CostSensitivityConfig | None = None,
+    testing: MultipleTestingDisclosure | None = None,
+):
+    return validate_walk_forward(
+        series=series or make_series(declining_prices(120)),
+        corporate_actions=corporate_actions or no_actions(),
+        liquidity=liquidity,
+        config=CONFIG,
+        schedule=walk_forward or schedule(),
+        factory=factory or FlatFactory(),
+        strategy_id="fixture-strategy",
+        cost_sensitivity=costs or sensitivity(("free", FREE), ("retail", RETAIL)),
+        disclosure=testing or disclosure(),
+        annualisation_periods=1,
+    )
+
+
+class ScheduleTests(unittest.TestCase):
+    def test_chronology_invariant_holds_across_a_parameter_grid(self) -> None:
+        for train in (5, 20):
+            for test in (2, 5):
+                for step in (1, 5):
+                    for embargo in (0, 3):
+                        windows = build_walk_forward_windows(
+                            session_count=200,
+                            config=schedule(
+                                train_sessions=train,
+                                test_sessions=test,
+                                step_sessions=step,
+                                embargo_sessions=embargo,
+                                min_windows=1,
+                            ),
+                        )
+                        self.assertTrue(windows)
+                        for window in windows:
+                            self.assertLess(
+                                window.train_start_index, window.train_end_index
+                            )
+                            if embargo:
+                                self.assertLess(
+                                    window.train_end_index, window.embargo_end_index
+                                )
+                            self.assertLess(
+                                window.embargo_end_index, window.test_start_index
+                            )
+                            self.assertLessEqual(
+                                window.test_start_index, window.test_end_index
+                            )
+                            self.assertEqual(
+                                window.embargo_end_index,
+                                window.train_end_index + embargo,
+                            )
+
+    def test_embargoed_sessions_belong_to_neither_period(self) -> None:
+        windows = build_walk_forward_windows(
+            session_count=100,
+            config=schedule(embargo_sessions=5, min_windows=1),
+        )
+        for window in windows:
+            embargoed = set(
+                range(window.train_end_index + 1, window.test_start_index)
+            )
+            self.assertEqual(len(embargoed), 5)
+            train = set(range(window.train_start_index, window.train_end_index + 1))
+            test = set(range(window.test_start_index, window.test_end_index + 1))
+            self.assertFalse(embargoed & train)
+            self.assertFalse(embargoed & test)
+
+    def test_zero_embargo_is_legal(self) -> None:
+        windows = build_walk_forward_windows(
+            session_count=100,
+            config=schedule(embargo_sessions=0, min_windows=1),
+        )
+        self.assertTrue(windows)
+        self.assertEqual(windows[0].embargo_end_index, windows[0].train_end_index)
+
+    def test_partial_trailing_window_is_discarded(self) -> None:
+        # train 20 + embargo 2 + test 5 -> window w ends at index 26 + 5w.
+        # 43 sessions (last index 42) fits w = 0..3 ending at 41. Session 42 is
+        # left unused rather than becoming a stunted fifth window.
+        windows = build_walk_forward_windows(
+            session_count=43,
+            config=schedule(min_windows=1),
+        )
+        self.assertEqual(len(windows), 4)
+        self.assertEqual(windows[-1].test_end_index, 41)
+
+    def test_anchored_mode_grows_the_training_period(self) -> None:
+        windows = build_walk_forward_windows(
+            session_count=100,
+            config=schedule(window_mode="anchored", min_windows=1),
+        )
+        self.assertTrue(all(window.train_start_index == 0 for window in windows))
+        self.assertLess(windows[0].train_end_index, windows[1].train_end_index)
+
+    def test_schedule_rejects_windows_shorter_than_a_series(self) -> None:
+        with self.assertRaises(QuantContractError):
+            schedule(train_sessions=1)
+        with self.assertRaises(QuantContractError):
+            schedule(test_sessions=1)
+        with self.assertRaises(QuantContractError):
+            schedule(step_sessions=0)
+        with self.assertRaises(QuantContractError):
+            schedule(embargo_sessions=-1)
+
+
+class LeakageTests(unittest.TestCase):
+    def test_the_factory_only_ever_sees_training_sessions(self) -> None:
+        factory = FlatFactory()
+        report = validate(factory=factory)
+        self.assertEqual(factory.calls, len(report.windows))
+        for window, cutoff in zip(report.windows, factory.cutoffs):
+            self.assertEqual(cutoff, window.train_end_session)
+            self.assertLess(cutoff, window.test_start_session)
+
+    def test_a_factory_reaching_past_its_window_raises(self) -> None:
+        with self.assertRaises(LookAheadError):
+            validate(factory=PeekingFactory())
+
+    def test_a_prebuilt_strategy_cannot_be_passed(self) -> None:
+        with self.assertRaises(QuantContractError):
+            validate(factory=AlwaysFlat())
+
+
+class CorporateActionTests(unittest.TestCase):
+    def test_a_split_on_a_test_windows_first_session_is_handled(self) -> None:
+        series = make_series([format(Decimal(200 - index), "f") for index in range(12)])
+        split_session = series.bars[2].session
+        actions = CorporateActionSet(
+            security_id=SECURITY_ID,
+            source="fixture",
+            actions=(
+                StockSplit(
+                    effective_session=split_session,
+                    new_shares=2,
+                    old_shares=1,
+                ),
+            ),
+        )
+
+        # Without a lead-in bar the split lands on the slice's first session,
+        # which the engine never transitions into, and the run dies.
+        naked_slice = BarSeries(
+            security_id=SECURITY_ID,
+            currency="USD",
+            interval="1d",
+            price_basis="unadjusted",
+            source="fixture",
+            bars=series.bars[2:4],
+        )
+        with self.assertRaises(QuantContractError):
+            run_backtest(
+                series=naked_slice,
+                strategy=AlwaysLong(),
+                costs=FREE,
+                corporate_actions=actions,
+                liquidity=OPEN_LIQUIDITY,
+                config=CONFIG,
+                strategy_id="probe",
+                strategy_config_sha256="d" * 64,
+            )
+
+        report = validate(
+            series=series,
+            corporate_actions=actions,
+            walk_forward=schedule(
+                train_sessions=2,
+                test_sessions=2,
+                step_sessions=2,
+                embargo_sessions=0,
+                min_windows=1,
+            ),
+            testing=disclosure(trials_declared=2),
+        )
+        self.assertTrue(report.windows)
+        self.assertEqual(report.windows[0].test_start_session, split_session)
+
+    def test_actions_outside_a_window_do_not_reach_the_engine(self) -> None:
+        series = make_series(declining_prices(120))
+        actions = CorporateActionSet(
+            security_id=SECURITY_ID,
+            source="fixture",
+            actions=(
+                StockSplit(
+                    effective_session=series.bars[100].session,
+                    new_shares=2,
+                    old_shares=1,
+                ),
+            ),
+        )
+        report = validate(series=series, corporate_actions=actions)
+        self.assertTrue(report.windows)
+
+
+class LiquidityTests(unittest.TestCase):
+    def test_the_liquidity_limit_is_pinned_in_the_record(self) -> None:
+        report = validate()
+        record = report.to_record()
+        self.assertEqual(record["liquidity"], OPEN_LIQUIDITY.to_record())
+        self.assertEqual(record["liquidity_sha256"], OPEN_LIQUIDITY.content_sha256)
+
+    def test_an_unfillable_benchmark_is_insufficient_not_a_win(self) -> None:
+        report = validate(liquidity=CLOSED_LIQUIDITY)
+        self.assertEqual(report.outcome, "insufficient_data")
+        self.assertIn("benchmark_unfillable", report.reason_codes)
+
+    def test_changing_the_limit_changes_the_hash(self) -> None:
+        tight = ParticipationLimit(
+            max_participation_bps=Decimal("1"),
+            volume_basis="execution_bar",
+            zero_volume_policy="block",
+            unfilled_policy="cancel",
+            min_fill_shares=0,
+        )
+        self.assertNotEqual(
+            validate().content_sha256,
+            validate(liquidity=tight).content_sha256,
+        )
+
+
+class SampleAdequacyTests(unittest.TestCase):
+    def test_too_few_windows_produces_no_statistics(self) -> None:
+        report = validate(
+            series=make_series(declining_prices(40)),
+            walk_forward=schedule(min_windows=11),
+        )
+        self.assertEqual(report.outcome, "insufficient_data")
+        self.assertIn("too_few_windows", report.reason_codes)
+        self.assertEqual(report.scenario_summaries, ())
+
+    def test_a_series_shorter_than_one_window_is_insufficient(self) -> None:
+        report = validate(
+            series=make_series(declining_prices(10)),
+            walk_forward=schedule(min_windows=1),
+        )
+        self.assertEqual(report.outcome, "insufficient_data")
+        self.assertIn("series_too_short", report.reason_codes)
+
+    def test_too_few_trades_is_reported(self) -> None:
+        report = validate(walk_forward=schedule(min_trades_per_window=5))
+        self.assertEqual(report.outcome, "insufficient_data")
+        self.assertIn("too_few_trades_in_window", report.reason_codes)
+
+    def test_multiple_unmet_minimums_are_all_reported(self) -> None:
+        report = validate(
+            walk_forward=schedule(min_trades_per_window=5, min_total_trades=50),
+        )
+        self.assertIn("too_few_trades_in_window", report.reason_codes)
+        self.assertIn("too_few_total_trades", report.reason_codes)
+
+    def test_degrees_of_freedom_below_the_table_is_insufficient(self) -> None:
+        # 60 sessions yields 7 windows -> 6 degrees of freedom, below the
+        # smallest tabulated bucket.
+        report = validate(
+            series=make_series(declining_prices(60)),
+            walk_forward=schedule(min_windows=3),
+        )
+        self.assertEqual(report.outcome, "insufficient_data")
+        self.assertIn("degrees_of_freedom_below_table", report.reason_codes)
+
+
+class DisclosureTests(unittest.TestCase):
+    def test_declared_trials_below_observed_is_rejected(self) -> None:
+        with self.assertRaises(QuantContractError):
+            validate(testing=disclosure(trials_declared=1))
+
+    def test_no_adjustment_with_many_trials_is_rejected(self) -> None:
+        with self.assertRaises(QuantContractError):
+            validate(testing=disclosure(adjustment="none", trials_declared=2))
+
+    def test_bonferroni_actually_binds(self) -> None:
+        lenient = validate(testing=disclosure(trials_declared=2))
+        strict = validate(testing=disclosure(trials_declared=100))
+        self.assertEqual(lenient.outcome, "validated")
+        self.assertEqual(strict.outcome, "insufficient_data")
+        self.assertIn("adjusted_alpha_below_table", strict.reason_codes)
+
+    def test_overlapping_test_windows_are_disclosed(self) -> None:
+        report = validate(walk_forward=schedule(step_sessions=2))
+        self.assertTrue(report.test_windows_overlap)
+        self.assertTrue(validate().test_windows_overlap is False)
+
+
+class OutcomeTests(unittest.TestCase):
+    def test_a_consistent_edge_over_a_falling_benchmark_validates(self) -> None:
+        report = validate()
+        self.assertEqual(report.outcome, "validated")
+        self.assertEqual(report.reason_codes, ())
+        self.assertEqual(report.windows_beating_benchmark, report.window_count)
+
+    def test_a_strategy_indistinguishable_from_the_benchmark_is_unmeasurable(
+        self,
+    ) -> None:
+        # Excess is exactly zero in every window, so there is no dispersion to
+        # test. That is insufficient evidence, not a rejection on the merits.
+        report = validate(factory=LongFactory())
+        self.assertEqual(report.outcome, "insufficient_data")
+        self.assertIn("zero_variance", report.reason_codes)
+
+    def test_losing_to_the_benchmark_is_rejected(self) -> None:
+        report = validate(series=make_series(rising_prices(120)))
+        self.assertEqual(report.outcome, "rejected")
+        self.assertIn("no_excess_return", report.reason_codes)
+
+    def test_the_benchmark_carries_the_same_costs(self) -> None:
+        report = validate(
+            factory=LongFactory(),
+        )
+        for result in report.window_results:
+            self.assertEqual(result.excess_return, Decimal(0))
+
+
+class ScenarioTests(unittest.TestCase):
+    def test_one_fit_is_reused_across_cost_scenarios(self) -> None:
+        factory = FlatFactory()
+        report = validate(
+            factory=factory,
+            costs=sensitivity(("free", FREE), ("retail", RETAIL)),
+        )
+        self.assertEqual(factory.calls, len(report.windows))
+        for window in report.windows:
+            hashes = {
+                result.strategy_config_sha256
+                for result in report.window_results
+                if result.window_index == window.window_index
+            }
+            self.assertEqual(len(hashes), 1)
+
+    def test_baseline_must_name_a_declared_scenario(self) -> None:
+        with self.assertRaises(QuantContractError):
+            CostSensitivityConfig(
+                scenarios=(
+                    CostScenario(label="free", costs=FREE),
+                    CostScenario(label="retail", costs=RETAIL),
+                ),
+                baseline_label="absent",
+            )
+
+    def test_duplicate_scenario_labels_are_rejected(self) -> None:
+        with self.assertRaises(QuantContractError):
+            CostSensitivityConfig(
+                scenarios=(
+                    CostScenario(label="free", costs=FREE),
+                    CostScenario(label="free", costs=RETAIL),
+                ),
+                baseline_label="free",
+            )
+
+    def test_a_single_scenario_is_rejected(self) -> None:
+        with self.assertRaises(QuantContractError):
+            CostSensitivityConfig(
+                scenarios=(CostScenario(label="free", costs=FREE),),
+                baseline_label="free",
+            )
+
+
+class RecordTests(unittest.TestCase):
+    def test_identical_runs_hash_identically(self) -> None:
+        first = validate()
+        second = validate()
+        self.assertEqual(first.to_record(), second.to_record())
+        self.assertEqual(first.content_sha256, second.content_sha256)
+        self.assertEqual(len(first.content_sha256), 64)
+
+    def test_changing_the_embargo_changes_the_hash(self) -> None:
+        self.assertNotEqual(
+            validate().content_sha256,
+            validate(walk_forward=schedule(embargo_sessions=4)).content_sha256,
+        )
+
+    def test_changing_declared_trials_changes_the_hash(self) -> None:
+        self.assertNotEqual(
+            validate().content_sha256,
+            validate(testing=disclosure(trials_declared=3)).content_sha256,
+        )
+
+    def test_a_nondeterministic_factory_is_visible_in_the_hash(self) -> None:
+        # One factory whose fit changes between runs. The drift surfaces as a
+        # different report hash instead of being averaged away.
+        drifting = DriftingFactory()
+        self.assertNotEqual(
+            validate(factory=drifting).content_sha256,
+            validate(factory=drifting).content_sha256,
+        )
+
+    def test_the_record_pins_its_inputs_and_versions(self) -> None:
+        series = make_series(declining_prices(120))
+        report = validate(series=series)
+        record = report.to_record()
+        self.assertEqual(record["series_sha256"], series.content_sha256)
+        self.assertEqual(record["security_id"], SECURITY_ID)
+        self.assertEqual(record["validation_version"], VALIDATION_VERSION)
+        self.assertEqual(record["engine_version"], "quant-backtest-3")
+        self.assertIn("benchmark_config_sha256", record)
+
+    def test_the_record_contains_no_floats(self) -> None:
+        def walk(value: object) -> None:
+            self.assertNotIsInstance(value, float)
+            if isinstance(value, dict):
+                for item in value.values():
+                    walk(item)
+            elif isinstance(value, (list, tuple)):
+                for item in value:
+                    walk(item)
+
+        walk(validate().to_record())
+
+
+class IsolationTests(unittest.TestCase):
+    def test_validation_modules_import_no_other_bounded_context(self) -> None:
+        import pathlib
+
+        package = (
+            pathlib.Path(__file__).resolve().parents[1]
+            / "src"
+            / "investment_research_os"
+            / "quant"
+        )
+        names = {path.name for path in package.glob("*.py")}
+        self.assertIn("validation.py", names)
+        self.assertIn("statistics.py", names)
+
+        forbidden = (
+            "moomoo",
+            "portfolio",
+            "research_runs",
+            "evidence_bundles",
+            "committee",
+            "readiness",
+            "workers.",
+            "supabase",
+        )
+        for path in package.glob("*.py"):
+            for line in path.read_text(encoding="utf-8").splitlines():
+                stripped = line.strip()
+                if not (stripped.startswith("import ") or stripped.startswith("from ")):
+                    continue
+                for term in forbidden:
+                    self.assertNotIn(term, stripped, f"{path.name} imports {term}")
+
+
+if __name__ == "__main__":
+    unittest.main()

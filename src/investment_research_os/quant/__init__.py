@@ -25,6 +25,25 @@ from investment_research_os.quant.corporate_actions import (
     StockSplit,
 )
 from investment_research_os.quant.liquidity import ParticipationLimit
+from investment_research_os.quant.statistics import (
+    ReturnStatistics,
+    critical_value,
+    simple_returns,
+    summarise_returns,
+)
+from investment_research_os.quant.validation import (
+    CostScenario,
+    CostSensitivityConfig,
+    MultipleTestingDisclosure,
+    ScenarioSummary,
+    StrategyFactory,
+    ValidationReport,
+    WalkForwardConfig,
+    WalkForwardWindow,
+    WindowScenarioResult,
+    build_walk_forward_windows,
+    validate_walk_forward,
+)
 from investment_research_os.quant.engine import (
     BacktestConfig,
     BacktestResult,
@@ -41,6 +60,21 @@ from investment_research_os.quant.engine import (
 
 __all__ = [
     "BacktestConfig",
+    "CostScenario",
+    "CostSensitivityConfig",
+    "MultipleTestingDisclosure",
+    "ReturnStatistics",
+    "ScenarioSummary",
+    "StrategyFactory",
+    "ValidationReport",
+    "WalkForwardConfig",
+    "WalkForwardWindow",
+    "WindowScenarioResult",
+    "build_walk_forward_windows",
+    "critical_value",
+    "simple_returns",
+    "summarise_returns",
+    "validate_walk_forward",
     "BacktestResult",
     "BarInterval",
     "BarSeries",
