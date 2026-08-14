@@ -13,6 +13,10 @@ fi
 : "${IROS_SUPABASE_URL:?IROS_SUPABASE_URL is required}"
 : "${IROS_SUPABASE_PUBLISHABLE_KEY:?IROS_SUPABASE_PUBLISHABLE_KEY is required}"
 
+# Packaged runtime uses operator sessions only. Never expose tenant-wide keys to
+# worker builds or Deno Desktop packaging, even when .env.local contains them.
+unset IROS_SUPABASE_SECRET_KEY SUPABASE_SERVICE_ROLE_KEY
+
 required_deno_version=2.9.3
 actual_deno_version=$(deno --version | awk 'NR == 1 { print $2 }')
 if [ "$actual_deno_version" != "$required_deno_version" ]; then

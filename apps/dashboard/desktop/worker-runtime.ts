@@ -1,5 +1,7 @@
 export type DesktopWorkerStatus = {
   contract_version: "desktop_worker_status.v1";
+  control_origin: string;
+  control_token: string;
   state: "ready";
   worker_id: "iros-desktop-worker";
 };
@@ -53,6 +55,10 @@ function parseReadyStatus(line: string): DesktopWorkerStatus {
   }
   if (
     value.contract_version !== "desktop_worker_status.v1" ||
+    typeof value.control_origin !== "string" ||
+    !/^http:\/\/127\.0\.0\.1:\d+$/.test(value.control_origin) ||
+    typeof value.control_token !== "string" ||
+    value.control_token.length < 32 ||
     value.state !== "ready" ||
     value.worker_id !== "iros-desktop-worker"
   ) {

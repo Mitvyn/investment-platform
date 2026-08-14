@@ -8,12 +8,16 @@ import {
   HistogramSeries,
   type Time,
 } from "lightweight-charts";
-import { useEffect, useId, useRef } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 
 import {
+  availableMarketRanges,
+  MARKET_RANGE_LABELS,
+  type MarketRangeKey,
   marketDataRecency,
   marketHistoryRows,
   marketPriceFormat,
+  marketVisibleRange,
 } from "@/lib/market-price-presentation";
 
 type MarketPriceChartProps = {
@@ -47,9 +51,18 @@ export function MarketPriceChart({
   sessionEnd,
 }: MarketPriceChartProps) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const chartRef = useRef<ReturnType<typeof createChart> | null>(null);
   const noteId = useId();
+  const rangeGroupId = useId();
   const historyRows = marketHistoryRows(bars);
   const recency = marketDataRecency(retrievedAt, new Date(recencyCheckedAt));
+  const ranges = useMemo(() => availableMarketRanges(bars), [bars]);
+  const [activeRange, setActiveRange] = useState<MarketRangeKey>("all");
+  const selectedRange = ranges.includes(activeRange) ? activeRange : "all";
+  const visibleRange = useMemo(
+    () => marketVisibleRange(bars, selectedRange),
+    [bars, selectedRange],
+  );
 
   useEffect(() => {
     const container = containerRef.current;
@@ -69,7 +82,23 @@ export function MarketPriceChart({
       },
       rightPriceScale: { borderColor: "rgba(148, 163, 184, 0.18)" },
       timeScale: { borderColor: "rgba(148, 163, 184, 0.18)" },
+      // The wheel belongs to the page, not the chart. Capturing it traps the
+      // operator mid-scroll. Panning and zooming stay available by dragging
+      // the chart body, dragging an axis, or pinching.
+      handleScroll: {
+        mouseWheel: false,
+        pressedMouseMove: true,
+        horzTouchDrag: true,
+        vertTouchDrag: false,
+      },
+      handleScale: {
+        mouseWheel: false,
+        pinch: true,
+        axisPressedMouseMove: true,
+        axisDoubleClickReset: true,
+      },
     });
+    chartRef.current = chart;
     const candles = chart.addSeries(CandlestickSeries, {
       priceFormat: marketPriceFormat(bars.flatMap((bar) => [bar.open, bar.high, bar.low, bar.close])),
       upColor: "#06b6d4",
@@ -109,11 +138,60 @@ export function MarketPriceChart({
     );
     chart.timeScale().fitContent();
 
-    return () => chart.remove();
+    return () => {
+      chartRef.current = null;
+      chart.remove();
+    };
   }, [bars]);
+
+  useEffect(() => {
+    const chart = chartRef.current;
+    if (!chart || !visibleRange) return;
+    if (selectedRange === "all") {
+      chart.timeScale().fitContent();
+      return;
+    }
+    chart.timeScale().setVisibleRange({
+      from: visibleRange.from as Time,
+      to: visibleRange.to as Time,
+    });
+  }, [selectedRange, visibleRange]);
 
   return (
     <>
+      {ranges.length > 1 ? (
+        <div
+          aria-label="Chart session range"
+          className="mb-3 flex flex-wrap items-center gap-1"
+          id={rangeGroupId}
+          role="group"
+        >
+          {ranges.map((range) => {
+            const current = range === selectedRange;
+            return (
+              <button
+                aria-pressed={current}
+                className={`rounded-md px-3 py-1.5 text-xs font-medium tabular-nums transition-colors ${
+                  current
+                    ? "bg-primary text-primary-foreground"
+                    : "text-muted-foreground hover:bg-muted hover:text-foreground"
+                }`}
+                key={range}
+                onClick={() => setActiveRange(range)}
+                type="button"
+              >
+                {MARKET_RANGE_LABELS[range]}
+              </button>
+            );
+          })}
+          {visibleRange ? (
+            <span className="ml-2 text-xs text-muted-foreground">
+              {visibleRange.barCount} sessions · {visibleRange.from} to{" "}
+              {visibleRange.to}
+            </span>
+          ) : null}
+        </div>
+      ) : null}
       <div
         aria-describedby={noteId}
         aria-label="Unadjusted daily price and volume chart"

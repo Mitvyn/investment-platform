@@ -15,6 +15,8 @@ export async function registerSecurity(formData: FormData) {
   }
 
   let receipt;
+  const view = String(formData.get("view") ?? "overview").trim() || "overview";
+  const suffix = `&view=${encodeURIComponent(view)}`;
   try {
     receipt = await enqueueSecurityRegistration(
       supabase,
@@ -29,8 +31,8 @@ export async function registerSecurity(formData: FormData) {
       error instanceof Error && error.message === "ticker has invalid format"
         ? "invalid_ticker"
         : "enqueue_failed";
-    redirect(`/?registration_error=${errorCode}`);
+    redirect(`/?registration_error=${errorCode}${suffix}`);
   }
 
-  redirect(`/?registration=${receipt.job_id}`);
+  redirect(`/?registration=${receipt.job_id}${suffix}`);
 }

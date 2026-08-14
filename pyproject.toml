@@ -20,6 +20,7 @@ classifiers = [
 dependencies = [
   "certifi>=2024.2.2",
   "curl_cffi>=0.15,<1",
+  "websockets>=17,<18",
   "yfinance==1.5.1",
 ]
 

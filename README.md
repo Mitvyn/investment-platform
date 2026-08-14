@@ -267,6 +267,44 @@ IROS uses only the numeric code. Configure email OTP length to six digits and
 expiry to ten minutes. This is an operator-owned hosted setting, not a database
 migration.
 
+### Read-only Moomoo portfolio mirror
+
+Desktop OAuth requests only `quote:read`, `trade:read`, and account-bound
+`accid:*` authorization. Refresh tokens remain in macOS Keychain. Raw broker
+account IDs remain inside desktop worker; persisted snapshots use stable
+pseudonymous account references and exact decimal strings.
+
+Operator reports migration `20260812120111_iros_portfolio_broker_mirror.sql`
+applied on 2026-08-13. Agent has not queried or smoke-tested hosted database.
+Desktop worker has no Supabase URL or credential surface, and desktop packaging
+scrubs service-role variables after loading build configuration. It composes
+pseudonymous immutable snapshots but cannot write them. Dashboard Hosted Save
+uses its existing authenticated operator session to call one atomic RPC per
+account. Local migration `20260813120000_iros_portfolio_persist_rpc.sql`
+re-derives UUIDv5 identities, canonical content and request hashes, validates
+the position manifest, and performs all writes in one transaction. Operator
+reports it applied on 2026-08-13 after correcting one statement-zero parser
+error; agent has not queried hosted state. Dashboard reads any existing
+immutable mirror and otherwise falls back to desktop memory. Desktop UI keeps
+up to five validated public Moomoo client UUIDs in an HTTP-only loopback cookie
+and presents them newest-first through a reusable dropdown; no broker UID,
+password, or OAuth token enters that preference. Hosted write behavior and live
+Singapore account access remain unverified. Manual refresh and local-only
+disconnect are offline-tested; disconnect does not revoke provider
+authorization. Portfolio canonical JSON now preserves raw UTF-8 consistently
+across Python, TypeScript, and PostgreSQL; non-ASCII golden vectors and
+unpaired-surrogate rejection guard holdings-name hashing.
+
+After one successful browser authorization, desktop relaunch silently restores
+the session from Keychain using the explicitly enabled saved public client ID. Resume makes
+one OAuth refresh, revalidates read scopes and concrete account grants, reloads
+holdings, and starts quote transport. Missing, expired, or revoked authorization
+falls back to explicit Connect. Manual Disconnect deletes the Keychain token
+and disables automatic resume until the next successful browser connection.
+Pending resume is bound to the authenticated operator. Disconnect claims an
+atomic disconnecting state and cannot leave an unowned quote socket. A quote
+thread that misses its stop deadline remains owned and blocks replacement.
+
 ## Validation
 
 Tests use local fakes and make no network calls:
@@ -309,6 +347,8 @@ supabase/migrations/           `iros_` evidence, context, RLS, Watchlist
 workers/sec/                   injectable SEC collector and persistence
 workers/issuer/                official release, financial, catalyst, risk path
 workers/market/                personal-use Yahoo Finance/yfinance adapter
+workers/portfolio/             read-only Moomoo, snapshots, reconciliation
+workers/desktop/               capability-bound local OAuth/control runtime
 src/investment_research_os/  deterministic research workflow domains
 tests/                         offline contract and migration tests
 ```

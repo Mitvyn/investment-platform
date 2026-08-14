@@ -14,11 +14,11 @@ Deno.test("desktop runtime launches worker and owns clean shutdown", async () =>
     readyTimeoutMs: 1_000,
   });
 
-  assert.deepEqual(runtime.status, {
-    contract_version: "desktop_worker_status.v1",
-    state: "ready",
-    worker_id: "iros-desktop-worker",
-  });
+  assert.equal(runtime.status.contract_version, "desktop_worker_status.v1");
+  assert.equal(runtime.status.state, "ready");
+  assert.equal(runtime.status.worker_id, "iros-desktop-worker");
+  assert.match(runtime.status.control_origin, /^http:\/\/127\.0\.0\.1:\d+$/);
+  assert.ok(runtime.status.control_token.length >= 32);
   assert.equal(await runtime.stop(), 0);
 });
 

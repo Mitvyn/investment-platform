@@ -23,6 +23,8 @@ export async function launchResearchRun(formData: FormData) {
   const researchContract = String(
     formData.get("researchContract") ?? "",
   ) as "personal_research" | "licensed_official";
+  const view = String(formData.get("view") ?? "overview").trim() || "overview";
+  const suffix = `&view=${encodeURIComponent(view)}`;
   let commandId: string;
   try {
     const receipt = await enqueueResearchRunCommand(
@@ -45,11 +47,11 @@ export async function launchResearchRun(formData: FormData) {
         ? "invalid_request"
         : "enqueue_failed";
     redirect(
-      `/?security=${encodeURIComponent(securityId)}&research_error=${errorCode}`,
+      `/?security=${encodeURIComponent(securityId)}${suffix}&research_error=${errorCode}`,
     );
   }
 
   redirect(
-    `/?security=${encodeURIComponent(securityId)}&research_command=${commandId}`,
+    `/?security=${encodeURIComponent(securityId)}${suffix}&research_command=${commandId}`,
   );
 }

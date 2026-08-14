@@ -265,6 +265,7 @@ source = { editable = "." }
 dependencies = [
     { name = "certifi" },
     { name = "curl-cffi" },
+    { name = "websockets" },
     { name = "yfinance" },
 ]
 
@@ -278,6 +279,7 @@ requires-dist = [
     { name = "certifi", specifier = ">=2024.2.2" },
     { name = "curl-cffi", specifier = ">=0.15,<1" },
     { name = "pyinstaller", marker = "extra == 'desktop-build'", specifier = "==6.21.0" },
+    { name = "websockets", specifier = ">=17,<18" },
     { name = "yfinance", specifier = "==1.5.1" },
 ]
 provides-extras = ["desktop-build"]
@@ -287,7 +289,7 @@ name = "macholib"
 version = "1.16.4"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "altgraph" },
+    { name = "altgraph", marker = "sys_platform != 'emscripten' and sys_platform != 'win32'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/10/2f/97589876ea967487978071c9042518d28b958d87b17dceb7cdc1d881f963/macholib-1.16.4.tar.gz", hash = "sha256:f408c93ab2e995cd2c46e34fe328b130404be143469e41bc366c807448979362", size = 59427, upload-time = "2025-11-22T08:28:38.373Z" }
 wheels = [

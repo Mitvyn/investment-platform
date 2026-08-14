@@ -2,7 +2,10 @@
   "desktop": {
     "app": {
       "name": "Investment Research OS",
-      "identifier": "com.meowing.investment-research-os"
+      "identifier": "com.meowing.investment-research-os",
+      "icons": {
+        "macos": "./desktop/assets/investment-platform-icon-subtle-v2.png"
+      }
     },
     "backend": "webview",
     "output": {

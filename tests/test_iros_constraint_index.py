@@ -25,10 +25,10 @@ class IrosConstraintIndexTests(unittest.TestCase):
             migration_paths=MIGRATION_PATHS
         )
 
-        self.assertEqual(index.guarded_table_count, 51)
-        self.assertEqual(index.named_unique_constraint_count, 112)
+        self.assertEqual(index.guarded_table_count, 55)
+        self.assertEqual(index.named_unique_constraint_count, 118)
         self.assertEqual(index.unique_index_count, 3)
-        self.assertEqual(index.named_unique_enforcer_count, 115)
+        self.assertEqual(index.named_unique_enforcer_count, 121)
         self.assertTrue(index.has_valid_content_hash())
         self.assertEqual(
             index.migration_manifest_sha256,

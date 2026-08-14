@@ -53,18 +53,18 @@ class IrosObjectInventoryTests(unittest.TestCase):
             migration_paths=MIGRATION_PATHS
         )
 
-        self.assertEqual(inventory.declared_count, 215)
+        self.assertEqual(inventory.declared_count, 227)
         self.assertEqual(
-            inventory.kind_counts, {"table": 63, "view": 37, "function": 115}
+            inventory.kind_counts, {"table": 67, "view": 38, "function": 122}
         )
-        self.assertEqual(inventory.client_exposed_count, 96)
+        self.assertEqual(inventory.client_exposed_count, 102)
         self.assertEqual(
-            inventory.client_exposed_role_counts, {"anon": 0, "authenticated": 96}
+            inventory.client_exposed_role_counts, {"anon": 0, "authenticated": 102}
         )
         self.assertEqual(inventory.deny_all_probe_count, 6)
-        self.assertEqual(inventory.rls_enabled_table_count, 63)
+        self.assertEqual(inventory.rls_enabled_table_count, 67)
         self.assertEqual(inventory.rls_forced_table_count, 0)
-        self.assertEqual(inventory.security_invoker_view_count, 37)
+        self.assertEqual(inventory.security_invoker_view_count, 38)
         self.assertEqual(
             {
                 entry.object_name
@@ -75,6 +75,7 @@ class IrosObjectInventoryTests(unittest.TestCase):
                 "iros_enqueue_research_run_command",
                 "iros_enqueue_security_registration",
                 "iros_finalize_market_series",
+                "iros_persist_portfolio_broker_snapshot",
                 "iros_read_raw_provider_payload",
             },
         )
@@ -92,6 +93,14 @@ class IrosObjectInventoryTests(unittest.TestCase):
         )
         self.assertEqual(
             by_name["iros_run_hosted_negative_probe"].authenticated_privileges,
+            (),
+        )
+        self.assertEqual(
+            by_name["iros_persist_portfolio_broker_snapshot"].authenticated_privileges,
+            ("execute",),
+        )
+        self.assertEqual(
+            by_name["iros_persist_portfolio_broker_snapshot"].service_role_privileges,
             (),
         )
         self.assertFalse(by_name["iros_run_hosted_negative_probe"].security_definer)

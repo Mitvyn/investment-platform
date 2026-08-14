@@ -9,6 +9,7 @@
     "dashboard:test": "pnpm --filter @iros/dashboard test",
     "dashboard:typecheck": "pnpm --filter @iros/dashboard typecheck",
     "desktop:build": "./scripts/build-desktop-app.sh",
-    "desktop:test": "python3 -m unittest tests.test_desktop_worker -v && deno test --no-config --allow-run=python3 apps/dashboard/desktop/worker-runtime.test.ts && node --test apps/dashboard/lib/desktop-runtime.test.ts"
-  }
+    "desktop:test": "python3 -m unittest tests.test_desktop_worker -v && deno test --no-config apps/dashboard/desktop/window-state.test.ts && deno test --no-config --allow-run=python3 apps/dashboard/desktop/worker-runtime.test.ts && node --test apps/dashboard/lib/desktop-runtime.test.ts"
+  },
+  "workspaces": ["apps/*"]
 }
