@@ -26,6 +26,7 @@ from investment_research_os.research_runs import (
     ResearchRunNotFound,
     ResearchRunRepository,
     ResearchRunRequestError,
+    ResearchRunSourceIdentity,
     THESIS_CONTRACT_ID,
     WORKFLOW_CONFIG_VERSION,
 )
@@ -53,6 +54,9 @@ class CommitteeCommandClaim:
     command_id: str
     operator_id: str
     security_id: str
+    capture_id: str
+    capture_revision: int
+    capture_content_hash: str
     question_type_version: str
     workflow_config_version: str
     as_of_cutoff: datetime
@@ -156,6 +160,8 @@ class ResearchRunWorkflowBoundary(Protocol):
         self,
         operator: AuthenticatedOperator,
         payload: dict[str, object],
+        *,
+        source_identity: ResearchRunSourceIdentity,
     ) -> ResearchRun: ...
 
 
@@ -269,6 +275,11 @@ class PersistentResearchRunStage:
                     "workflow_config_version": (claim.workflow_config_version),
                     "operator_focus": claim.operator_focus,
                 },
+                source_identity=ResearchRunSourceIdentity(
+                    capture_id=claim.capture_id,
+                    capture_revision=claim.capture_revision,
+                    capture_content_hash=claim.capture_content_hash,
+                ),
             )
         except ResearchRunRequestError as error:
             raise ResearchRunStageError(

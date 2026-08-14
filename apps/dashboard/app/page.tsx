@@ -99,6 +99,7 @@ import { loadResearchRunCommand } from "../lib/research-run-commands";
 import { loadResearchRunFlow } from "../lib/research-run-flow";
 import { loadResearchRunHistory } from "../lib/research-run-history";
 import { presentResearchRunHistory } from "../lib/research-run-history-workspace";
+import { loadAcceptedResearchCaptures } from "../lib/research-desktop";
 import { loadSecurityDirectory } from "../lib/securities";
 import { loadSecurityJob } from "../lib/security-jobs";
 import { createClient } from "../lib/supabase/server";
@@ -318,7 +319,25 @@ export default async function TickerWorkspace({
     researchCommand?.security_id === selectedSecurity?.securityId
       ? researchCommand
       : null;
-  const researchCommandProgress = visibleResearchCommand
+  const historicalResearchCommand =
+    visibleResearchCommand?.contract_version ===
+    "research_run_command_receipt.v1";
+  let researchCommandTitle = "";
+  let researchCommandDescription =
+    "Command state is persisted in the authenticated research ledger.";
+  if (historicalResearchCommand) {
+    researchCommandTitle = "Historical command retired";
+    researchCommandDescription =
+      "Capture-bound v2 command required for execution. Historical record remains readable and will not be polled.";
+  } else if (visibleResearchCommand?.state === "blocked") {
+    researchCommandTitle = "Launch blocked";
+    researchCommandDescription =
+      "No evidence, market, or model execution was started.";
+  } else if (visibleResearchCommand) {
+    researchCommandTitle = `Research command ${visibleResearchCommand.state}`;
+  }
+  const researchCommandProgress =
+    visibleResearchCommand?.contract_version === "research_run_command_receipt.v2"
     ? await loadResearchRunCommandProgress(
         operatorId,
         visibleResearchCommand.command_id,
@@ -327,7 +346,6 @@ export default async function TickerWorkspace({
   const researchCommandProgressPresentation = researchCommandProgress
     ? presentResearchRunCommandProgress(researchCommandProgress, new Date())
     : null;
-  const defaultCutoff = new Date().toISOString().slice(0, 16);
   const ticker = selectedSecurity?.ticker ?? "";
   const displayTicker = ticker || "SELECT";
   const selectedMoomooSymbol = ticker ? `US.${ticker}` : null;
@@ -341,7 +359,13 @@ export default async function TickerWorkspace({
     selectedQuoteActive &&
     moomooQuotes?.state !== "blocked" &&
     moomooQuotes?.state !== "quota_blocked";
-  const [{ trace }, context, marketSeriesResult, researchHistory] =
+  const [
+    { trace },
+    context,
+    marketSeriesResult,
+    researchHistory,
+    acceptedCaptureList,
+  ] =
     await Promise.all([
     selectedSecurity
       ? loadEvidenceTrace(selectedSecurity.securityId)
@@ -364,6 +388,16 @@ export default async function TickerWorkspace({
           selectedSecurity.securityId,
         )
       : Promise.resolve({ latest: null, items: [] }),
+    selectedSecurity
+      ? loadAcceptedResearchCaptures({
+          operatorId,
+          securityId: selectedSecurity.securityId,
+        })
+      : Promise.resolve({
+          captures: [],
+          detail: "Select a security before choosing accepted evidence",
+          state: "unavailable" as const,
+        }),
     ]);
   const marketSeries = marketSeriesResult.series;
   const researchHistoryPresentation =
@@ -793,17 +827,17 @@ export default async function TickerWorkspace({
                       Launch biotech Research Committee
                     </CardTitle>
                   </div>
-                  <Badge variant="outline">Two assurance contracts</Badge>
+                  <Badge variant="outline">Capture-bound</Badge>
                 </div>
                 <CardDescription>
-                  Choose personal consolidated EOD research or licensed official-close
-                  research. Both preserve separate immutable thesis chains.
+                  Select one accepted evidence capture. Its immutable cutoff and
+                  assurance contract define the Research Run.
                 </CardDescription>
               </CardHeader>
               <CardContent>
                 <form
                   action={launchResearchRun}
-                  className="grid gap-4 lg:grid-cols-[minmax(0,260px)_minmax(0,220px)_minmax(0,1fr)_auto] lg:items-start"
+                  className="grid gap-4 lg:grid-cols-12 lg:items-start"
                 >
                   <input
                     name="securityId"
@@ -811,44 +845,35 @@ export default async function TickerWorkspace({
                     value={selectedSecurity.securityId}
                   />
                   <input name="view" type="hidden" value={activeSection} />
-                  <div className="flex flex-col gap-2">
+                  <div className="flex flex-col gap-2 lg:col-span-5">
                     <label
                       className="text-xs font-medium text-muted-foreground"
-                      htmlFor="researchContract"
+                      htmlFor="captureSelection"
                     >
-                      Valuation assurance
+                      Accepted evidence
                     </label>
                     <select
-                      className="h-11 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/40"
-                      defaultValue="personal_research"
-                      id="researchContract"
-                      name="researchContract"
+                      className="h-11 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/40 disabled:cursor-not-allowed disabled:opacity-50"
+                      defaultValue=""
+                      disabled={acceptedCaptureList.captures.length === 0}
+                      id="captureSelection"
+                      name="captureSelection"
+                      required
                     >
-                      <option value="personal_research">
-                        Personal research · consolidated EOD
+                      <option disabled value="">
+                        Select accepted evidence
                       </option>
-                      <option value="licensed_official">
-                        Licensed official close
-                      </option>
+                      {acceptedCaptureList.captures.map((capture) => (
+                        <option
+                          key={`${capture.capture_id}:${capture.capture_revision}:${capture.capture_content_hash}`}
+                          value={`${capture.capture_id}:${capture.capture_revision}:${capture.capture_content_hash}`}
+                        >
+                          Revision {capture.capture_revision} · {capture.question_type.includes("personal_research") ? "personal EOD" : "licensed official close"} · cutoff {capture.as_of_cutoff} · {capture.capture_content_hash.slice(0, 10)}
+                        </option>
+                      ))}
                     </select>
                   </div>
-                  <div className="flex flex-col gap-2">
-                    <label
-                      className="text-xs font-medium text-muted-foreground"
-                      htmlFor="asOfCutoff"
-                    >
-                      Evidence cutoff (UTC)
-                    </label>
-                    <Input
-                      defaultValue={defaultCutoff}
-                      id="asOfCutoff"
-                      max={defaultCutoff}
-                      name="asOfCutoff"
-                      required
-                      type="datetime-local"
-                    />
-                  </div>
-                  <div className="flex flex-col gap-2">
+                  <div className="flex flex-col gap-2 lg:col-span-6">
                     <label
                       className="text-xs font-medium text-muted-foreground"
                       htmlFor="operatorFocus"
@@ -863,16 +888,26 @@ export default async function TickerWorkspace({
                       placeholder="Focus on financing through the next catalyst."
                     />
                   </div>
-                  <div className="flex flex-col gap-2">
+                  <div className="flex flex-col gap-2 lg:col-span-1">
                     <span
                       aria-hidden="true"
                       className="hidden text-xs font-medium lg:block"
                     >
                       &nbsp;
                     </span>
-                    <Button type="submit">Run preflight</Button>
+                    <Button
+                      disabled={acceptedCaptureList.captures.length === 0}
+                      type="submit"
+                    >
+                      Run preflight
+                    </Button>
                   </div>
                 </form>
+                <p className="mt-3 text-xs text-muted-foreground">
+                  {acceptedCaptureList.detail}. Capture choice is explicit and bound
+                  to this security. Selected receipt supplies exact cutoff and
+                  workflow contract.
+                </p>
                 <p className="mt-3 text-xs text-warning">
                   Personal research uses lower-assurance consolidated EOD data. Not
                   institutional-grade or for trade execution.
@@ -890,6 +925,8 @@ export default async function TickerWorkspace({
               <CardContent className="py-4 text-sm text-challenge-muted-foreground">
                 {params.research_error === "invalid_request"
                   ? "Research Run request is invalid. Check the UTC cutoff and bounded research emphasis."
+                  : params.research_error === "capture_unavailable"
+                    ? "Selected accepted evidence no longer matches this exact request. Refresh and choose again."
                   : "Research Run preflight could not be persisted. Retry after checking service status."}
               </CardContent>
             </Card>
@@ -899,9 +936,7 @@ export default async function TickerWorkspace({
               <CardHeader>
                 <div className="flex flex-wrap items-center gap-2">
                   <CardTitle>
-                    {visibleResearchCommand.state === "blocked"
-                      ? "Launch blocked"
-                      : `Research command ${visibleResearchCommand.state}`}
+                    {researchCommandTitle}
                   </CardTitle>
                   <Badge
                     variant={
@@ -912,13 +947,13 @@ export default async function TickerWorkspace({
                           : "attention"
                     }
                   >
-                    {visibleResearchCommand.state}
+                    {historicalResearchCommand
+                      ? "retired"
+                      : visibleResearchCommand.state}
                   </Badge>
                 </div>
                 <CardDescription>
-                  {visibleResearchCommand.state === "blocked"
-                    ? "No evidence, market, or model execution was started."
-                    : "Command state is persisted in the authenticated research ledger."}
+                  {researchCommandDescription}
                 </CardDescription>
               </CardHeader>
               <CardContent>
@@ -962,6 +997,7 @@ export default async function TickerWorkspace({
                 ) : null}
                 <ResearchRunCommandPoller
                   key={visibleResearchCommand.command_id}
+                  contractVersion={visibleResearchCommand.contract_version}
                   researchRunId={visibleResearchCommand.research_run_id}
                   state={visibleResearchCommand.state}
                 />

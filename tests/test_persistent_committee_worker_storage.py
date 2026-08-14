@@ -42,6 +42,9 @@ class PersistentCommitteeWorkerStorageTests(unittest.TestCase):
             command_id="11111111-1111-4111-8111-111111111111",
             operator_id="027d7f1b-d928-48d9-b6c8-f10d3c7ba792",
             security_id="22222222-2222-4222-8222-222222222222",
+            capture_id="33333333-3333-4333-8333-333333333333",
+            capture_revision=1,
+            capture_content_hash="3" * 64,
             question_type_version=("biotech_moonshot_catalyst_assessment.v1"),
             workflow_config_version="biotech-moonshot-catalyst-v1",
             as_of_cutoff=datetime(2026, 5, 6, 23, 59, 59, tzinfo=UTC),
@@ -62,6 +65,9 @@ class PersistentCommitteeWorkerStorageTests(unittest.TestCase):
                         "command_id": ("11111111-1111-4111-8111-111111111111"),
                         "operator_id": ("027d7f1b-d928-48d9-b6c8-f10d3c7ba792"),
                         "security_id": ("22222222-2222-4222-8222-222222222222"),
+                        "capture_id": ("33333333-3333-4333-8333-333333333333"),
+                        "capture_revision": 1,
+                        "capture_content_hash": "3" * 64,
                         "question_type_version": (
                             "biotech_moonshot_catalyst_assessment.v1"
                         ),
@@ -98,7 +104,7 @@ class PersistentCommitteeWorkerStorageTests(unittest.TestCase):
         self.assertEqual(claim.completed_stages, ())
         method, url, headers, payload = transport.requests[0]
         self.assertEqual(method, "POST")
-        self.assertTrue(url.endswith("/rest/v1/rpc/iros_claim_research_run_command"))
+        self.assertTrue(url.endswith("/rest/v1/rpc/iros_claim_research_run_command_v2"))
         self.assertEqual(
             payload,
             {"selected_worker_id": "iros-committee-worker-1"},
@@ -114,6 +120,9 @@ class PersistentCommitteeWorkerStorageTests(unittest.TestCase):
                         "command_id": "11111111-1111-4111-8111-111111111111",
                         "operator_id": "027d7f1b-d928-48d9-b6c8-f10d3c7ba792",
                         "security_id": "22222222-2222-4222-8222-222222222222",
+                        "capture_id": "33333333-3333-4333-8333-333333333333",
+                        "capture_revision": 1,
+                        "capture_content_hash": "3" * 64,
                         "question_type_version": (
                             "biotech_moonshot_catalyst_personal_research_assessment.v1"
                         ),
@@ -242,6 +251,9 @@ class PersistentCommitteeWorkerStorageTests(unittest.TestCase):
                         "command_id": ("11111111-1111-4111-8111-111111111111"),
                         "operator_id": ("027d7f1b-d928-48d9-b6c8-f10d3c7ba792"),
                         "security_id": ("22222222-2222-4222-8222-222222222222"),
+                        "capture_id": ("33333333-3333-4333-8333-333333333333"),
+                        "capture_revision": 1,
+                        "capture_content_hash": "3" * 64,
                         "question_type_version": (
                             "biotech_moonshot_catalyst_assessment.v1"
                         ),

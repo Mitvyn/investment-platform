@@ -131,6 +131,12 @@ from .grader import (
     PersistentGraderCommitteeWorkflowAdapter,
     PersistentGraderLifecycleFactory,
 )
+from .capture_research_run import (
+    AcceptedCaptureResearchRunStage,
+    AcceptedCaptureSecurityContextResolver,
+    ExactAcceptedCaptureResearchInputResolver,
+    PipelineResultAssembler,
+)
 from .memo import PersistentCommitteeMemoWorkflowAdapter
 from .readiness import PersistentReadinessThesisWorkflowAdapter
 from .worker import (
@@ -213,6 +219,28 @@ class FixedTrustedIssuerHostRegistry:
         raise PersistentCommitteeCompositionError(
             "trusted_issuer_host_configuration_drift"
         )
+
+
+def compose_accepted_capture_research_run_stage(
+    *,
+    research_run_repository: ResearchRunRepository,
+    capture_repository: FilePrimarySourceCaptureRepository,
+    security_context_resolver: AcceptedCaptureSecurityContextResolver,
+    sec_user_agent: str,
+    clock: Callable[[], datetime],
+    assembler: PipelineResultAssembler | None = None,
+) -> AcceptedCaptureResearchRunStage:
+    return AcceptedCaptureResearchRunStage(
+        research_run_repository=research_run_repository,
+        capture_repository=capture_repository,
+        capture_resolver=ExactAcceptedCaptureResearchInputResolver(
+            repository=capture_repository,
+            security_context_resolver=security_context_resolver,
+        ),
+        sec_user_agent=sec_user_agent,
+        clock=clock,
+        assembler=assembler,
+    )
 
 
 def compose_persistent_committee_worker(

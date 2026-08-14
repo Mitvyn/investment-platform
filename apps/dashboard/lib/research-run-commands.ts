@@ -13,7 +13,7 @@ const loadFromRows = createResearchRunCommandLoader(
     const { data, error } = await supabase
       .from("iros_research_run_commands")
       .select(
-        "id,operator_id,security_id,question_type_version,workflow_config_version,as_of_cutoff,operator_focus_normalized,idempotency_key,command_state,blocking_reason_codes,error_code,research_run_id,created_at,updated_at,started_at,finished_at",
+        "contract_version,id,operator_id,security_id,question_type_version,workflow_config_version,as_of_cutoff,operator_focus_normalized,idempotency_key,capture_id,capture_revision,capture_content_hash,command_state,blocking_reason_codes,error_code,research_run_id,created_at,updated_at,started_at,finished_at",
       )
       .eq("operator_id", operatorId)
       .eq("id", commandId)

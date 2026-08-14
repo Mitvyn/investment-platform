@@ -49,6 +49,9 @@ class RestartableCommandStore:
             command_id=COMMAND_ID,
             operator_id=OPERATOR_ID,
             security_id=self.security_id,
+            capture_id="33333333-3333-4333-8333-333333333333",
+            capture_revision=1,
+            capture_content_hash="3" * 64,
             question_type_version=QUESTION_VERSION,
             workflow_config_version=WORKFLOW_VERSION,
             as_of_cutoff=CUTOFF,
@@ -150,9 +153,7 @@ class PersistentCommitteeWorkerEndToEndTests(unittest.TestCase):
             "simulated checkpoint response loss",
         ):
             worker(store, stages).run_once()
-        persisted_id = stages["committee_memo"].persisted_by_security[
-            store.security_id
-        ]
+        persisted_id = stages["committee_memo"].persisted_by_security[store.security_id]
 
         self.assertTrue(worker(store, stages).run_once())
 

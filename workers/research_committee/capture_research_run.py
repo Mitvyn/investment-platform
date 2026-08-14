@@ -54,6 +54,83 @@ class AcceptedCaptureResearchInputResolver(Protocol):
     ) -> AcceptedCaptureResearchInput: ...
 
 
+@dataclass(frozen=True, slots=True)
+class AcceptedCaptureSecurityContext:
+    security_id: str
+    cik: str
+    issuer_name: str
+    ticker: str
+    primary_listing_exchange: str
+    trusted_issuer_hosts: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        ticker = self.ticker.strip().upper()
+        hosts = tuple(host.strip().lower() for host in self.trusted_issuer_hosts)
+        if not ticker or not hosts or any(not host for host in hosts):
+            raise ValueError("accepted capture security context is incomplete")
+        object.__setattr__(self, "ticker", ticker)
+        object.__setattr__(self, "trusted_issuer_hosts", hosts)
+
+
+class AcceptedCaptureSecurityContextResolver(Protocol):
+    def resolve(
+        self,
+        claim: CommitteeCommandClaim,
+    ) -> AcceptedCaptureSecurityContext: ...
+
+
+class ExactAcceptedCaptureResearchInputResolver:
+    """Resolves only capture identity frozen on one executable command."""
+
+    def __init__(
+        self,
+        *,
+        repository: FilePrimarySourceCaptureRepository,
+        security_context_resolver: AcceptedCaptureSecurityContextResolver,
+    ) -> None:
+        self._repository = repository
+        self._security_context_resolver = security_context_resolver
+
+    def resolve(self, claim: CommitteeCommandClaim) -> AcceptedCaptureResearchInput:
+        capture = self._repository.get_capture(
+            claim.operator_id,
+            claim.capture_id,
+            claim.capture_revision,
+        )
+        if capture is None:
+            raise PrimarySourceStorageError("accepted capture is unavailable")
+        if (
+            capture.capture_content_hash != claim.capture_content_hash
+            or capture.operator_id != claim.operator_id
+            or capture.security_id != claim.security_id
+            or capture.as_of_cutoff != claim.as_of_cutoff
+            or capture.question_type_version != claim.question_type_version
+            or capture.workflow_config_version != claim.workflow_config_version
+        ):
+            raise PrimarySourceStorageError(
+                "accepted capture does not match command identity"
+            )
+        context = self._security_context_resolver.resolve(claim)
+        if context.security_id != claim.security_id:
+            raise PrimarySourceStorageError(
+                "accepted capture security context does not match command"
+            )
+        request = PrimarySourceRequest(
+            operator_id=claim.operator_id,
+            security_id=claim.security_id,
+            cik=context.cik,
+            issuer_name=context.issuer_name,
+            primary_listing_exchange=context.primary_listing_exchange,
+            as_of_cutoff=claim.as_of_cutoff,
+        )
+        return AcceptedCaptureResearchInput(
+            capture=capture,
+            request=request,
+            ticker=context.ticker,
+            trusted_issuer_hosts=context.trusted_issuer_hosts,
+        )
+
+
 class PipelineResultAssembler(Protocol):
     def assemble_result(
         self,
@@ -133,8 +210,15 @@ class _LazyCaptureEligibilitySource:
                 ) from error
             snapshot = result.eligibility_snapshot
             request = self._value.request
+            source_identity = result.source_capture_identity
             if (
-                snapshot.security_id != request.security_id
+                source_identity is None
+                or source_identity.capture_id != self._value.capture.capture_id
+                or source_identity.capture_revision
+                != self._value.capture.capture_revision
+                or source_identity.capture_content_hash
+                != self._value.capture.capture_content_hash
+                or snapshot.security_id != request.security_id
                 or snapshot.as_of_cutoff != request.as_of_cutoff
                 or snapshot.cik != request.cik
                 or snapshot.issuer_name != request.issuer_name
@@ -263,6 +347,9 @@ class AcceptedCaptureResearchRunStage:
         if (
             capture.operator_id != claim.operator_id
             or capture.security_id != claim.security_id
+            or capture.capture_id != claim.capture_id
+            or capture.capture_revision != claim.capture_revision
+            or capture.capture_content_hash != claim.capture_content_hash
             or capture.as_of_cutoff != claim.as_of_cutoff
             or capture.question_type_version != claim.question_type_version
             or capture.workflow_config_version != claim.workflow_config_version
@@ -311,5 +398,8 @@ __all__ = [
     "AcceptedCaptureResearchInput",
     "AcceptedCaptureResearchInputResolver",
     "AcceptedCaptureResearchRunStage",
+    "AcceptedCaptureSecurityContext",
+    "AcceptedCaptureSecurityContextResolver",
+    "ExactAcceptedCaptureResearchInputResolver",
     "PipelineResultAssembler",
 ]

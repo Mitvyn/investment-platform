@@ -43,9 +43,7 @@ class DashboardContractTests(unittest.TestCase):
     def test_runtime_evidence_path_does_not_fall_back_to_fixture(self) -> None:
         evidence_module = Path("apps/dashboard/lib/evidence.ts").read_text()
 
-        self.assertIn(
-            'from("iros_v_security_claim_evidence_trace")', evidence_module
-        )
+        self.assertIn('from("iros_v_security_claim_evidence_trace")', evidence_module)
         self.assertNotIn("rxrx-trace.json", evidence_module)
 
     def test_phase2_context_uses_authenticated_security_invoker_views(self) -> None:
@@ -63,9 +61,7 @@ class DashboardContractTests(unittest.TestCase):
         evidence_module = Path("apps/dashboard/lib/evidence.ts").read_text()
         context_module = Path("apps/dashboard/lib/context.ts").read_text()
 
-        self.assertIn(
-            'from("iros_v_security_claim_evidence_trace")', evidence_module
-        )
+        self.assertIn('from("iros_v_security_claim_evidence_trace")', evidence_module)
         self.assertIn('.eq("security_id", securityId)', evidence_module)
         for view_name in (
             "iros_v_security_financial_health",
@@ -138,11 +134,13 @@ class DashboardContractTests(unittest.TestCase):
         self.assertIn("pr-10", page)
         self.assertIn("pointer-events-none absolute right-3", page)
 
-    def test_registered_security_indicator_container_matches_control_height(self) -> None:
+    def test_registered_security_indicator_container_matches_control_height(
+        self,
+    ) -> None:
         page = Path("apps/dashboard/app/page.tsx").read_text()
 
-        self.assertIn('className="relative h-9 min-w-0 flex-1"', page)
-        self.assertIn('className="block h-9 w-full appearance-none', page)
+        self.assertIn('className="relative h-11 min-w-0 flex-1"', page)
+        self.assertIn('className="block h-11 w-full appearance-none', page)
 
     def test_private_holdings_are_visible_without_research_or_trading_authority(
         self,

@@ -6,8 +6,12 @@ import secrets
 import signal
 import sys
 import threading
+from pathlib import Path
+from typing import Mapping
 
 from workers.desktop.control import DesktopControlServer, MoomooConnectionService
+from workers.desktop.research import DesktopResearchCaptureCatalog
+from workers.primary_sources.storage import FilePrimarySourceCaptureRepository
 from workers.portfolio.keychain import MoomooTokenKeychain
 from workers.portfolio.moomoo import (
     MoomooClient,
@@ -34,6 +38,28 @@ def _parent_is_alive(parent_pid: int) -> bool:
     except PermissionError:
         return True
     return True
+
+
+def _research_capture_root(
+    environment: Mapping[str, str],
+    *,
+    packaged: bool = bool(getattr(sys, "frozen", False)),
+) -> Path:
+    configured = environment.get("IROS_PRIMARY_SOURCE_CAPTURE_ROOT", "").strip()
+    if configured:
+        root = Path(configured).expanduser()
+        if not root.is_absolute():
+            raise ValueError("IROS_PRIMARY_SOURCE_CAPTURE_ROOT must be absolute")
+        return root
+    if packaged:
+        return (
+            Path.home()
+            / "Library"
+            / "Application Support"
+            / "Investment Research OS"
+            / "primary-source-captures"
+        )
+    return Path.cwd() / "data" / "primary-source-captures"
 
 
 def run(*, healthcheck: bool = False) -> int:
@@ -74,6 +100,9 @@ def run(*, healthcheck: bool = False) -> int:
             quote_stream_factory=lambda access_supplier: MoomooQuoteStream(
                 access_supplier=access_supplier
             ),
+        ),
+        research_capture_catalog=DesktopResearchCaptureCatalog(
+            FilePrimarySourceCaptureRepository(_research_capture_root(os.environ))
         ),
     )
     control_server.start()

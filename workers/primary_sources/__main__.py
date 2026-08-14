@@ -20,6 +20,7 @@ from .http import CurlCffiBytesTransport
 from .models import PrimarySourceRequest
 from .plans import load_primary_source_plan
 from .replay import PrimarySourceReplayResult, replay_primary_source_capture
+from .storage import FilePrimarySourceCaptureRepository, PrimarySourceStorageError
 
 
 class PrimarySourceCliError(RuntimeError):
@@ -44,18 +45,21 @@ def _parser() -> argparse.ArgumentParser:
     acquire.add_argument("--output", required=True)
     acquire.add_argument("--timeout-seconds", type=float, default=20.0)
     acquire.add_argument("--minimum-interval-seconds", type=float, default=0.2)
-    verify = subcommands.add_parser("verify")
-    verify.add_argument("--plan", required=True)
-    verify.add_argument("--capture", required=True)
-    verify.add_argument("--ticker", required=True)
-    verify.add_argument("--operator-id", required=True)
-    verify.add_argument("--as-of-cutoff", required=True)
-    verify.add_argument(
-        "--trusted-issuer-host",
-        action="append",
-        required=True,
-        dest="trusted_issuer_hosts",
-    )
+    for name in ("verify", "accept"):
+        verification = subcommands.add_parser(name)
+        verification.add_argument("--plan", required=True)
+        verification.add_argument("--capture", required=True)
+        verification.add_argument("--ticker", required=True)
+        verification.add_argument("--operator-id", required=True)
+        verification.add_argument("--as-of-cutoff", required=True)
+        verification.add_argument(
+            "--trusted-issuer-host",
+            action="append",
+            required=True,
+            dest="trusted_issuer_hosts",
+        )
+        if name == "accept":
+            verification.add_argument("--capture-root", required=True)
     return parser
 
 
@@ -99,7 +103,7 @@ def run(
     args = _parser().parse_args(argv)
     source_plan = Path(args.plan).read_bytes()
     plan = load_primary_source_plan(source_plan)
-    if args.command == "verify":
+    if args.command in {"accept", "verify"}:
         user_agent = environ.get("SEC_USER_AGENT", "").strip()
         if not user_agent:
             raise PrimarySourceCliError("SEC_USER_AGENT is required")
@@ -112,8 +116,9 @@ def run(
             as_of_cutoff=_utc_timestamp(args.as_of_cutoff),
         )
         try:
+            raw_archive = Path(args.capture).read_bytes()
             result = replay(
-                Path(args.capture).read_bytes(),
+                raw_archive,
                 request=request,
                 ticker=args.ticker.upper(),
                 sec_user_agent=user_agent,
@@ -126,6 +131,31 @@ def run(
             raise PrimarySourceCliError("capture verification failed") from None
         if result.capture.plan.content_hash != plan.content_hash:
             raise PrimarySourceCliError("capture does not match requested source plan")
+        if args.command == "accept":
+            capture_root = Path(args.capture_root).expanduser()
+            if not capture_root.is_absolute():
+                raise PrimarySourceCliError("capture root must be absolute")
+            try:
+                persisted = FilePrimarySourceCaptureRepository(
+                    capture_root
+                ).save_capture(result.capture, raw_archive)
+            except (OSError, PrimarySourceStorageError):
+                raise PrimarySourceCliError("capture acceptance failed") from None
+            print(
+                json.dumps(
+                    {
+                        "archive_sha256": persisted.package_sha256,
+                        "capture_content_hash": persisted.capture_content_hash,
+                        "capture_id": persisted.capture_id,
+                        "capture_revision": persisted.capture_revision,
+                        "contract_version": "primary_source_capture_acceptance.v1",
+                        "security_id": persisted.security_id,
+                        "status": "accepted",
+                    },
+                    sort_keys=True,
+                )
+            )
+            return 0
         print(
             json.dumps(
                 {

@@ -12,12 +12,39 @@ from urllib.parse import urlsplit
 
 from workers.desktop.__main__ import (
     _build_moomoo_portfolio_client,
+    _research_capture_root,
 )
 from workers.desktop import __main__ as desktop_main
 from workers.portfolio.moomoo import UrllibMoomooTransport
 
 
 class DesktopWorkerTests(unittest.TestCase):
+    def test_research_capture_root_is_stable_and_override_must_be_absolute(
+        self,
+    ) -> None:
+        self.assertEqual(
+            _research_capture_root({}, packaged=True),
+            Path.home()
+            / "Library"
+            / "Application Support"
+            / "Investment Research OS"
+            / "primary-source-captures",
+        )
+        self.assertEqual(
+            _research_capture_root({}, packaged=False),
+            Path.cwd() / "data" / "primary-source-captures",
+        )
+        self.assertEqual(
+            _research_capture_root(
+                {"IROS_PRIMARY_SOURCE_CAPTURE_ROOT": "/tmp/iros-captures"}
+            ),
+            Path("/tmp/iros-captures"),
+        )
+        with self.assertRaisesRegex(ValueError, "must be absolute"):
+            _research_capture_root(
+                {"IROS_PRIMARY_SOURCE_CAPTURE_ROOT": "relative/captures"}
+            )
+
     def test_desktop_build_scrubs_service_credentials_before_packaging(self) -> None:
         build_script = Path("scripts/build-desktop-app.sh").read_text()
 

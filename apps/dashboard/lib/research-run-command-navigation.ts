@@ -14,7 +14,13 @@ export function researchRunCommandNavigation(
   researchRunId: string | null,
   pollsCompleted = 0,
   elapsedMilliseconds = 0,
+  contractVersion:
+    | "research_run_command_receipt.v1"
+    | "research_run_command_receipt.v2" = "research_run_command_receipt.v2",
 ): ResearchRunCommandNavigation {
+  if (contractVersion === "research_run_command_receipt.v1") {
+    return { kind: "stop" };
+  }
   if (state === "completed" && researchRunId) {
     return {
       kind: "open_research_run",

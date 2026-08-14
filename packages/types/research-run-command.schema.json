@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://investment-research-os.local/contracts/research-run-command.schema.json",
-  "title": "Research Run Command Receipt v1",
+  "title": "Research Run Command Receipt v2",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -14,6 +14,9 @@
     "as_of_cutoff",
     "operator_focus_normalized",
     "idempotency_key",
+    "capture_id",
+    "capture_revision",
+    "capture_content_hash",
     "state",
     "blocking_reason_codes",
     "error_code",
@@ -25,7 +28,7 @@
   ],
   "properties": {
     "contract_version": {
-      "const": "research_run_command_receipt.v1"
+      "const": "research_run_command_receipt.v2"
     },
     "command_id": {
       "$ref": "#/$defs/uuid"
@@ -58,6 +61,18 @@
       "pattern": "^[^\\s]+(?: [^\\s]+)*$"
     },
     "idempotency_key": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "capture_id": {
+      "$ref": "#/$defs/uuid"
+    },
+    "capture_revision": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 2147483647
+    },
+    "capture_content_hash": {
       "type": "string",
       "pattern": "^[0-9a-f]{64}$"
     },

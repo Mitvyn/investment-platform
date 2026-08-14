@@ -1,6 +1,8 @@
 import {
+  parsePreparedResearchCaptureIdentity,
   parseResearchRunCommandReceipt,
-  type ResearchRunCommandReceipt,
+  type CurrentResearchRunCommandReceipt,
+  type PreparedResearchCaptureIdentity,
 } from "../../../packages/types/research-run-command.ts";
 import {
   normalizeResearchQuestionRequest,
@@ -16,7 +18,7 @@ type Claims = Record<string, unknown>;
 type ResearchRunCommandRpcClient = {
   rpc(
     name: string,
-    args: Record<string, string | null>,
+    args: Record<string, string | number | null>,
   ): PromiseLike<{ data: unknown; error: { message: string } | null }>;
 };
 
@@ -63,8 +65,9 @@ export async function enqueueResearchRunCommand(
   client: ResearchRunCommandRpcClient,
   claims: Claims,
   request: ResearchQuestionRequest,
+  preparedCapture: PreparedResearchCaptureIdentity,
   now: Date,
-): Promise<ResearchRunCommandReceipt> {
+): Promise<CurrentResearchRunCommandReceipt> {
   const operatorId = claims.sub;
   if (typeof operatorId !== "string" || !UUID_PATTERN.test(operatorId)) {
     throw new Error("authenticated operator required");
@@ -75,17 +78,21 @@ export async function enqueueResearchRunCommand(
   const normalized = normalizeResearchQuestionRequest(
     parseResearchQuestionRequest(request),
   );
+  const captureIdentity = parsePreparedResearchCaptureIdentity(preparedCapture);
   if (Date.parse(normalized.as_of_cutoff) > now.getTime()) {
     throw new Error("research cutoff cannot be in the future");
   }
   const { data, error } = await client.rpc(
-    "iros_enqueue_research_run_command",
+    "iros_enqueue_research_run_command_v2",
     {
       p_security_id: normalized.security_id,
       p_as_of_cutoff: normalized.as_of_cutoff,
       p_operator_focus: normalized.operator_focus_normalized,
       p_question_type_version: normalized.question_type_version,
       p_workflow_config_version: normalized.workflow_config_version,
+      p_capture_id: captureIdentity.capture_id,
+      p_capture_revision: captureIdentity.capture_revision,
+      p_capture_content_hash: captureIdentity.capture_content_hash,
     },
   );
   if (error) {
@@ -96,13 +103,17 @@ export async function enqueueResearchRunCommand(
   }
   const receipt = parseResearchRunCommandReceipt(data[0]);
   if (
+    receipt.contract_version !== "research_run_command_receipt.v2" ||
     receipt.operator_id !== operatorId ||
     receipt.security_id !== normalized.security_id ||
     receipt.question_type_version !== normalized.question_type_version ||
     receipt.workflow_config_version !== normalized.workflow_config_version ||
     receipt.as_of_cutoff !== normalized.as_of_cutoff ||
     receipt.operator_focus_normalized !==
-      normalized.operator_focus_normalized
+      normalized.operator_focus_normalized ||
+    receipt.capture_id !== captureIdentity.capture_id ||
+    receipt.capture_revision !== captureIdentity.capture_revision ||
+    receipt.capture_content_hash !== captureIdentity.capture_content_hash
   ) {
     throw new Error("Research Run command identity mismatch");
   }

@@ -53,9 +53,9 @@ class IrosObjectInventoryTests(unittest.TestCase):
             migration_paths=MIGRATION_PATHS
         )
 
-        self.assertEqual(inventory.declared_count, 227)
+        self.assertEqual(inventory.declared_count, 232)
         self.assertEqual(
-            inventory.kind_counts, {"table": 67, "view": 38, "function": 122}
+            inventory.kind_counts, {"table": 67, "view": 38, "function": 127}
         )
         self.assertEqual(inventory.client_exposed_count, 102)
         self.assertEqual(
@@ -73,6 +73,7 @@ class IrosObjectInventoryTests(unittest.TestCase):
             },
             {
                 "iros_enqueue_research_run_command",
+                "iros_enqueue_research_run_command_v2",
                 "iros_enqueue_security_registration",
                 "iros_finalize_market_series",
                 "iros_persist_portfolio_broker_snapshot",

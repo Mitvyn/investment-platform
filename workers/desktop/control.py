@@ -37,6 +37,7 @@ from workers.portfolio.quote_limits import (
 )
 from workers.portfolio.snapshot import PortfolioSnapshot, build_portfolio_snapshot
 from workers.portfolio.symbols import CanonicalSecurityCandidate
+from workers.desktop.research import DesktopResearchCaptureCatalog
 
 
 MAX_CONTROL_BODY_BYTES = 8_192
@@ -988,10 +989,12 @@ class DesktopControlServer:
         *,
         service: MoomooConnectionService,
         control_token: str,
+        research_capture_catalog: DesktopResearchCaptureCatalog | None = None,
     ) -> None:
         if not control_token:
             raise ValueError("Desktop control token is required")
         self._service = service
+        self._research_capture_catalog = research_capture_catalog
         self._control_token = control_token
         self._server = ThreadingHTTPServer(("127.0.0.1", 0), self._handler_type())
         self._thread: threading.Thread | None = None
@@ -1022,6 +1025,7 @@ class DesktopControlServer:
 
     def _handler_type(self) -> type[BaseHTTPRequestHandler]:
         service = self._service
+        research_capture_catalog = self._research_capture_catalog
         expected_token = self._control_token
 
         class Handler(BaseHTTPRequestHandler):
@@ -1054,6 +1058,64 @@ class DesktopControlServer:
 
             def do_GET(self) -> None:  # noqa: N802
                 if not self._require_authorization():
+                    return
+                parsed = urlsplit(self.path)
+                if parsed.path == "/v1/research/captures":
+                    if research_capture_catalog is None:
+                        self._send_json(
+                            503,
+                            {"error": "research_capture_catalog_unavailable"},
+                        )
+                        return
+                    try:
+                        query = parse_qs(parsed.query, keep_blank_values=True)
+                        required = {
+                            "operator_id",
+                            "security_id",
+                        }
+                        optional = {
+                            "question_type_version",
+                            "workflow_config_version",
+                            "as_of_cutoff",
+                        }
+                        if (
+                            not required <= set(query)
+                            or not set(query) <= required | optional
+                            or any(
+                                len(query[field]) != 1 or not query[field][0]
+                                for field in query
+                            )
+                        ):
+                            raise ValueError
+                        operator_id = str(uuid.UUID(query["operator_id"][0]))
+                        security_id = str(uuid.UUID(query["security_id"][0]))
+                        cutoff_value = query.get("as_of_cutoff")
+                        cutoff = None
+                        if cutoff_value is not None:
+                            cutoff = datetime.fromisoformat(
+                                cutoff_value[0].replace("Z", "+00:00")
+                            )
+                            if cutoff.tzinfo is None or cutoff.utcoffset() is None:
+                                raise ValueError
+                        catalog = research_capture_catalog.list_captures(
+                            operator_id=operator_id,
+                            security_id=security_id,
+                            question_type_version=(
+                                query.get("question_type_version", [None])[0]
+                            ),
+                            workflow_config_version=(
+                                query.get("workflow_config_version", [None])[0]
+                            ),
+                            as_of_cutoff=cutoff,
+                            max_count=50,
+                        )
+                    except (OSError, TypeError, ValueError):
+                        self._send_json(
+                            400,
+                            {"error": "research_capture_request_invalid"},
+                        )
+                        return
+                    self._send_json(200, catalog.as_dict())
                     return
                 if self.path == "/v1/moomoo/status":
                     self._send_json(200, service.status().as_dict())

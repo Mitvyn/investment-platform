@@ -39,3 +39,26 @@ test("research command polling pauses at bounded attempts or elapsed time", () =
     kind: "pause",
   });
 });
+
+test("historical v1 commands never poll after runtime quarantine", () => {
+  assert.deepEqual(
+    researchRunCommandNavigation(
+      "queued",
+      null,
+      0,
+      0,
+      "research_run_command_receipt.v1",
+    ),
+    { kind: "stop" },
+  );
+  assert.deepEqual(
+    researchRunCommandNavigation(
+      "running",
+      null,
+      0,
+      0,
+      "research_run_command_receipt.v1",
+    ),
+    { kind: "stop" },
+  );
+});

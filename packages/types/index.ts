@@ -131,7 +131,11 @@ export {
   type SecurityIdentity,
 } from "./research-run";
 export {
+  parsePreparedResearchCaptureIdentity,
   parseResearchRunCommandReceipt,
+  type CurrentResearchRunCommandReceipt,
+  type HistoricalResearchRunCommandReceipt,
+  type PreparedResearchCaptureIdentity,
   type ResearchRunCommandReceipt,
   type ResearchRunCommandState,
 } from "./research-run-command";

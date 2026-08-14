@@ -5,7 +5,7 @@ import test from "node:test";
 import { parseResearchRunCommandReceipt } from "./research-run-command.ts";
 
 const blockedReceipt = {
-  contract_version: "research_run_command_receipt.v1",
+  contract_version: "research_run_command_receipt.v2",
   command_id: "11111111-1111-4111-8111-111111111111",
   operator_id: "027d7f1b-d928-48d9-b6c8-f10d3c7ba792",
   security_id: "22222222-2222-4222-8222-222222222222",
@@ -15,6 +15,10 @@ const blockedReceipt = {
   operator_focus_normalized: "Focus on financing through Phase 2 data.",
   idempotency_key:
     "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  capture_id: "44444444-4444-4444-8444-444444444444",
+  capture_revision: 3,
+  capture_content_hash:
+    "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
   state: "blocked",
   blocking_reason_codes: [
     "generic_primary_source_pipeline_unavailable",
@@ -36,6 +40,22 @@ test("accepts one blocked Research Run command without execution output", () => 
     parseResearchRunCommandReceipt(blockedReceipt),
     blockedReceipt,
   );
+});
+
+test("keeps historical v1 Research Run command receipts readable", () => {
+  const { capture_id, capture_revision, capture_content_hash, ...historical } =
+    blockedReceipt;
+
+  assert.deepEqual(parseResearchRunCommandReceipt({
+    ...historical,
+    contract_version: "research_run_command_receipt.v1",
+  }), {
+    ...historical,
+    contract_version: "research_run_command_receipt.v1",
+  });
+  assert.equal(capture_id.length > 0, true);
+  assert.equal(capture_revision, 3);
+  assert.equal(capture_content_hash.length, 64);
 });
 
 test("accepts personal research command only with exact paired identity", () => {
@@ -95,6 +115,10 @@ test("rejects malformed or contradictory Research Run command receipts", () => {
   const invalid = [
     { ...blockedReceipt, unexpected: true },
     { ...blockedReceipt, command_id: "not-a-uuid" },
+    { ...blockedReceipt, capture_id: "not-a-uuid" },
+    { ...blockedReceipt, capture_revision: 0 },
+    { ...blockedReceipt, capture_revision: 1.5 },
+    { ...blockedReceipt, capture_content_hash: "B".repeat(64) },
     { ...blockedReceipt, state: "blocked", blocking_reason_codes: [] },
     {
       ...blockedReceipt,
@@ -158,6 +182,10 @@ test("publishes Research Run command contract through package root", () => {
   );
 
   assert.match(packageIndex, /parseResearchRunCommandReceipt/);
+  assert.match(packageIndex, /parsePreparedResearchCaptureIdentity/);
+  assert.match(packageIndex, /type PreparedResearchCaptureIdentity/);
+  assert.match(packageIndex, /type CurrentResearchRunCommandReceipt/);
+  assert.match(packageIndex, /type HistoricalResearchRunCommandReceipt/);
   assert.match(packageIndex, /type ResearchRunCommandReceipt/);
 });
 
@@ -172,7 +200,7 @@ test("publishes strict versioned Research Run command JSON Schema", () => {
   assert.equal(schema.additionalProperties, false);
   assert.equal(
     schema.properties.contract_version.const,
-    "research_run_command_receipt.v1",
+    "research_run_command_receipt.v2",
   );
   assert.deepEqual(schema.required.sort(), Object.keys(blockedReceipt).sort());
 });

@@ -15,6 +15,7 @@ from investment_research_os.research_runs import (
     ResearchRunWorkflow,
     ResearchRunNotFound,
     ResearchRunRequestError,
+    ResearchRunSourceIdentity,
     SecurityEligibilitySnapshot,
 )
 
@@ -212,6 +213,58 @@ class ResearchRunWorkflowTests(unittest.TestCase):
 
         self.assertEqual(second, first)
         self.assertEqual(source.requests, [(OPERATOR_ID, SECURITY_ID, CUTOFF)])
+
+    def test_capture_identity_controls_retry_and_correction_run_identity(self) -> None:
+        source = EligibleSecuritySource()
+        workflow = ResearchRunWorkflow(
+            repository=InMemoryResearchRunRepository(),
+            eligibility_source=source,
+            clock=lambda: EVALUATED_AT,
+        )
+        request = {
+            "question_type": "biotech_moonshot_catalyst_assessment",
+            "security_id": SECURITY_ID,
+            "as_of_cutoff": CUTOFF.isoformat(),
+            "workflow_config_version": "biotech-moonshot-catalyst-v1",
+        }
+        first_capture = ResearchRunSourceIdentity(
+            capture_id="aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+            capture_revision=1,
+            capture_content_hash="1" * 64,
+        )
+        corrected_capture = ResearchRunSourceIdentity(
+            capture_id=first_capture.capture_id,
+            capture_revision=2,
+            capture_content_hash="2" * 64,
+        )
+
+        first = workflow.create(
+            AuthenticatedOperator(OPERATOR_ID),
+            request,
+            source_identity=first_capture,
+        )
+        retry = workflow.create(
+            AuthenticatedOperator(OPERATOR_ID),
+            request,
+            source_identity=first_capture,
+        )
+        corrected = workflow.create(
+            AuthenticatedOperator(OPERATOR_ID),
+            request,
+            source_identity=corrected_capture,
+        )
+
+        self.assertEqual(retry.id, first.id)
+        self.assertEqual(retry.idempotency_key, first.idempotency_key)
+        self.assertNotEqual(corrected.id, first.id)
+        self.assertNotEqual(corrected.idempotency_key, first.idempotency_key)
+        self.assertEqual(
+            source.requests,
+            [
+                (OPERATOR_ID, SECURITY_ID, CUTOFF),
+                (OPERATOR_ID, SECURITY_ID, CUTOFF),
+            ],
+        )
 
     def test_equivalent_cutoff_offsets_reuse_same_run(self) -> None:
         source = EligibleSecuritySource()

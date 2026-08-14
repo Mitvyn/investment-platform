@@ -8,6 +8,7 @@ const securityId = "22222222-2222-4222-8222-222222222222";
 const commandId = "11111111-1111-4111-8111-111111111111";
 
 const row = {
+  contract_version: "research_run_command_receipt.v2",
   id: commandId,
   operator_id: operatorId,
   security_id: securityId,
@@ -17,6 +18,10 @@ const row = {
   operator_focus_normalized: null,
   idempotency_key:
     "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  capture_id: "44444444-4444-4444-8444-444444444444",
+  capture_revision: 3,
+  capture_content_hash:
+    "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
   command_state: "blocked",
   blocking_reason_codes: [
     "generic_primary_source_pipeline_unavailable",
@@ -45,9 +50,48 @@ test("loads one owner-scoped Research Run command", async () => {
   const receipt = await loadCommand(operatorId, commandId);
 
   assert.deepEqual(requests, [[operatorId, commandId]]);
-  assert.equal(receipt?.contract_version, "research_run_command_receipt.v1");
+  assert.equal(receipt?.contract_version, "research_run_command_receipt.v2");
+  assert.equal(
+    receipt?.contract_version === "research_run_command_receipt.v2"
+      ? receipt.capture_revision
+      : null,
+    3,
+  );
   assert.equal(receipt?.state, "blocked");
   assert.deepEqual(receipt?.blocking_reason_codes, row.blocking_reason_codes);
+});
+
+test("keeps historical rows readable and rejects partial capture identity", async () => {
+  const historical = createResearchRunCommandLoader(async () => [
+    {
+      ...row,
+      contract_version: "research_run_command_receipt.v1",
+      capture_id: null,
+      capture_revision: null,
+      capture_content_hash: null,
+    },
+  ]);
+  const historicalReceipt = await historical(operatorId, commandId);
+  assert.equal(
+    historicalReceipt?.contract_version,
+    "research_run_command_receipt.v1",
+  );
+
+  const partial = createResearchRunCommandLoader(async () => [
+    { ...row, capture_content_hash: null },
+  ]);
+  await assert.rejects(
+    partial(operatorId, commandId),
+    /capture identity is incomplete/,
+  );
+
+  const mislabeled = createResearchRunCommandLoader(async () => [
+    { ...row, contract_version: "research_run_command_receipt.v1" },
+  ]);
+  await assert.rejects(
+    mislabeled(operatorId, commandId),
+    /capture identity contradicts contract version/,
+  );
 });
 
 test("returns null for no row and rejects ambiguous or cross-owner rows", async () => {

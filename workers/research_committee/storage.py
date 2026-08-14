@@ -71,7 +71,7 @@ class SupabaseCommitteeCommandStore:
         if not worker_id.strip():
             raise ValueError("worker_id is required")
         payload = self._rpc(
-            "iros_claim_research_run_command",
+            "iros_claim_research_run_command_v2",
             {"selected_worker_id": worker_id.strip()},
         )
         if not isinstance(payload, list):
@@ -141,6 +141,9 @@ def _claim_from_row(row: Mapping[str, Any]) -> CommitteeCommandClaim:
         "command_id",
         "operator_id",
         "security_id",
+        "capture_id",
+        "capture_revision",
+        "capture_content_hash",
         "question_type_version",
         "workflow_config_version",
         "as_of_cutoff",
@@ -163,6 +166,9 @@ def _claim_from_row(row: Mapping[str, Any]) -> CommitteeCommandClaim:
             command_id=_uuid_text(row["command_id"]),
             operator_id=_uuid_text(row["operator_id"]),
             security_id=_uuid_text(row["security_id"]),
+            capture_id=_uuid_text(row["capture_id"]),
+            capture_revision=int(row["capture_revision"]),
+            capture_content_hash=str(row["capture_content_hash"]),
             question_type_version=str(row["question_type_version"]),
             workflow_config_version=str(row["workflow_config_version"]),
             as_of_cutoff=cutoff.astimezone(UTC),
@@ -187,6 +193,9 @@ def _claim_from_row(row: Mapping[str, Any]) -> CommitteeCommandClaim:
         )
         not in SUPPORTED_WORKFLOW_IDENTITIES
         or claim.attempt_number not in (1, 2)
+        or type(row["capture_revision"]) is not int
+        or claim.capture_revision < 1
+        or re.fullmatch(r"[0-9a-f]{64}", claim.capture_content_hash) is None
         or claim.next_stage not in STAGES
         or not isinstance(completed, list)
         or claim.completed_stages != STAGES[: STAGES.index(claim.next_stage)]

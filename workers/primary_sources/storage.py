@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
 import hashlib
 import json
@@ -23,6 +23,8 @@ from .models import PrimarySourceRequest
 
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _METADATA_VERSION = "primary_source_capture_storage.v1"
+MAX_CAPTURE_CATALOG_COUNT = 100
+MAX_CAPTURE_CATALOG_SCAN_COUNT = 1_000
 
 
 class PrimarySourceStorageError(ValueError):
@@ -103,7 +105,10 @@ class FilePrimarySourceCaptureRepository:
             metadata.capture_revision,
         )
         if existing is not None:
-            self._require_exact(existing, metadata)
+            self._require_exact(
+                existing,
+                replace(metadata, accepted_at=existing.accepted_at),
+            )
             if (
                 self.read_archive(
                     metadata.operator_id,
@@ -145,7 +150,10 @@ class FilePrimarySourceCaptureRepository:
                 )
                 if persisted is None:
                     raise
-                self._require_exact(persisted, metadata)
+                self._require_exact(
+                    persisted,
+                    replace(metadata, accepted_at=persisted.accepted_at),
+                )
                 if (
                     self.read_archive(
                         metadata.operator_id,
@@ -269,6 +277,97 @@ class FilePrimarySourceCaptureRepository:
             _metadata_from_capture(capture, archive),
         )
         return capture
+
+    def list_captures(
+        self,
+        operator_id: str,
+        security_id: str,
+        *,
+        question_type_version: str | None = None,
+        workflow_config_version: str | None = None,
+        as_of_cutoff: datetime | None = None,
+        max_count: int = 50,
+    ) -> tuple[PersistedPrimarySourceCapture, ...]:
+        """List exact accepted-capture metadata without choosing a latest item."""
+        canonical_operator_id = _uuid_text(operator_id)
+        canonical_security_id = _uuid_text(security_id)
+        if (
+            type(max_count) is not int
+            or max_count < 1
+            or max_count > MAX_CAPTURE_CATALOG_COUNT
+        ):
+            raise PrimarySourceStorageError("capture catalog count is invalid")
+        for value in (question_type_version, workflow_config_version):
+            if value is not None and not value.strip():
+                raise PrimarySourceStorageError("capture catalog filter is invalid")
+        canonical_cutoff = (
+            _aware_timestamp(as_of_cutoff) if as_of_cutoff is not None else None
+        )
+        operator_root = self._root / canonical_operator_id
+        if not operator_root.exists():
+            return ()
+        if not operator_root.is_dir() or operator_root.is_symlink():
+            raise PrimarySourceStorageError("capture operator path is invalid")
+
+        captures: list[PersistedPrimarySourceCapture] = []
+        scanned_paths = 0
+        for capture_path in operator_root.iterdir():
+            if capture_path.name == "run-bindings":
+                continue
+            scanned_paths += 1
+            if scanned_paths > MAX_CAPTURE_CATALOG_SCAN_COUNT:
+                raise PrimarySourceStorageError("capture catalog scan limit exceeded")
+            if not capture_path.is_dir() or capture_path.is_symlink():
+                raise PrimarySourceStorageError("capture storage path is invalid")
+            capture_id = _uuid_text(capture_path.name)
+            for revision_path in capture_path.iterdir():
+                if revision_path.name.startswith("."):
+                    continue
+                scanned_paths += 1
+                if scanned_paths > MAX_CAPTURE_CATALOG_SCAN_COUNT:
+                    raise PrimarySourceStorageError(
+                        "capture catalog scan limit exceeded"
+                    )
+                if not revision_path.is_dir() or revision_path.is_symlink():
+                    raise PrimarySourceStorageError("capture storage path is invalid")
+                if re.fullmatch(r"[1-9][0-9]*", revision_path.name) is None:
+                    raise PrimarySourceStorageError("capture revision is invalid")
+                revision = int(revision_path.name)
+                metadata = self.get_capture(
+                    canonical_operator_id,
+                    capture_id,
+                    revision,
+                )
+                if metadata is None:
+                    raise PrimarySourceStorageError("capture metadata is unavailable")
+                if metadata.security_id != canonical_security_id:
+                    continue
+                if (
+                    question_type_version is not None
+                    and metadata.question_type_version != question_type_version
+                ):
+                    continue
+                if (
+                    workflow_config_version is not None
+                    and metadata.workflow_config_version != workflow_config_version
+                ):
+                    continue
+                if (
+                    canonical_cutoff is not None
+                    and metadata.as_of_cutoff != canonical_cutoff
+                ):
+                    continue
+                captures.append(metadata)
+
+        captures.sort(
+            key=lambda capture: (
+                capture.accepted_at,
+                capture.capture_id,
+                capture.capture_revision,
+            ),
+            reverse=True,
+        )
+        return tuple(captures[:max_count])
 
     def bind_to_run(
         self,
@@ -668,6 +767,8 @@ def _uuid_text(value: object) -> str:
 
 __all__ = [
     "FilePrimarySourceCaptureRepository",
+    "MAX_CAPTURE_CATALOG_COUNT",
+    "MAX_CAPTURE_CATALOG_SCAN_COUNT",
     "PersistedPrimarySourceCapture",
     "PrimarySourceRunArtifactBinding",
     "PrimarySourceStorageError",

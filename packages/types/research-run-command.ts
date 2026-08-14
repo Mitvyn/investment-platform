@@ -5,8 +5,7 @@ export type ResearchRunCommandState =
   | "failed"
   | "completed";
 
-export type ResearchRunCommandReceipt = {
-  contract_version: "research_run_command_receipt.v1";
+type ResearchRunCommandReceiptBase = {
   command_id: string;
   operator_id: string;
   security_id: string;
@@ -29,7 +28,34 @@ export type ResearchRunCommandReceipt = {
   finished_at: string | null;
 };
 
-const RECEIPT_KEYS = [
+export type HistoricalResearchRunCommandReceipt =
+  ResearchRunCommandReceiptBase & {
+    contract_version: "research_run_command_receipt.v1";
+  };
+
+export type PreparedResearchCaptureIdentity = {
+  capture_id: string;
+  capture_revision: number;
+  capture_content_hash: string;
+};
+
+const PREPARED_CAPTURE_KEYS = [
+  "capture_id",
+  "capture_revision",
+  "capture_content_hash",
+] as const;
+
+export type CurrentResearchRunCommandReceipt =
+  ResearchRunCommandReceiptBase &
+    PreparedResearchCaptureIdentity & {
+      contract_version: "research_run_command_receipt.v2";
+    };
+
+export type ResearchRunCommandReceipt =
+  | HistoricalResearchRunCommandReceipt
+  | CurrentResearchRunCommandReceipt;
+
+const RECEIPT_V1_KEYS = [
   "contract_version",
   "command_id",
   "operator_id",
@@ -47,6 +73,13 @@ const RECEIPT_KEYS = [
   "updated_at",
   "started_at",
   "finished_at",
+] as const;
+
+const RECEIPT_V2_KEYS = [
+  ...RECEIPT_V1_KEYS,
+  "capture_id",
+  "capture_revision",
+  "capture_content_hash",
 ] as const;
 
 const UUID_PATTERN =
@@ -85,21 +118,55 @@ function isTimestamp(value: unknown): value is string {
   );
 }
 
+export function parsePreparedResearchCaptureIdentity(
+  value: unknown,
+): PreparedResearchCaptureIdentity {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new TypeError("invalid prepared Research capture identity");
+  }
+  const identity = value as Record<string, unknown>;
+  const actualKeys = Object.keys(identity).sort();
+  const expectedKeys = [...PREPARED_CAPTURE_KEYS].sort();
+  if (
+    actualKeys.length !== expectedKeys.length ||
+    actualKeys.some((key, index) => key !== expectedKeys[index]) ||
+    typeof identity.capture_id !== "string" ||
+    !UUID_PATTERN.test(identity.capture_id) ||
+    !Number.isInteger(identity.capture_revision) ||
+    (identity.capture_revision as number) < 1 ||
+    (identity.capture_revision as number) > 2_147_483_647 ||
+    typeof identity.capture_content_hash !== "string" ||
+    !/^[0-9a-f]{64}$/.test(identity.capture_content_hash)
+  ) {
+    throw new TypeError("invalid prepared Research capture identity");
+  }
+  return identity as PreparedResearchCaptureIdentity;
+}
+
 export function parseResearchRunCommandReceipt(
   value: unknown,
 ): ResearchRunCommandReceipt {
   if (
     value === null ||
     typeof value !== "object" ||
-    Array.isArray(value) ||
-    (value as Record<string, unknown>).contract_version !==
-      "research_run_command_receipt.v1"
+    Array.isArray(value)
   ) {
     throw new TypeError("invalid Research Run command receipt");
   }
   const receipt = value as Record<string, unknown>;
+  const receiptVersion = receipt.contract_version;
+  if (
+    receiptVersion !== "research_run_command_receipt.v1" &&
+    receiptVersion !== "research_run_command_receipt.v2"
+  ) {
+    throw new TypeError("invalid Research Run command receipt");
+  }
   const actualKeys = Object.keys(receipt).sort();
-  const expectedKeys = [...RECEIPT_KEYS].sort();
+  const expectedKeys = [
+    ...(receiptVersion === "research_run_command_receipt.v2"
+      ? RECEIPT_V2_KEYS
+      : RECEIPT_V1_KEYS),
+  ].sort();
   if (
     actualKeys.length !== expectedKeys.length ||
     actualKeys.some((key, index) => key !== expectedKeys[index])
@@ -112,6 +179,17 @@ export function parseResearchRunCommandReceipt(
       !UUID_PATTERN.test(receipt[field])
     ) {
       throw new TypeError(`invalid Research Run command ${field}`);
+    }
+  }
+  if (receiptVersion === "research_run_command_receipt.v2") {
+    try {
+      parsePreparedResearchCaptureIdentity({
+        capture_id: receipt.capture_id,
+        capture_revision: receipt.capture_revision,
+        capture_content_hash: receipt.capture_content_hash,
+      });
+    } catch {
+      throw new TypeError("invalid Research Run command capture identity");
     }
   }
   const contractIdentityValid = COMMAND_CONTRACTS.some(

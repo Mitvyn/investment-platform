@@ -11,6 +11,7 @@ from zipfile import ZipFile
 
 from workers.primary_sources.__main__ import main, run
 from workers.primary_sources.acquisition import PrimarySourceAcquisitionResult
+from workers.primary_sources.storage import FilePrimarySourceCaptureRepository
 
 from tests.test_primary_source_replay import _platform_capture_archive
 
@@ -172,6 +173,84 @@ class PrimarySourceCliTests(unittest.TestCase):
             self.assertEqual(payload["security_id"], SECURITY_ID)
             self.assertGreater(payload["response_count"], 0)
             self.assertGreater(payload["sec_passage_count"], 0)
+
+    def test_accept_verifies_then_persists_exact_capture_for_desktop_selection(
+        self,
+    ) -> None:
+        with TemporaryDirectory() as directory:
+            archive, args = verification_inputs(directory)
+            capture_root = Path(directory) / "accepted"
+            args[0] = "accept"
+            args.extend(["--capture-root", str(capture_root)])
+            output = StringIO()
+
+            with redirect_stdout(output):
+                exit_code = run(
+                    args,
+                    environ=VERIFY_ENVIRONMENT,
+                    clock=verify_clock,
+                )
+
+            payload = json.loads(output.getvalue())
+            stored = FilePrimarySourceCaptureRepository(capture_root).get_capture(
+                OPERATOR_ID,
+                payload["capture_id"],
+                payload["capture_revision"],
+            )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(payload["status"], "accepted")
+        self.assertEqual(
+            payload["contract_version"],
+            "primary_source_capture_acceptance.v1",
+        )
+        self.assertIsNotNone(stored)
+        assert stored is not None
+        self.assertEqual(stored.capture_content_hash, payload["capture_content_hash"])
+        self.assertEqual(stored.package_sha256, payload["archive_sha256"])
+        self.assertEqual(stored.byte_length, len(archive))
+
+    def test_accept_reuses_identical_capture_without_replacing_acceptance_time(
+        self,
+    ) -> None:
+        with TemporaryDirectory() as directory:
+            _, args = verification_inputs(directory)
+            capture_root = Path(directory) / "accepted"
+            args[0] = "accept"
+            args.extend(["--capture-root", str(capture_root)])
+            first_output = StringIO()
+            second_output = StringIO()
+
+            with redirect_stdout(first_output):
+                first_exit_code = run(
+                    args,
+                    environ=VERIFY_ENVIRONMENT,
+                    clock=lambda: datetime(2026, 8, 7, 4, 0, tzinfo=UTC),
+                )
+            with redirect_stdout(second_output):
+                second_exit_code = run(
+                    args,
+                    environ=VERIFY_ENVIRONMENT,
+                    clock=lambda: datetime(2026, 8, 8, 4, 0, tzinfo=UTC),
+                )
+
+            first_payload = json.loads(first_output.getvalue())
+            second_payload = json.loads(second_output.getvalue())
+            stored = FilePrimarySourceCaptureRepository(capture_root).get_capture(
+                OPERATOR_ID,
+                first_payload["capture_id"],
+                first_payload["capture_revision"],
+            )
+
+        self.assertEqual(first_exit_code, 0)
+        self.assertEqual(second_exit_code, 0)
+        self.assertEqual(second_payload, first_payload)
+        self.assertIsNotNone(stored)
+        assert stored is not None
+        self.assertEqual(
+            stored.accepted_at,
+            datetime(2026, 8, 7, 4, 0, tzinfo=UTC),
+        )
 
     def test_verify_maps_invalid_archive_to_machine_safe_error(self) -> None:
         with TemporaryDirectory() as directory:

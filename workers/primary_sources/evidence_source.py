@@ -51,6 +51,7 @@ from .pipeline import (
     PrimaryEvidencePassage,
     PrimarySourcePipeline,
     PrimarySourcePipelineResult,
+    PrimarySourceCaptureIdentity,
 )
 from .replay import replay_primary_source_capture
 from .share_growth import calculate_basic_share_growth
@@ -557,7 +558,15 @@ class ReplayEvidenceCandidateAssembler:
                     ),
                 ),
             )
-        return replace(pipeline_result, bundle_candidate=candidate)
+        return replace(
+            pipeline_result,
+            bundle_candidate=candidate,
+            source_capture_identity=PrimarySourceCaptureIdentity(
+                capture_id=replay.capture.capture_id,
+                capture_revision=replay.capture.revision,
+                capture_content_hash=replay.capture.content_hash,
+            ),
+        )
 
 
 class PersistedPrimarySourceEvidenceSource:

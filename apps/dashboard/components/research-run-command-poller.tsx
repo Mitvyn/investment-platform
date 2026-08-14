@@ -7,9 +7,13 @@ import { researchRunCommandNavigation } from "@/lib/research-run-command-navigat
 import type { ResearchRunCommandState } from "../../../packages/types/research-run-command";
 
 export function ResearchRunCommandPoller({
+  contractVersion,
   researchRunId,
   state,
 }: {
+  contractVersion:
+    | "research_run_command_receipt.v1"
+    | "research_run_command_receipt.v2";
   researchRunId: string | null;
   state: ResearchRunCommandState;
 }) {
@@ -22,6 +26,7 @@ export function ResearchRunCommandPoller({
     researchRunId,
     pollsCompleted,
     elapsedMilliseconds,
+    contractVersion,
   );
 
   useEffect(() => {
@@ -41,6 +46,7 @@ export function ResearchRunCommandPoller({
           researchRunId,
           nextPollCount,
           elapsed,
+          contractVersion,
         ).kind === "pause"
       ) {
         return;
@@ -48,7 +54,15 @@ export function ResearchRunCommandPoller({
       router.refresh();
     }, 3_000);
     return () => window.clearTimeout(timer);
-  }, [navigation, pollsCompleted, researchRunId, router, startedAt, state]);
+  }, [
+    contractVersion,
+    navigation,
+    pollsCompleted,
+    researchRunId,
+    router,
+    startedAt,
+    state,
+  ]);
 
   return navigation.kind === "pause" ? (
     <p className="mt-4 text-xs text-warning">

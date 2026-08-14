@@ -4,6 +4,7 @@ import {
 } from "../../../packages/types/research-run-command.ts";
 
 export type ResearchRunCommandRow = {
+  contract_version: unknown;
   id: unknown;
   operator_id: unknown;
   security_id: unknown;
@@ -12,6 +13,9 @@ export type ResearchRunCommandRow = {
   as_of_cutoff: unknown;
   operator_focus_normalized: unknown;
   idempotency_key: unknown;
+  capture_id?: unknown;
+  capture_revision?: unknown;
+  capture_content_hash?: unknown;
   command_state: unknown;
   blocking_reason_codes: unknown;
   error_code: unknown;
@@ -40,8 +44,33 @@ export function createResearchRunCommandLoader(
       throw new Error("Research Run command identity is ambiguous");
     }
     const row = rows[0];
+    const hasCaptureIdentity =
+      row.capture_id !== null &&
+      row.capture_id !== undefined &&
+      row.capture_revision !== null &&
+      row.capture_revision !== undefined &&
+      row.capture_content_hash !== null &&
+      row.capture_content_hash !== undefined;
+    const hasPartialCaptureIdentity =
+      !hasCaptureIdentity &&
+      [row.capture_id, row.capture_revision, row.capture_content_hash].some(
+        (value) => value !== null && value !== undefined,
+      );
+    if (hasPartialCaptureIdentity) {
+      throw new Error("Research Run command capture identity is incomplete");
+    }
+    if (
+      (row.contract_version === "research_run_command_receipt.v1" &&
+        hasCaptureIdentity) ||
+      (row.contract_version === "research_run_command_receipt.v2" &&
+        !hasCaptureIdentity)
+    ) {
+      throw new Error(
+        "Research Run command capture identity contradicts contract version",
+      );
+    }
     const receipt = parseResearchRunCommandReceipt({
-      contract_version: "research_run_command_receipt.v1",
+      contract_version: row.contract_version,
       command_id: row.id,
       operator_id: row.operator_id,
       security_id: row.security_id,
@@ -50,6 +79,13 @@ export function createResearchRunCommandLoader(
       as_of_cutoff: row.as_of_cutoff,
       operator_focus_normalized: row.operator_focus_normalized,
       idempotency_key: row.idempotency_key,
+      ...(row.contract_version === "research_run_command_receipt.v2"
+        ? {
+            capture_id: row.capture_id,
+            capture_revision: row.capture_revision,
+            capture_content_hash: row.capture_content_hash,
+          }
+        : {}),
       state: row.command_state,
       blocking_reason_codes: row.blocking_reason_codes,
       error_code: row.error_code,

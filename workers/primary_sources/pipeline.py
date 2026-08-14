@@ -191,10 +191,18 @@ class NormalizedRiskFact:
 
 
 @dataclass(frozen=True, slots=True)
+class PrimarySourceCaptureIdentity:
+    capture_id: str
+    capture_revision: int
+    capture_content_hash: str
+
+
+@dataclass(frozen=True, slots=True)
 class PrimarySourcePipelineResult:
     eligibility_snapshot: SecurityEligibilitySnapshot
     bundle_candidate: EvidenceBundleCandidate
     reason_codes: tuple[str, ...]
+    source_capture_identity: PrimarySourceCaptureIdentity | None = None
 
 
 def _utc(value: datetime, label: str) -> datetime:

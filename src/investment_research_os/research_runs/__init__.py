@@ -157,6 +157,27 @@ class AuthenticatedOperator:
 
 
 @dataclass(frozen=True, slots=True)
+class ResearchRunSourceIdentity:
+    capture_id: str
+    capture_revision: int
+    capture_content_hash: str
+
+    def __post_init__(self) -> None:
+        try:
+            capture_id = str(uuid.UUID(self.capture_id))
+        except (AttributeError, TypeError, ValueError) as error:
+            raise ResearchRunRequestError("capture identity must be a UUID") from error
+        if type(self.capture_revision) is not int or self.capture_revision < 1:
+            raise ResearchRunRequestError("capture revision must be positive")
+        if re.fullmatch(r"[0-9a-f]{64}", self.capture_content_hash) is None:
+            raise ResearchRunRequestError("capture content hash must be SHA-256")
+        object.__setattr__(self, "capture_id", capture_id)
+
+    def as_dict(self) -> dict[str, object]:
+        return asdict(self)
+
+
+@dataclass(frozen=True, slots=True)
 class EvidenceReference:
     evidence_id: str
     available_at: datetime
@@ -581,6 +602,8 @@ class ResearchRunWorkflow:
         self,
         operator: AuthenticatedOperator,
         payload: Mapping[str, object],
+        *,
+        source_identity: ResearchRunSourceIdentity | None = None,
     ) -> ResearchRun:
         request = parse_research_question_request(
             payload,
@@ -605,6 +628,8 @@ class ResearchRunWorkflow:
             "as_of_cutoff": cutoff.isoformat(),
             "operator_focus": normalized.operator_focus_normalized,
         }
+        if source_identity is not None:
+            identity["source_identity"] = source_identity.as_dict()
         idempotency_key = hashlib.sha256(
             json.dumps(identity, sort_keys=True, separators=(",", ":")).encode()
         ).hexdigest()
@@ -678,6 +703,7 @@ __all__ = [
     "ResearchRun",
     "ResearchRunNotFound",
     "ResearchRunRequestError",
+    "ResearchRunSourceIdentity",
     "ResearchRunWorkflow",
     "SecurityIdentity",
     "SecurityEligibilitySnapshot",
