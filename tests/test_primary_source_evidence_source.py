@@ -206,6 +206,28 @@ class PersistedPrimarySourceEvidenceSourceTests(unittest.TestCase):
         )
         self.assertEqual(share_observations, ())
 
+    def test_replay_assembler_exposes_eligibility_and_candidate_together(
+        self,
+    ) -> None:
+        result = ReplayEvidenceCandidateAssembler().assemble_result(
+            _platform_capture_archive(),
+            request=integrated_request(PLATFORM_CASE),
+            ticker=PLATFORM_CASE.display_symbol,
+            sec_user_agent="Investment Research OS research@example.com",
+            trusted_issuer_hosts=PLATFORM_CASE.issuer_trusted_hosts,
+            accepted_at=datetime(2026, 5, 7, 3, tzinfo=UTC),
+        )
+
+        self.assertEqual(
+            result.eligibility_snapshot.security_id,
+            PLATFORM_CASE.security_id,
+        )
+        self.assertEqual(
+            result.bundle_candidate.security_id,
+            PLATFORM_CASE.security_id,
+        )
+        self.assertIn("primary_source_coverage_complete", result.reason_codes)
+
     def test_v3_replay_derives_share_growth_only_with_frozen_reconciliation(
         self,
     ) -> None:

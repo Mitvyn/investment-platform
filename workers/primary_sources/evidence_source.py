@@ -50,6 +50,7 @@ from .pipeline import (
     NormalizedRiskFact,
     PrimaryEvidencePassage,
     PrimarySourcePipeline,
+    PrimarySourcePipelineResult,
 )
 from .replay import replay_primary_source_capture
 from .share_growth import calculate_basic_share_growth
@@ -110,6 +111,25 @@ class ReplayEvidenceCandidateAssembler:
         trusted_issuer_hosts: tuple[str, ...],
         accepted_at: datetime,
     ) -> EvidenceBundleCandidate:
+        return self.assemble_result(
+            raw_archive,
+            request=request,
+            ticker=ticker,
+            sec_user_agent=sec_user_agent,
+            trusted_issuer_hosts=trusted_issuer_hosts,
+            accepted_at=accepted_at,
+        ).bundle_candidate
+
+    def assemble_result(
+        self,
+        raw_archive: bytes,
+        *,
+        request: PrimarySourceRequest,
+        ticker: str,
+        sec_user_agent: str,
+        trusted_issuer_hosts: tuple[str, ...],
+        accepted_at: datetime,
+    ) -> PrimarySourcePipelineResult:
         replay = replay_primary_source_capture(
             raw_archive,
             request=request,
@@ -537,7 +557,7 @@ class ReplayEvidenceCandidateAssembler:
                     ),
                 ),
             )
-        return candidate
+        return replace(pipeline_result, bundle_candidate=candidate)
 
 
 class PersistedPrimarySourceEvidenceSource:
