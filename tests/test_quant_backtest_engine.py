@@ -2,16 +2,18 @@ from __future__ import annotations
 
 import unittest
 from datetime import date, timedelta
-from decimal import Decimal
+from decimal import Decimal, localcontext
 
 from investment_research_os.quant import (
     BacktestConfig,
     BarSeries,
     BarWindow,
+    CorporateActionSet,
     CostModel,
     LookAheadError,
     OhlcvBar,
     QuantContractError,
+    StockSplit,
     run_backtest,
 )
 
@@ -32,6 +34,13 @@ RETAIL = CostModel(
     transaction_cost_bps=Decimal("5"),
     slippage_bps=Decimal("10"),
 )
+
+NO_ACTIONS = CorporateActionSet(
+    security_id=SECURITY_ID,
+    source="fixture-none",
+    actions=(),
+)
+STRATEGY_CONFIG_SHA256 = "a" * 64
 
 
 def flat_series(closes: list[str], *, opens: list[str] | None = None) -> BarSeries:
@@ -55,6 +64,7 @@ def flat_series(closes: list[str], *, opens: list[str] | None = None) -> BarSeri
         security_id=SECURITY_ID,
         currency="USD",
         interval="1d",
+        price_basis="unadjusted",
         source="fixture",
         bars=tuple(bars),
     )
@@ -68,6 +78,16 @@ class AlwaysLong:
 class AlwaysFlat:
     def target_exposure(self, window: BarWindow) -> Decimal:
         return Decimal(0)
+
+
+class HalfLong:
+    def target_exposure(self, window: BarWindow) -> Decimal:
+        return Decimal("0.5")
+
+
+class LongThenFlat:
+    def target_exposure(self, window: BarWindow) -> Decimal:
+        return Decimal(1) if len(window.bars) == 1 else Decimal(0)
 
 
 class RecordingStrategy:
@@ -87,6 +107,17 @@ class PeekingStrategy:
         return Decimal(1)
 
 
+class RecordingActionStrategy:
+    def __init__(self) -> None:
+        self.visible_action_sessions: list[tuple[date, ...]] = []
+
+    def target_exposure(self, window: BarWindow) -> Decimal:
+        self.visible_action_sessions.append(
+            tuple(action.effective_session for action in window.corporate_actions)
+        )
+        return Decimal(0)
+
+
 class ShortingStrategy:
     def target_exposure(self, window: BarWindow) -> Decimal:
         return Decimal("-1")
@@ -102,17 +133,62 @@ class FloatStrategy:
         return 0.5  # type: ignore[return-value]
 
 
-def run(series: BarSeries, strategy: object, costs: CostModel = FREE, cash: str = "10000"):
+def run(
+    series: BarSeries,
+    strategy: object,
+    costs: CostModel = FREE,
+    cash: str = "10000",
+    corporate_actions: CorporateActionSet = NO_ACTIONS,
+):
     return run_backtest(
         series=series,
         strategy=strategy,  # type: ignore[arg-type]
         costs=costs,
+        corporate_actions=corporate_actions,
         config=BacktestConfig(starting_cash=Decimal(cash)),
         strategy_id="test-strategy",
+        strategy_config_sha256=STRATEGY_CONFIG_SHA256,
     )
 
 
 class LookAheadTests(unittest.TestCase):
+    def test_window_never_exposes_future_corporate_actions(self) -> None:
+        series = flat_series(["100", "50", "10"])
+        actions = CorporateActionSet(
+            security_id=SECURITY_ID,
+            source="fixture-actions",
+            actions=(
+                StockSplit(date(2026, 1, 6), 2, 1),
+                StockSplit(date(2026, 1, 7), 5, 1),
+            ),
+        )
+        strategy = RecordingActionStrategy()
+
+        run(series, strategy, corporate_actions=actions)
+
+        self.assertEqual(
+            strategy.visible_action_sessions,
+            [(), (date(2026, 1, 6),)],
+        )
+
+    def test_window_adjusts_historical_closes_for_effective_splits_only(self) -> None:
+        series = flat_series(["100", "50", "10"])
+        first_split = StockSplit(date(2026, 1, 6), 2, 1)
+        future_split = StockSplit(date(2026, 1, 7), 5, 1)
+        window = BarWindow(
+            security_id=SECURITY_ID,
+            currency="USD",
+            bars=series.bars[:2],
+            corporate_actions=(first_split,),
+        )
+
+        self.assertEqual(window.closes(), (Decimal("100"), Decimal("50")))
+        self.assertEqual(
+            window.split_adjusted_closes(),
+            (Decimal("50"), Decimal("50")),
+        )
+        self.assertNotIn(future_split, window.corporate_actions)
+
     def test_window_only_reaches_the_decision_session(self) -> None:
         series = flat_series(["100", "101", "102", "103"])
         strategy = RecordingStrategy()
@@ -189,8 +265,28 @@ class CostTests(unittest.TestCase):
         self.assertGreater(costed.total_slippage_cost, Decimal(0))
 
     def test_slippage_moves_the_price_against_the_trader(self) -> None:
-        self.assertEqual(RETAIL.fill_price(Decimal("100"), "buy"), Decimal("100.100000"))
-        self.assertEqual(RETAIL.fill_price(Decimal("100"), "sell"), Decimal("99.900000"))
+        self.assertEqual(
+            RETAIL.fill_price(Decimal("100"), "buy"), Decimal("100.100000")
+        )
+        self.assertEqual(
+            RETAIL.fill_price(Decimal("100"), "sell"), Decimal("99.900000")
+        )
+
+    def test_slippage_cannot_quantize_a_sell_fill_to_zero(self) -> None:
+        costs = CostModel(
+            commission_per_share="0",
+            commission_bps="0",
+            commission_minimum="0",
+            transaction_cost_bps="0",
+            slippage_bps="9999",
+        )
+
+        with self.assertRaisesRegex(QuantContractError, "below price quantum"):
+            costs.fill_price(Decimal("0.000001"), "sell")
+
+        series = flat_series(["0.000001", "0.000001", "0.000001"])
+        with self.assertRaisesRegex(QuantContractError, "below price quantum"):
+            run(series, LongThenFlat(), costs=costs, cash="0.01")
 
     def test_cost_inputs_reject_negative_values(self) -> None:
         with self.assertRaises(QuantContractError):
@@ -208,6 +304,91 @@ class CostTests(unittest.TestCase):
 
 
 class ExecutionTests(unittest.TestCase):
+    def test_corporate_actions_must_match_security_and_transition_session(self) -> None:
+        series = flat_series(["100", "100"])
+        foreign = CorporateActionSet(
+            security_id="6f9e2186-cff9-4af8-8720-283fedcf4abc",
+            source="fixture-actions",
+            actions=(),
+        )
+        with self.assertRaisesRegex(QuantContractError, "security_id"):
+            run(series, AlwaysLong(), corporate_actions=foreign)
+
+        first_session = CorporateActionSet(
+            security_id=SECURITY_ID,
+            source="fixture-actions",
+            actions=(StockSplit(date(2026, 1, 5), 2, 1),),
+        )
+        with self.assertRaisesRegex(QuantContractError, "transition session"):
+            run(series, AlwaysLong(), corporate_actions=first_session)
+
+        outside = CorporateActionSet(
+            security_id=SECURITY_ID,
+            source="fixture-actions",
+            actions=(StockSplit(date(2026, 1, 9), 2, 1),),
+        )
+        with self.assertRaisesRegex(QuantContractError, "transition session"):
+            run(series, AlwaysLong(), corporate_actions=outside)
+
+    def test_split_adjusts_held_shares_before_next_open_rebalance(self) -> None:
+        series = flat_series(
+            ["100", "100", "50"],
+            opens=["100", "100", "50"],
+        )
+        actions = CorporateActionSet(
+            security_id=SECURITY_ID,
+            source="fixture-actions",
+            actions=(StockSplit(date(2026, 1, 7), 2, 1),),
+        )
+
+        result = run(series, AlwaysLong(), corporate_actions=actions)
+
+        self.assertEqual([trade.side for trade in result.trades], ["buy"])
+        self.assertEqual(result.equity_curve[-1].shares, 200)
+        self.assertEqual(result.final_equity, Decimal("10000.00"))
+        self.assertEqual(result.corporate_action_applications[0].shares_before, 100)
+        self.assertEqual(result.corporate_action_applications[0].shares_after, 200)
+
+    def test_reverse_split_requires_integral_whole_share_entitlement(self) -> None:
+        series = flat_series(
+            ["100", "100", "300"],
+            opens=["100", "100", "300"],
+        )
+        actions = CorporateActionSet(
+            security_id=SECURITY_ID,
+            source="fixture-actions",
+            actions=(StockSplit(date(2026, 1, 7), 1, 3),),
+        )
+
+        with self.assertRaisesRegex(QuantContractError, "fractional shares"):
+            run(series, AlwaysLong(), corporate_actions=actions)
+
+        exact = run(
+            series,
+            AlwaysLong(),
+            cash="9900",
+            corporate_actions=actions,
+        )
+        self.assertEqual(exact.corporate_action_applications[0].shares_after, 33)
+        self.assertEqual(exact.final_equity, Decimal("9900.00"))
+
+    def test_full_exposure_target_does_not_sell_because_of_buy_slippage(self) -> None:
+        high_slippage = CostModel(
+            commission_per_share="0",
+            commission_bps="0",
+            commission_minimum="0",
+            transaction_cost_bps="0",
+            slippage_bps="5000",
+        )
+        series = flat_series(
+            ["100", "100", "200"],
+            opens=["100", "100", "200"],
+        )
+
+        result = run(series, AlwaysLong(), costs=high_slippage)
+
+        self.assertEqual([trade.side for trade in result.trades], ["buy"])
+
     def test_buy_and_hold_arithmetic_is_exact(self) -> None:
         series = flat_series(["100", "100", "110"])
         result = run(series, AlwaysLong())
@@ -255,6 +436,60 @@ class ExecutionTests(unittest.TestCase):
 
 
 class ReproducibilityTests(unittest.TestCase):
+    def test_corporate_action_input_and_zero_position_application_are_pinned(
+        self,
+    ) -> None:
+        series = flat_series(["100", "50"])
+        actions = CorporateActionSet(
+            security_id=SECURITY_ID,
+            source="fixture-actions",
+            actions=(StockSplit(date(2026, 1, 6), 2, 1),),
+        )
+        with_action = run(
+            series,
+            AlwaysFlat(),
+            corporate_actions=actions,
+        )
+        without_action = run(series, AlwaysFlat())
+
+        self.assertEqual(
+            with_action.to_record()["corporate_actions_sha256"],
+            actions.content_sha256,
+        )
+        self.assertEqual(
+            with_action.corporate_action_applications[0].shares_before,
+            0,
+        )
+        self.assertEqual(
+            with_action.corporate_action_applications[0].shares_after,
+            0,
+        )
+        self.assertNotEqual(with_action.content_sha256, without_action.content_sha256)
+
+    def test_target_trace_distinguishes_strategies_without_fills(self) -> None:
+        series = flat_series(["100", "100"])
+        flat = run(series, AlwaysFlat(), cash="50")
+        half = run(series, HalfLong(), cash="50")
+
+        self.assertEqual(flat.trades, ())
+        self.assertEqual(half.trades, ())
+        self.assertNotEqual(flat.to_record(), half.to_record())
+        self.assertNotEqual(flat.content_sha256, half.content_sha256)
+
+    def test_result_does_not_depend_on_ambient_decimal_precision(self) -> None:
+        series = flat_series(
+            ["1.23456789", "1.34567891", "1.45678912"],
+        )
+        with localcontext() as context:
+            context.prec = 6
+            low_precision = run(series, AlwaysLong(), costs=RETAIL)
+        with localcontext() as context:
+            context.prec = 28
+            normal_precision = run(series, AlwaysLong(), costs=RETAIL)
+
+        self.assertEqual(low_precision.to_record(), normal_precision.to_record())
+        self.assertEqual(low_precision.content_sha256, normal_precision.content_sha256)
+
     def test_identical_inputs_produce_an_identical_hash(self) -> None:
         series = flat_series(["100", "101", "102", "99", "105"])
         first = run(series, AlwaysLong(), costs=RETAIL)
@@ -275,7 +510,8 @@ class ReproducibilityTests(unittest.TestCase):
         self.assertEqual(record["series_sha256"], series.content_sha256)
         self.assertEqual(record["security_id"], SECURITY_ID)
         self.assertEqual(record["strategy_id"], "test-strategy")
-        self.assertEqual(record["config"]["engine_version"], "quant-backtest-1")
+        self.assertEqual(record["strategy_config_sha256"], STRATEGY_CONFIG_SHA256)
+        self.assertEqual(record["config"]["engine_version"], "quant-backtest-2")
 
     def test_starting_cash_must_be_positive(self) -> None:
         with self.assertRaises(QuantContractError):
@@ -287,8 +523,24 @@ class ReproducibilityTests(unittest.TestCase):
                 series=flat_series(["100", "101"]),
                 strategy=AlwaysLong(),
                 costs=FREE,
+                corporate_actions=NO_ACTIONS,
                 config=BacktestConfig(starting_cash=Decimal("1000")),
                 strategy_id="  ",
+                strategy_config_sha256=STRATEGY_CONFIG_SHA256,
+            )
+
+    def test_strategy_configuration_hash_is_required(self) -> None:
+        with self.assertRaisesRegex(
+            QuantContractError, "strategy_config_sha256 must be"
+        ):
+            run_backtest(
+                series=flat_series(["100", "101"]),
+                strategy=AlwaysLong(),
+                costs=FREE,
+                corporate_actions=NO_ACTIONS,
+                config=BacktestConfig(starting_cash=Decimal("1000")),
+                strategy_id="always-long.v1",
+                strategy_config_sha256="A" * 64,
             )
 
 

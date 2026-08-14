@@ -1,14 +1,13 @@
 """Deterministic long-only backtest engine.
 
-Look-ahead is prevented structurally rather than by convention. A strategy
-never receives the :class:`BarSeries`; it receives a :class:`BarWindow` that
-contains only sessions up to and including the decision bar, and that raises
-:class:`LookAheadError` if asked for anything later. The order produced on bar
-``i`` fills on bar ``i + 1``'s open, so a decision can never be executed at a
-price it was allowed to see.
+The engine supplies each strategy a :class:`BarWindow` containing only data
+available through the decision session. Python cannot prevent a strategy from
+capturing external or future state, so callers must use audited deterministic
+strategies. The recorded strategy-configuration hash and complete decision
+trace make such drift visible; they do not sandbox arbitrary strategy code.
 
-The engine is pure: no clock, no network, no randomness. The same inputs
-always produce the same ``content_sha256``.
+The engine itself uses no clock, network, or randomness. Given deterministic
+strategy behavior, the same declared inputs produce the same content hash.
 """
 
 from __future__ import annotations
@@ -16,6 +15,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date
 from decimal import ROUND_HALF_UP, Decimal
+import re
 from typing import Protocol
 
 from investment_research_os.quant.bars import (
@@ -24,12 +24,18 @@ from investment_research_os.quant.bars import (
     QuantContractError,
     canonical_sha256,
     decimal_text,
+    quant_decimal_context,
     to_decimal,
 )
 from investment_research_os.quant.costs import CASH_QUANTUM, CostModel, TradeCharges
+from investment_research_os.quant.corporate_actions import (
+    CorporateActionSet,
+    StockSplit,
+)
 
-ENGINE_VERSION = "quant-backtest-1"
+ENGINE_VERSION = "quant-backtest-2"
 RATIO_QUANTUM = Decimal("0.000001")
+_SHA256_PATTERN = re.compile(r"[0-9a-f]{64}")
 
 
 class LookAheadError(QuantContractError):
@@ -48,6 +54,7 @@ class BarWindow:
     security_id: str
     currency: str
     bars: tuple[OhlcvBar, ...]
+    corporate_actions: tuple[StockSplit, ...] = ()
 
     @property
     def cutoff(self) -> date:
@@ -59,6 +66,19 @@ class BarWindow:
 
     def closes(self) -> tuple[Decimal, ...]:
         return tuple(bar.close for bar in self.bars)
+
+    def split_adjusted_closes(self) -> tuple[Decimal, ...]:
+        """Historical closes expressed on latest visible share basis."""
+
+        with quant_decimal_context():
+            adjusted: list[Decimal] = []
+            for bar in self.bars:
+                close = bar.close
+                for split in self.corporate_actions:
+                    if split.effective_session > bar.session:
+                        close = close * split.old_shares / split.new_shares
+                adjusted.append(close)
+            return tuple(adjusted)
 
     def at(self, session: date) -> OhlcvBar:
         if session > self.cutoff:
@@ -132,6 +152,39 @@ class Trade:
 
 
 @dataclass(frozen=True, slots=True)
+class StrategyDecision:
+    decision_session: date
+    execution_session: date
+    target_exposure: Decimal
+
+    def to_record(self) -> dict[str, str]:
+        return {
+            "decision_session": self.decision_session.isoformat(),
+            "execution_session": self.execution_session.isoformat(),
+            "target_exposure": decimal_text(self.target_exposure),
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class SplitApplication:
+    session: date
+    new_shares: int
+    old_shares: int
+    shares_before: int
+    shares_after: int
+
+    def to_record(self) -> dict[str, object]:
+        return {
+            "new_shares": self.new_shares,
+            "old_shares": self.old_shares,
+            "session": self.session.isoformat(),
+            "shares_after": self.shares_after,
+            "shares_before": self.shares_before,
+            "type": "stock_split",
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class EquityPoint:
     session: date
     cash: Decimal
@@ -154,7 +207,11 @@ class BacktestResult:
     series_sha256: str
     config: BacktestConfig
     costs: CostModel
+    corporate_actions: CorporateActionSet
     strategy_id: str
+    strategy_config_sha256: str
+    decisions: tuple[StrategyDecision, ...]
+    corporate_action_applications: tuple[SplitApplication, ...]
     trades: tuple[Trade, ...]
     equity_curve: tuple[EquityPoint, ...]
 
@@ -164,40 +221,50 @@ class BacktestResult:
 
     @property
     def total_return(self) -> Decimal:
-        start = self.config.starting_cash
-        return ((self.final_equity - start) / start).quantize(
-            RATIO_QUANTUM, rounding=ROUND_HALF_UP
-        )
+        with quant_decimal_context():
+            start = self.config.starting_cash
+            return ((self.final_equity - start) / start).quantize(
+                RATIO_QUANTUM, rounding=ROUND_HALF_UP
+            )
 
     @property
     def max_drawdown(self) -> Decimal:
-        peak = self.equity_curve[0].equity
-        worst = Decimal(0)
-        for point in self.equity_curve:
-            peak = max(peak, point.equity)
-            if peak > 0:
-                worst = max(worst, (peak - point.equity) / peak)
-        return worst.quantize(RATIO_QUANTUM, rounding=ROUND_HALF_UP)
+        with quant_decimal_context():
+            peak = self.equity_curve[0].equity
+            worst = Decimal(0)
+            for point in self.equity_curve:
+                peak = max(peak, point.equity)
+                if peak > 0:
+                    worst = max(worst, (peak - point.equity) / peak)
+            return worst.quantize(RATIO_QUANTUM, rounding=ROUND_HALF_UP)
 
     @property
     def total_commission(self) -> Decimal:
-        return sum((trade.charges.commission for trade in self.trades), Decimal(0))
+        with quant_decimal_context():
+            return sum((trade.charges.commission for trade in self.trades), Decimal(0))
 
     @property
     def total_transaction_cost(self) -> Decimal:
-        return sum((trade.charges.transaction_cost for trade in self.trades), Decimal(0))
+        with quant_decimal_context():
+            return sum(
+                (trade.charges.transaction_cost for trade in self.trades), Decimal(0)
+            )
 
     @property
     def total_slippage_cost(self) -> Decimal:
-        return sum((trade.slippage_cost for trade in self.trades), Decimal(0))
+        with quant_decimal_context():
+            return sum((trade.slippage_cost for trade in self.trades), Decimal(0))
 
     def to_record(self) -> dict[str, object]:
         """Canonical, reproducible output record."""
 
         return {
             "config": self.config.to_record(),
+            "corporate_actions": self.corporate_actions.to_record(),
+            "corporate_actions_sha256": self.corporate_actions.content_sha256,
             "costs": self.costs.to_record(),
             "currency": self.currency,
+            "decisions": [decision.to_record() for decision in self.decisions],
             "equity_curve": [point.to_record() for point in self.equity_curve],
             "outcome": {
                 "final_equity": decimal_text(self.final_equity),
@@ -210,6 +277,11 @@ class BacktestResult:
             "security_id": self.security_id,
             "series_sha256": self.series_sha256,
             "strategy_id": self.strategy_id,
+            "strategy_config_sha256": self.strategy_config_sha256,
+            "corporate_action_applications": [
+                application.to_record()
+                for application in self.corporate_action_applications
+            ],
             "trades": [trade.to_record() for trade in self.trades],
         }
 
@@ -252,8 +324,10 @@ def run_backtest(
     series: BarSeries,
     strategy: Strategy,
     costs: CostModel,
+    corporate_actions: CorporateActionSet,
     config: BacktestConfig,
     strategy_id: str,
+    strategy_config_sha256: str,
 ) -> BacktestResult:
     """Run one deterministic long-only backtest.
 
@@ -262,11 +336,56 @@ def run_backtest(
     it — acting on the last close would be look-ahead.
     """
 
+    with quant_decimal_context():
+        return _run_backtest(
+            series=series,
+            strategy=strategy,
+            costs=costs,
+            corporate_actions=corporate_actions,
+            config=config,
+            strategy_id=strategy_id,
+            strategy_config_sha256=strategy_config_sha256,
+        )
+
+
+def _run_backtest(
+    *,
+    series: BarSeries,
+    strategy: Strategy,
+    costs: CostModel,
+    corporate_actions: CorporateActionSet,
+    config: BacktestConfig,
+    strategy_id: str,
+    strategy_config_sha256: str,
+) -> BacktestResult:
     if not isinstance(strategy_id, str) or not strategy_id.strip():
         raise QuantContractError("strategy_id must name the strategy under test")
+    if not isinstance(strategy_config_sha256, str) or not _SHA256_PATTERN.fullmatch(
+        strategy_config_sha256
+    ):
+        raise QuantContractError(
+            "strategy_config_sha256 must be a lowercase SHA-256 digest"
+        )
+    if corporate_actions.security_id != series.security_id:
+        raise QuantContractError(
+            "corporate actions must match the bar-series security_id"
+        )
+    covered_action_sessions = {bar.session for bar in series.bars[1:]}
+    if any(
+        action.effective_session not in covered_action_sessions
+        for action in corporate_actions.actions
+    ):
+        raise QuantContractError(
+            "corporate action must match a covered transition session"
+        )
+    actions_by_session = {
+        action.effective_session: action for action in corporate_actions.actions
+    }
 
     cash = config.starting_cash
     shares = 0
+    decisions: list[StrategyDecision] = []
+    corporate_action_applications: list[SplitApplication] = []
     trades: list[Trade] = []
     equity_curve = [
         EquityPoint(
@@ -282,14 +401,45 @@ def run_backtest(
             security_id=series.security_id,
             currency=series.currency,
             bars=series.bars[: index + 1],
+            corporate_actions=tuple(
+                action
+                for action in corporate_actions.actions
+                if action.effective_session <= series.bars[index].session
+            ),
         )
         target = _validated_target(strategy.target_exposure(window))
         execution_bar = series.bars[index + 1]
+        decisions.append(
+            StrategyDecision(
+                decision_session=window.cutoff,
+                execution_session=execution_bar.session,
+                target_exposure=target,
+            )
+        )
         reference = execution_bar.open
+
+        split = actions_by_session.get(execution_bar.session)
+        if split is not None:
+            shares_before = shares
+            split_numerator = shares * split.new_shares
+            if split_numerator % split.old_shares != 0:
+                raise QuantContractError(
+                    "stock split creates fractional shares; cash-in-lieu is unsupported"
+                )
+            shares = split_numerator // split.old_shares
+            corporate_action_applications.append(
+                SplitApplication(
+                    session=execution_bar.session,
+                    new_shares=split.new_shares,
+                    old_shares=split.old_shares,
+                    shares_before=shares_before,
+                    shares_after=shares,
+                )
+            )
 
         pre_trade_equity = cash + reference * shares
         buy_price = costs.fill_price(reference, "buy")
-        desired = int(target * pre_trade_equity / buy_price)
+        desired = int(target * pre_trade_equity / reference)
         delta = desired - shares
 
         if delta > 0:
@@ -298,9 +448,9 @@ def run_backtest(
             )
             if quantity > 0:
                 charges = costs.charges(quantity=quantity, fill_price=buy_price)
-                cash = (
-                    cash - buy_price * quantity - charges.total
-                ).quantize(CASH_QUANTUM, rounding=ROUND_HALF_UP)
+                cash = (cash - buy_price * quantity - charges.total).quantize(
+                    CASH_QUANTUM, rounding=ROUND_HALF_UP
+                )
                 shares += quantity
                 trades.append(
                     Trade(
@@ -319,9 +469,9 @@ def run_backtest(
             quantity = -delta
             sell_price = costs.fill_price(reference, "sell")
             charges = costs.charges(quantity=quantity, fill_price=sell_price)
-            cash = (
-                cash + sell_price * quantity - charges.total
-            ).quantize(CASH_QUANTUM, rounding=ROUND_HALF_UP)
+            cash = (cash + sell_price * quantity - charges.total).quantize(
+                CASH_QUANTUM, rounding=ROUND_HALF_UP
+            )
             shares -= quantity
             trades.append(
                 Trade(
@@ -355,7 +505,11 @@ def run_backtest(
         series_sha256=series.content_sha256,
         config=config,
         costs=costs,
+        corporate_actions=corporate_actions,
         strategy_id=strategy_id,
+        strategy_config_sha256=strategy_config_sha256,
+        decisions=tuple(decisions),
+        corporate_action_applications=tuple(corporate_action_applications),
         trades=tuple(trades),
         equity_curve=tuple(equity_curve),
     )

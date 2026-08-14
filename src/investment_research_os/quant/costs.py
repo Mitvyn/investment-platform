@@ -13,7 +13,9 @@ from typing import Literal
 
 from investment_research_os.quant.bars import (
     QuantContractError,
+    PRICE_QUANTUM,
     decimal_text,
+    quant_decimal_context,
     to_decimal,
 )
 
@@ -21,7 +23,6 @@ Side = Literal["buy", "sell"]
 
 BASIS_POINT = Decimal("0.0001")
 CASH_QUANTUM = Decimal("0.01")
-PRICE_QUANTUM = Decimal("0.000001")
 
 
 @dataclass(frozen=True, slots=True)
@@ -33,7 +34,8 @@ class TradeCharges:
 
     @property
     def total(self) -> Decimal:
-        return self.commission + self.transaction_cost
+        with quant_decimal_context():
+            return self.commission + self.transaction_cost
 
     def to_record(self) -> dict[str, str]:
         return {
@@ -77,13 +79,22 @@ class CostModel:
 
         if side not in ("buy", "sell"):
             raise QuantContractError(f"unknown side: {side!r}")
-        drift = self.slippage_bps * BASIS_POINT
-        multiplier = Decimal(1) + drift if side == "buy" else Decimal(1) - drift
-        if multiplier <= 0:
-            raise QuantContractError(
-                f"slippage_bps {self.slippage_bps} would drive the sell price to zero"
+        with quant_decimal_context():
+            drift = self.slippage_bps * BASIS_POINT
+            multiplier = Decimal(1) + drift if side == "buy" else Decimal(1) - drift
+            if multiplier <= 0:
+                raise QuantContractError(
+                    f"slippage_bps {self.slippage_bps} would drive the sell price to zero"
+                )
+            fill_price = (reference * multiplier).quantize(
+                PRICE_QUANTUM, rounding=ROUND_HALF_UP
             )
-        return (reference * multiplier).quantize(PRICE_QUANTUM, rounding=ROUND_HALF_UP)
+            if fill_price < PRICE_QUANTUM:
+                raise QuantContractError(
+                    f"slippage-adjusted fill {fill_price} is below price quantum "
+                    f"{PRICE_QUANTUM}"
+                )
+            return fill_price
 
     def charges(self, *, quantity: int, fill_price: Decimal) -> TradeCharges:
         """Cash charged for a fill of ``quantity`` shares at ``fill_price``."""
@@ -92,15 +103,20 @@ class CostModel:
             raise QuantContractError("quantity must be an integer number of shares")
         if quantity <= 0:
             raise QuantContractError(f"quantity must be positive, got {quantity}")
-        notional = fill_price * quantity
-        commission = max(
-            self.commission_per_share * quantity + self.commission_bps * BASIS_POINT * notional,
-            self.commission_minimum,
-        ).quantize(CASH_QUANTUM, rounding=ROUND_HALF_UP)
-        transaction_cost = (
-            self.transaction_cost_bps * BASIS_POINT * notional
-        ).quantize(CASH_QUANTUM, rounding=ROUND_HALF_UP)
-        return TradeCharges(commission=commission, transaction_cost=transaction_cost)
+        with quant_decimal_context():
+            notional = fill_price * quantity
+            commission = max(
+                self.commission_per_share * quantity
+                + self.commission_bps * BASIS_POINT * notional,
+                self.commission_minimum,
+            ).quantize(CASH_QUANTUM, rounding=ROUND_HALF_UP)
+            transaction_cost = (
+                self.transaction_cost_bps * BASIS_POINT * notional
+            ).quantize(CASH_QUANTUM, rounding=ROUND_HALF_UP)
+            return TradeCharges(
+                commission=commission,
+                transaction_cost=transaction_cost,
+            )
 
     def to_record(self) -> dict[str, str]:
         return {

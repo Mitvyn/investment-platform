@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import unittest
-from datetime import date
-from decimal import Decimal
+from datetime import date, datetime
+from decimal import Decimal, localcontext
 
 from investment_research_os.quant import BarSeries, OhlcvBar, QuantContractError
 
@@ -33,12 +33,24 @@ def series(*bars: OhlcvBar, source: str = "fixture") -> BarSeries:
         security_id=SECURITY_ID,
         currency="USD",
         interval="1d",
+        price_basis="unadjusted",
         source=source,
         bars=bars,
     )
 
 
 class OhlcvBarTests(unittest.TestCase):
+    def test_rejects_datetime_for_daily_session(self) -> None:
+        with self.assertRaisesRegex(QuantContractError, "session must be a date"):
+            OhlcvBar(
+                session=datetime(2026, 1, 5, 16, 0),  # type: ignore[arg-type]
+                open="100",
+                high="101",
+                low="99",
+                close="100",
+                volume=1,
+            )
+
     def test_accepts_decimal_strings_and_integers(self) -> None:
         subject = OhlcvBar(
             session=date(2026, 1, 5),
@@ -71,6 +83,17 @@ class OhlcvBarTests(unittest.TestCase):
                 high=Decimal("101"),
                 low=Decimal("99"),
                 close=Decimal("100"),
+                volume=1,
+            )
+
+    def test_rejects_price_below_engine_price_quantum(self) -> None:
+        with self.assertRaisesRegex(QuantContractError, "price quantum"):
+            OhlcvBar(
+                session=date(2026, 1, 5),
+                open="0.0000004",
+                high="0.0000004",
+                low="0.0000004",
+                close="0.0000004",
                 volume=1,
             )
 
@@ -130,10 +153,28 @@ class BarSeriesTests(unittest.TestCase):
                 security_id="AAPL",
                 currency="USD",
                 interval="1d",
+                price_basis="unadjusted",
                 source="fixture",
                 bars=(bar("2026-01-05"), bar("2026-01-06")),
             )
         self.assertIn("canonical security UUID", str(caught.exception))
+
+    def test_rejects_noncanonical_spellings_of_same_security_uuid(self) -> None:
+        for security_id in (
+            SECURITY_ID.upper(),
+            SECURITY_ID.replace("-", ""),
+            f"{{{SECURITY_ID}}}",
+        ):
+            with self.subTest(security_id=security_id):
+                with self.assertRaises(QuantContractError):
+                    BarSeries(
+                        security_id=security_id,
+                        currency="USD",
+                        interval="1d",
+                        price_basis="unadjusted",
+                        source="fixture",
+                        bars=(bar("2026-01-05"), bar("2026-01-06")),
+                    )
 
     def test_rejects_unknown_currency_and_interval(self) -> None:
         with self.assertRaises(QuantContractError):
@@ -141,6 +182,18 @@ class BarSeriesTests(unittest.TestCase):
                 security_id=SECURITY_ID,
                 currency="usd",
                 interval="1d",
+                price_basis="unadjusted",
+                source="fixture",
+                bars=(bar("2026-01-05"), bar("2026-01-06")),
+            )
+
+    def test_rejects_adjusted_prices_to_prevent_split_double_counting(self) -> None:
+        with self.assertRaisesRegex(QuantContractError, "unadjusted"):
+            BarSeries(
+                security_id=SECURITY_ID,
+                currency="USD",
+                interval="1d",
+                price_basis="split_adjusted",  # type: ignore[arg-type]
                 source="fixture",
                 bars=(bar("2026-01-05"), bar("2026-01-06")),
             )
@@ -149,6 +202,7 @@ class BarSeriesTests(unittest.TestCase):
                 security_id=SECURITY_ID,
                 currency="USD",
                 interval="5m",  # type: ignore[arg-type]
+                price_basis="unadjusted",
                 source="fixture",
                 bars=(bar("2026-01-05"), bar("2026-01-06")),
             )
@@ -157,6 +211,7 @@ class BarSeriesTests(unittest.TestCase):
         subject = BarSeries.from_rows(
             security_id=SECURITY_ID,
             currency="USD",
+            price_basis="unadjusted",
             source="csv-import",
             rows=[
                 {
@@ -185,6 +240,7 @@ class BarSeriesTests(unittest.TestCase):
             BarSeries.from_rows(
                 security_id=SECURITY_ID,
                 currency="USD",
+                price_basis="unadjusted",
                 source="csv-import",
                 rows=[{"session": "2026-01-05", "open": "100"}],
             )
@@ -192,6 +248,32 @@ class BarSeriesTests(unittest.TestCase):
 
 
 class ContentHashTests(unittest.TestCase):
+    def test_hash_does_not_depend_on_ambient_decimal_precision(self) -> None:
+        subject = series(
+            bar(
+                "2026-01-05",
+                open_="1.23456789",
+                high="1.3",
+                low="1.2",
+                close="1.25",
+            ),
+            bar(
+                "2026-01-06",
+                open_="1.23456789",
+                high="1.3",
+                low="1.2",
+                close="1.25",
+            ),
+        )
+        with localcontext() as context:
+            context.prec = 6
+            low_precision_hash = subject.content_sha256
+        with localcontext() as context:
+            context.prec = 28
+            normal_precision_hash = subject.content_sha256
+
+        self.assertEqual(low_precision_hash, normal_precision_hash)
+
     def test_hash_is_stable_across_equal_decimal_scales(self) -> None:
         left = series(
             bar("2026-01-05", close="100.50"),
@@ -205,9 +287,7 @@ class ContentHashTests(unittest.TestCase):
 
     def test_hash_changes_when_any_price_changes(self) -> None:
         left = series(bar("2026-01-05"), bar("2026-01-06", close="101"))
-        right = series(
-            bar("2026-01-05"), bar("2026-01-06", high="102", close="101.01")
-        )
+        right = series(bar("2026-01-05"), bar("2026-01-06", high="102", close="101.01"))
         self.assertNotEqual(left.content_sha256, right.content_sha256)
 
     def test_hash_is_repeatable(self) -> None:

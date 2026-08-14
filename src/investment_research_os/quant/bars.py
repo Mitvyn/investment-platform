@@ -16,17 +16,41 @@ import hashlib
 import json
 from dataclasses import dataclass
 from datetime import date
-from decimal import Decimal, InvalidOperation
+from decimal import Context, Decimal, InvalidOperation, ROUND_HALF_UP, localcontext
 from typing import Iterable, Literal
 from uuid import UUID
 
 BarInterval = Literal["1d"]
+PriceBasis = Literal["unadjusted"]
 
 SUPPORTED_INTERVALS: frozenset[str] = frozenset({"1d"})
+PRICE_QUANTUM = Decimal("0.000001")
+_QUANT_DECIMAL_CONTEXT = Context(prec=50, rounding=ROUND_HALF_UP)
 
 
 class QuantContractError(ValueError):
     """Raised when input data cannot form a valid immutable Quant contract."""
+
+
+def quant_decimal_context():
+    """Return isolated arithmetic context owned by Quant contracts."""
+
+    return localcontext(_QUANT_DECIMAL_CONTEXT)
+
+
+def canonical_security_id(value: object) -> str:
+    """Return canonical UUID text or reject alternate spellings."""
+
+    try:
+        parsed = UUID(value)  # type: ignore[arg-type]
+    except (AttributeError, TypeError, ValueError) as error:
+        raise QuantContractError(
+            "security_id must be the canonical security UUID"
+        ) from error
+    canonical = str(parsed)
+    if value != canonical:
+        raise QuantContractError("security_id must be the canonical security UUID")
+    return canonical
 
 
 def canonical_sha256(payload: object) -> str:
@@ -66,7 +90,9 @@ def to_decimal(value: object, *, field: str) -> Decimal:
             "binary floats make fills irreproducible"
         )
     else:
-        raise QuantContractError(f"{field} must be a decimal, got {type(value).__name__}")
+        raise QuantContractError(
+            f"{field} must be a decimal, got {type(value).__name__}"
+        )
 
     if not candidate.is_finite():
         raise QuantContractError(f"{field} must be finite, got {candidate}")
@@ -81,13 +107,25 @@ def decimal_text(value: Decimal) -> str:
     the exponent keeps the hash a function of the value alone.
     """
 
-    normalised = value.normalize()
-    if normalised == 0:
+    if value == 0:
         return "0"
-    sign, digits, exponent = normalised.as_tuple()
-    if isinstance(exponent, int) and exponent > 0:
-        normalised = normalised.quantize(Decimal(1))
-    return format(normalised, "f")
+    sign, raw_digits, raw_exponent = value.as_tuple()
+    if not isinstance(raw_exponent, int):
+        raise QuantContractError("decimal value must be finite")
+    digits = list(raw_digits)
+    exponent = raw_exponent
+    while digits[-1] == 0:
+        digits.pop()
+        exponent += 1
+    coefficient = "".join(str(digit) for digit in digits)
+    decimal_position = len(coefficient) + exponent
+    if decimal_position <= 0:
+        body = f"0.{('0' * -decimal_position)}{coefficient}"
+    elif decimal_position >= len(coefficient):
+        body = f"{coefficient}{'0' * (decimal_position - len(coefficient))}"
+    else:
+        body = f"{coefficient[:decimal_position]}.{coefficient[decimal_position:]}"
+    return f"-{body}" if sign else body
 
 
 @dataclass(frozen=True, slots=True)
@@ -102,13 +140,15 @@ class OhlcvBar:
     volume: int
 
     def __post_init__(self) -> None:
-        if not isinstance(self.session, date):
+        if type(self.session) is not date:
             raise QuantContractError("session must be a date")
         for field in ("open", "high", "low", "close"):
             value = to_decimal(getattr(self, field), field=field)
             object.__setattr__(self, field, value)
-            if value <= 0:
-                raise QuantContractError(f"{field} must be positive, got {value}")
+            if value < PRICE_QUANTUM:
+                raise QuantContractError(
+                    f"{field} must be at least price quantum {PRICE_QUANTUM}, got {value}"
+                )
         if isinstance(self.volume, bool) or not isinstance(self.volume, int):
             raise QuantContractError("volume must be an integer")
         if self.volume < 0:
@@ -145,20 +185,24 @@ class BarSeries:
     security_id: str
     currency: str
     interval: BarInterval
+    price_basis: PriceBasis
     source: str
     bars: tuple[OhlcvBar, ...]
 
     def __post_init__(self) -> None:
-        try:
-            UUID(self.security_id)
-        except (AttributeError, TypeError, ValueError) as error:
-            raise QuantContractError(
-                "security_id must be the canonical security UUID"
-            ) from error
-        if not isinstance(self.currency, str) or len(self.currency) != 3 or not self.currency.isupper():
+        canonical_security_id(self.security_id)
+        if (
+            not isinstance(self.currency, str)
+            or len(self.currency) != 3
+            or not self.currency.isupper()
+        ):
             raise QuantContractError("currency must be an upper-case ISO 4217 code")
         if self.interval not in SUPPORTED_INTERVALS:
             raise QuantContractError(f"unsupported interval: {self.interval!r}")
+        if self.price_basis != "unadjusted":
+            raise QuantContractError(
+                "price_basis must be unadjusted before corporate actions are applied"
+            )
         if not isinstance(self.source, str) or not self.source.strip():
             raise QuantContractError("source must name where the bars came from")
 
@@ -182,6 +226,7 @@ class BarSeries:
         *,
         security_id: str,
         currency: str,
+        price_basis: PriceBasis,
         source: str,
         rows: Iterable[dict[str, object]],
         interval: BarInterval = "1d",
@@ -192,9 +237,7 @@ class BarSeries:
         for index, row in enumerate(rows):
             missing = {"session", "open", "high", "low", "close", "volume"} - set(row)
             if missing:
-                raise QuantContractError(
-                    f"row {index} is missing {sorted(missing)}"
-                )
+                raise QuantContractError(f"row {index} is missing {sorted(missing)}")
             session = row["session"]
             if isinstance(session, str):
                 session = date.fromisoformat(session)
@@ -212,6 +255,7 @@ class BarSeries:
             security_id=security_id,
             currency=currency,
             interval=interval,
+            price_basis=price_basis,
             source=source,
             bars=tuple(bars),
         )
@@ -221,6 +265,7 @@ class BarSeries:
             "bars": [bar.to_record() for bar in self.bars],
             "currency": self.currency,
             "interval": self.interval,
+            "price_basis": self.price_basis,
             "security_id": self.security_id,
             "source": self.source,
         }
