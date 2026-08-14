@@ -24,11 +24,13 @@ from investment_research_os.quant.corporate_actions import (
     CorporateActionSet,
     StockSplit,
 )
+from investment_research_os.quant.liquidity import ParticipationLimit
 from investment_research_os.quant.engine import (
     BacktestConfig,
     BacktestResult,
     BarWindow,
     EquityPoint,
+    FillAttempt,
     LookAheadError,
     SplitApplication,
     StrategyDecision,
@@ -46,8 +48,10 @@ __all__ = [
     "CostModel",
     "CorporateActionSet",
     "EquityPoint",
+    "FillAttempt",
     "LookAheadError",
     "OhlcvBar",
+    "ParticipationLimit",
     "PriceBasis",
     "QuantContractError",
     "Strategy",

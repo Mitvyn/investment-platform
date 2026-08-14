@@ -12,6 +12,7 @@ from investment_research_os.quant import (
     CostModel,
     LookAheadError,
     OhlcvBar,
+    ParticipationLimit,
     QuantContractError,
     StockSplit,
     run_backtest,
@@ -41,13 +42,26 @@ NO_ACTIONS = CorporateActionSet(
     actions=(),
 )
 STRATEGY_CONFIG_SHA256 = "a" * 64
+FULL_SESSION_LIQUIDITY = ParticipationLimit(
+    max_participation_bps=Decimal("10000"),
+    volume_basis="execution_bar",
+    zero_volume_policy="block",
+    unfilled_policy="cancel",
+    min_fill_shares=0,
+)
 
 
-def flat_series(closes: list[str], *, opens: list[str] | None = None) -> BarSeries:
+def flat_series(
+    closes: list[str],
+    *,
+    opens: list[str] | None = None,
+    volumes: list[int] | None = None,
+) -> BarSeries:
     opens = opens or closes
+    volumes = volumes or [1_000] * len(closes)
     start = date(2026, 1, 5)
     bars = []
-    for index, (open_, close) in enumerate(zip(opens, closes)):
+    for index, (open_, close, volume) in enumerate(zip(opens, closes, volumes)):
         high = max(Decimal(open_), Decimal(close))
         low = min(Decimal(open_), Decimal(close))
         bars.append(
@@ -57,7 +71,7 @@ def flat_series(closes: list[str], *, opens: list[str] | None = None) -> BarSeri
                 high=high,
                 low=low,
                 close=close,
-                volume=1_000,
+                volume=volume,
             )
         )
     return BarSeries(
@@ -88,6 +102,11 @@ class HalfLong:
 class LongThenFlat:
     def target_exposure(self, window: BarWindow) -> Decimal:
         return Decimal(1) if len(window.bars) == 1 else Decimal(0)
+
+
+class LongThenHalf:
+    def target_exposure(self, window: BarWindow) -> Decimal:
+        return Decimal(1) if len(window.bars) == 1 else Decimal("0.5")
 
 
 class RecordingStrategy:
@@ -139,13 +158,18 @@ def run(
     costs: CostModel = FREE,
     cash: str = "10000",
     corporate_actions: CorporateActionSet = NO_ACTIONS,
+    liquidity: ParticipationLimit = FULL_SESSION_LIQUIDITY,
 ):
     return run_backtest(
         series=series,
         strategy=strategy,  # type: ignore[arg-type]
         costs=costs,
         corporate_actions=corporate_actions,
-        config=BacktestConfig(starting_cash=Decimal(cash)),
+        liquidity=liquidity,
+        config=BacktestConfig(
+            starting_cash=Decimal(cash),
+            fractional_share_policy="error",
+        ),
         strategy_id="test-strategy",
         strategy_config_sha256=STRATEGY_CONFIG_SHA256,
     )
@@ -182,11 +206,18 @@ class LookAheadTests(unittest.TestCase):
             corporate_actions=(first_split,),
         )
 
-        self.assertEqual(window.closes(), (Decimal("100"), Decimal("50")))
+        with self.assertRaises(TypeError):
+            window.closes()
         self.assertEqual(
-            window.split_adjusted_closes(),
+            window.closes(basis="split_adjusted"),
             (Decimal("50"), Decimal("50")),
         )
+        self.assertEqual(
+            window.unadjusted_closes(),
+            (Decimal("100"), Decimal("50")),
+        )
+        self.assertEqual(window.mean_close(2, basis="split_adjusted"), Decimal("50"))
+        self.assertEqual(window.mean_close(2, basis="unadjusted"), Decimal("75"))
         self.assertNotIn(future_split, window.corporate_actions)
 
     def test_window_only_reaches_the_decision_session(self) -> None:
@@ -213,8 +244,8 @@ class LookAheadTests(unittest.TestCase):
             bars=series.bars[:2],
         )
         self.assertEqual(window.at(date(2026, 1, 5)).close, Decimal("100"))
-        self.assertEqual(window.mean_close(2), Decimal("100.5"))
-        self.assertIsNone(window.mean_close(5))
+        self.assertEqual(window.mean_close(2, basis="unadjusted"), Decimal("100.5"))
+        self.assertIsNone(window.mean_close(5, basis="split_adjusted"))
 
     def test_fills_use_the_next_open_not_the_decision_close(self) -> None:
         # Decision on 05 close (100); 06 opens at 200. A look-ahead engine would
@@ -304,6 +335,205 @@ class CostTests(unittest.TestCase):
 
 
 class ExecutionTests(unittest.TestCase):
+    def test_cash_limited_buy_records_shortfall(self) -> None:
+        result = run(flat_series(["100", "100"]), AlwaysLong(), costs=RETAIL)
+
+        attempt = result.fill_attempts[0]
+        self.assertEqual(attempt.requested_quantity, 100)
+        self.assertEqual(attempt.participation_cap, 1_000)
+        self.assertEqual(attempt.affordable_quantity, 99)
+        self.assertEqual(attempt.filled_quantity, 99)
+        self.assertEqual(attempt.unfilled_quantity, 1)
+        self.assertEqual(attempt.limit_reason, "cash_capped")
+
+    def test_participation_cap_limits_buy_and_records_cancelled_residual(self) -> None:
+        limit = ParticipationLimit(
+            max_participation_bps=Decimal("100"),
+            volume_basis="execution_bar",
+            zero_volume_policy="block",
+            unfilled_policy="cancel",
+            min_fill_shares=0,
+        )
+        result = run(
+            flat_series(["100", "100"], volumes=[1_000, 1_000]),
+            AlwaysLong(),
+            liquidity=limit,
+        )
+
+        attempt = result.fill_attempts[0]
+        self.assertEqual(attempt.participation_cap, 10)
+        self.assertEqual(attempt.requested_quantity, 100)
+        self.assertEqual(attempt.filled_quantity, 10)
+        self.assertEqual(attempt.unfilled_quantity, 90)
+        self.assertEqual(attempt.limit_reason, "participation_capped")
+        self.assertEqual(result.trades[0].quantity, 10)
+
+    def test_zero_volume_policy_records_blocked_attempt_or_fails_closed(self) -> None:
+        blocked = ParticipationLimit(
+            max_participation_bps=Decimal("10000"),
+            volume_basis="execution_bar",
+            zero_volume_policy="block",
+            unfilled_policy="cancel",
+            min_fill_shares=0,
+        )
+        result = run(
+            flat_series(["100", "100"], volumes=[1_000, 0]),
+            AlwaysLong(),
+            liquidity=blocked,
+        )
+        attempt = result.fill_attempts[0]
+        self.assertEqual(attempt.filled_quantity, 0)
+        self.assertEqual(attempt.limit_reason, "zero_volume_blocked")
+        self.assertEqual(result.trades, ())
+
+        rejected = ParticipationLimit(
+            max_participation_bps=Decimal("10000"),
+            volume_basis="execution_bar",
+            zero_volume_policy="error",
+            unfilled_policy="cancel",
+            min_fill_shares=0,
+        )
+        with self.assertRaisesRegex(QuantContractError, "zero-volume"):
+            run(
+                flat_series(["100", "100"], volumes=[1_000, 0]),
+                AlwaysLong(),
+                liquidity=rejected,
+            )
+
+    def test_zero_volume_block_does_not_price_an_order_that_cannot_fill(self) -> None:
+        adverse_slippage = CostModel(
+            commission_per_share="0",
+            commission_bps="0",
+            commission_minimum="0",
+            transaction_cost_bps="0",
+            slippage_bps="9999",
+        )
+        result = run(
+            flat_series(
+                ["0.000001", "0.000001", "0.000001"],
+                volumes=[1_000, 1_000, 0],
+            ),
+            LongThenFlat(),
+            costs=adverse_slippage,
+            cash="0.01",
+        )
+
+        self.assertEqual(result.fill_attempts[1].limit_reason, "zero_volume_blocked")
+        self.assertEqual(result.fill_attempts[1].filled_quantity, 0)
+
+    def test_nonzero_volume_that_rounds_to_zero_is_participation_capped(self) -> None:
+        limit = ParticipationLimit(
+            max_participation_bps=Decimal("1"),
+            volume_basis="execution_bar",
+            zero_volume_policy="block",
+            unfilled_policy="cancel",
+            min_fill_shares=0,
+        )
+        result = run(
+            flat_series(["100", "100"], volumes=[1_000, 100]),
+            AlwaysLong(),
+            liquidity=limit,
+        )
+
+        attempt = result.fill_attempts[0]
+        self.assertEqual(attempt.participation_cap, 0)
+        self.assertEqual(attempt.limit_reason, "participation_capped")
+        self.assertEqual(attempt.filled_quantity, 0)
+
+    def test_participation_cap_applies_to_sell_and_keeps_residual_position(
+        self,
+    ) -> None:
+        limit = ParticipationLimit(
+            max_participation_bps=Decimal("1000"),
+            volume_basis="execution_bar",
+            zero_volume_policy="block",
+            unfilled_policy="cancel",
+            min_fill_shares=0,
+        )
+        result = run(
+            flat_series(["100", "100", "100"], volumes=[1_000, 1_000, 10]),
+            LongThenFlat(),
+            liquidity=limit,
+        )
+
+        attempt = result.fill_attempts[1]
+        self.assertEqual(attempt.side, "sell")
+        self.assertEqual(attempt.filled_quantity, 1)
+        self.assertEqual(attempt.limit_reason, "participation_capped")
+        self.assertEqual(result.equity_curve[-1].shares, 99)
+
+    def test_minimum_fill_prevents_uneconomic_partial_fill(self) -> None:
+        limit = ParticipationLimit(
+            max_participation_bps=Decimal("100"),
+            volume_basis="execution_bar",
+            zero_volume_policy="block",
+            unfilled_policy="cancel",
+            min_fill_shares=10,
+        )
+        result = run(
+            flat_series(["100", "100"], volumes=[1_000, 500]),
+            AlwaysLong(),
+            liquidity=limit,
+        )
+
+        attempt = result.fill_attempts[0]
+        self.assertEqual(attempt.participation_cap, 5)
+        self.assertEqual(attempt.filled_quantity, 0)
+        self.assertEqual(attempt.unfilled_quantity, 100)
+        self.assertEqual(attempt.limit_reason, "participation_capped")
+
+    def test_split_applies_before_capping_post_split_rebalance(self) -> None:
+        limit = ParticipationLimit(
+            max_participation_bps=Decimal("1000"),
+            volume_basis="execution_bar",
+            zero_volume_policy="block",
+            unfilled_policy="cancel",
+            min_fill_shares=0,
+        )
+        actions = CorporateActionSet(
+            security_id=SECURITY_ID,
+            source="fixture-actions",
+            actions=(StockSplit(date(2026, 1, 7), 2, 1),),
+        )
+        result = run(
+            flat_series(
+                ["100", "100", "50"],
+                opens=["100", "100", "50"],
+                volumes=[1_000, 1_000, 100],
+            ),
+            LongThenHalf(),
+            corporate_actions=actions,
+            liquidity=limit,
+        )
+
+        attempt = result.fill_attempts[1]
+        self.assertEqual(attempt.requested_quantity, 100)
+        self.assertEqual(attempt.participation_cap, 10)
+        self.assertEqual(attempt.filled_quantity, 10)
+        self.assertEqual(result.equity_curve[-1].shares, 190)
+
+    def test_residual_is_cancelled_and_next_decision_is_rederived(self) -> None:
+        limit = ParticipationLimit(
+            max_participation_bps=Decimal("100"),
+            volume_basis="execution_bar",
+            zero_volume_policy="block",
+            unfilled_policy="cancel",
+            min_fill_shares=0,
+        )
+        result = run(
+            flat_series(
+                ["100", "100", "100"],
+                volumes=[1_000, 1_000, 10_000],
+            ),
+            LongThenHalf(),
+            liquidity=limit,
+        )
+
+        self.assertEqual(result.fill_attempts[0].requested_quantity, 100)
+        self.assertEqual(result.fill_attempts[0].filled_quantity, 10)
+        self.assertEqual(result.fill_attempts[1].requested_quantity, 40)
+        self.assertEqual(result.fill_attempts[1].filled_quantity, 40)
+
     def test_corporate_actions_must_match_security_and_transition_session(self) -> None:
         series = flat_series(["100", "100"])
         foreign = CorporateActionSet(
@@ -371,6 +601,13 @@ class ExecutionTests(unittest.TestCase):
         )
         self.assertEqual(exact.corporate_action_applications[0].shares_after, 33)
         self.assertEqual(exact.final_equity, Decimal("9900.00"))
+
+    def test_fractional_share_policy_is_explicit_and_fail_closed(self) -> None:
+        with self.assertRaisesRegex(QuantContractError, "fractional_share_policy"):
+            BacktestConfig(
+                starting_cash=Decimal("1000"),
+                fractional_share_policy="round_down_forfeit",  # type: ignore[arg-type]
+            )
 
     def test_full_exposure_target_does_not_sell_because_of_buy_slippage(self) -> None:
         high_slippage = CostModel(
@@ -466,6 +703,50 @@ class ReproducibilityTests(unittest.TestCase):
         )
         self.assertNotEqual(with_action.content_sha256, without_action.content_sha256)
 
+    def test_liquidity_and_provenance_are_pinned(self) -> None:
+        constrained = ParticipationLimit(
+            max_participation_bps=Decimal("100"),
+            volume_basis="execution_bar",
+            zero_volume_policy="block",
+            unfilled_policy="cancel",
+            min_fill_shares=0,
+        )
+        series = flat_series(
+            ["100", "100", "100"],
+            volumes=[1_000, 1_000, 1_000],
+        )
+        constrained_result = run(series, LongThenFlat(), liquidity=constrained)
+        unlimited_result = run(series, LongThenFlat())
+
+        self.assertEqual(
+            constrained_result.to_record()["liquidity_sha256"],
+            constrained.content_sha256,
+        )
+        self.assertNotEqual(
+            constrained_result.content_sha256,
+            unlimited_result.content_sha256,
+        )
+        self.assertEqual(
+            [decision.decision_index for decision in constrained_result.decisions],
+            [0, 1],
+        )
+        self.assertEqual(
+            [attempt.decision_index for attempt in constrained_result.fill_attempts],
+            [0, 1],
+        )
+        self.assertEqual(
+            [trade.decision_index for trade in constrained_result.trades],
+            [0, 1],
+        )
+        self.assertEqual(
+            constrained_result.total_unfilled_shares,
+            sum(
+                attempt.unfilled_quantity
+                for attempt in constrained_result.fill_attempts
+            ),
+        )
+        self.assertEqual(constrained_result.constrained_decision_count, 1)
+
     def test_target_trace_distinguishes_strategies_without_fills(self) -> None:
         series = flat_series(["100", "100"])
         flat = run(series, AlwaysFlat(), cash="50")
@@ -511,11 +792,15 @@ class ReproducibilityTests(unittest.TestCase):
         self.assertEqual(record["security_id"], SECURITY_ID)
         self.assertEqual(record["strategy_id"], "test-strategy")
         self.assertEqual(record["strategy_config_sha256"], STRATEGY_CONFIG_SHA256)
-        self.assertEqual(record["config"]["engine_version"], "quant-backtest-2")
+        self.assertEqual(record["config"]["engine_version"], "quant-backtest-3")
+        self.assertEqual(record["config"]["fractional_share_policy"], "error")
 
     def test_starting_cash_must_be_positive(self) -> None:
         with self.assertRaises(QuantContractError):
-            BacktestConfig(starting_cash=Decimal("0"))
+            BacktestConfig(
+                starting_cash=Decimal("0"),
+                fractional_share_policy="error",
+            )
 
     def test_strategy_id_is_required(self) -> None:
         with self.assertRaises(QuantContractError):
@@ -524,7 +809,11 @@ class ReproducibilityTests(unittest.TestCase):
                 strategy=AlwaysLong(),
                 costs=FREE,
                 corporate_actions=NO_ACTIONS,
-                config=BacktestConfig(starting_cash=Decimal("1000")),
+                liquidity=FULL_SESSION_LIQUIDITY,
+                config=BacktestConfig(
+                    starting_cash=Decimal("1000"),
+                    fractional_share_policy="error",
+                ),
                 strategy_id="  ",
                 strategy_config_sha256=STRATEGY_CONFIG_SHA256,
             )
@@ -538,7 +827,11 @@ class ReproducibilityTests(unittest.TestCase):
                 strategy=AlwaysLong(),
                 costs=FREE,
                 corporate_actions=NO_ACTIONS,
-                config=BacktestConfig(starting_cash=Decimal("1000")),
+                liquidity=FULL_SESSION_LIQUIDITY,
+                config=BacktestConfig(
+                    starting_cash=Decimal("1000"),
+                    fractional_share_policy="error",
+                ),
                 strategy_id="always-long.v1",
                 strategy_config_sha256="A" * 64,
             )
