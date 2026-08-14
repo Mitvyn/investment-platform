@@ -30,6 +30,11 @@ import { MoomooClientIdPicker } from "@/components/moomoo-client-id-picker";
 import { MoomooAutoReconnect } from "@/components/moomoo-auto-reconnect";
 import { MoomooHoldingsTable } from "@/components/moomoo-holdings-table";
 import { HoldingsTable } from "@/components/holdings-table";
+import { CommitteeMemoPanel } from "@/components/committee-memo-panel";
+import { GraderCommitteePanel } from "@/components/grader-committee-panel";
+import { GraderExecutionPanel } from "@/components/grader-execution-panel";
+import { OperatorDecisionPanel } from "@/components/operator-decision-panel";
+import { ReadinessThesisPanel } from "@/components/readiness-thesis-panel";
 import { StatusStrip } from "@/components/status-strip";
 import { EvidenceGapRow } from "@/components/evidence-gap-row";
 import { ResearchRunHistoryPanel } from "@/components/research-run-history-panel";
@@ -91,6 +96,7 @@ import {
 import { loadResearchRunCommandProgress } from "../lib/research-run-command-progress";
 import { presentResearchRunCommandProgress } from "../lib/research-run-command-progress-workspace";
 import { loadResearchRunCommand } from "../lib/research-run-commands";
+import { loadResearchRunFlow } from "../lib/research-run-flow";
 import { loadResearchRunHistory } from "../lib/research-run-history";
 import { presentResearchRunHistory } from "../lib/research-run-history-workspace";
 import { loadSecurityDirectory } from "../lib/securities";
@@ -401,6 +407,15 @@ export default async function TickerWorkspace({
   const activeStageState =
     researchStages.find((stage) => stage.id === activeStage) ?? researchStages[0];
   const reachedStage = furthestAvailableStage(researchStages);
+  const inlineArtifactStage =
+    activeSection === "research" &&
+    (activeStage === "opinions" ||
+      activeStage === "committee" ||
+      activeStage === "thesis");
+  const researchFlow =
+    inlineArtifactStage && latestFinalizedRun
+      ? await loadResearchRunFlow(operatorId, latestFinalizedRun.runId)
+      : null;
   const isWatched = watchlist.some(
     (item) => item.securityId === selectedSecurity?.securityId,
   );
@@ -654,11 +669,46 @@ export default async function TickerWorkspace({
           ) : null}
           {activeSection === "research" &&
           activeStageState.available &&
-          activeStageState.runHref ? (
+          activeStageState.runHref &&
+          researchFlow === null ? (
             <ResearchStageRunLink
               label={activeStageState.label}
               runHref={activeStageState.runHref}
             />
+          ) : null}
+          {activeSection === "research" &&
+          activeStage === "opinions" &&
+          activeStageState.available &&
+          researchFlow ? (
+            <div className="mt-5 grid gap-8">
+              <GraderExecutionPanel
+                presentation={researchFlow.stages.graders}
+              />
+            </div>
+          ) : null}
+          {activeSection === "research" &&
+          activeStage === "committee" &&
+          activeStageState.available &&
+          researchFlow ? (
+            <div className="mt-5 grid gap-8">
+              <GraderCommitteePanel
+                presentation={researchFlow.stages.committee}
+              />
+              <CommitteeMemoPanel presentation={researchFlow.stages.memo} />
+            </div>
+          ) : null}
+          {activeSection === "research" &&
+          activeStage === "thesis" &&
+          activeStageState.available &&
+          researchFlow ? (
+            <div className="mt-5 grid gap-8">
+              <ReadinessThesisPanel
+                presentation={researchFlow.stages.readinessThesis}
+              />
+              <OperatorDecisionPanel
+                presentation={researchFlow.stages.operatorDecisions}
+              />
+            </div>
           ) : null}
           {activeSection === "research" && activeStage === "overview" ? (
             <div className="mt-5">

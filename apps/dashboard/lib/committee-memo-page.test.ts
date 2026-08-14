@@ -8,7 +8,13 @@ test("Research Run workspace loads and displays canonical committee memo", () =>
     "utf8",
   );
 
-  assert.match(source, /loadCommitteeMemo/);
-  assert.match(source, /projectResearchRunAuditWorkspace/);
+  assert.match(source, /loadResearchRunFlow/);
   assert.match(source, /<CommitteeMemoPanel presentation={memoPresentation} \/>/);
+
+  const flowSource = readFileSync(
+    new URL("./research-run-flow.ts", import.meta.url),
+    "utf8",
+  );
+  assert.match(flowSource, /loadCommitteeMemo/);
+  assert.match(flowSource, /projectResearchRunAuditWorkspace/);
 });

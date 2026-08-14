@@ -8,10 +8,16 @@ test("Research Run workspace loads and displays owner-scoped operator decisions"
     "utf8",
   );
 
-  assert.match(source, /loadOperatorDecisions/);
-  assert.match(source, /projectResearchRunAuditWorkspace/);
+  assert.match(source, /loadResearchRunFlow/);
   assert.match(
     source,
     /<OperatorDecisionPanel presentation={operatorDecisionPresentation} \/>/,
   );
+
+  const flowSource = readFileSync(
+    new URL("./research-run-flow.ts", import.meta.url),
+    "utf8",
+  );
+  assert.match(flowSource, /loadOperatorDecisions/);
+  assert.match(flowSource, /projectResearchRunAuditWorkspace/);
 });

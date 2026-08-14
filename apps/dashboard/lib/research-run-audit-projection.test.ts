@@ -377,7 +377,12 @@ test("the authenticated workspace consumes the generic research-only projection"
     "utf8",
   );
 
-  assert.match(pageSource, /projectResearchRunAuditWorkspace\(/);
+  assert.match(pageSource, /loadResearchRunFlow/);
+  const flowSource = readFileSync(
+    new URL("./research-run-flow.ts", import.meta.url),
+    "utf8",
+  );
+  assert.match(flowSource, /projectResearchRunAuditWorkspace\(/);
   assert.doesNotMatch(`${projectionSource}\n${pageSource}`, /RXRX/);
   assert.doesNotMatch(
     JSON.stringify(

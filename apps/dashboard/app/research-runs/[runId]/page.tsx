@@ -30,18 +30,10 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
-import { loadEvidenceBundle } from "../../../lib/evidence-bundles";
-import { loadExistingThesisChain } from "../../../lib/existing-thesis-chains";
-import { loadCommitteeMemo } from "../../../lib/committee-memos";
-import { loadGraderCommittee } from "../../../lib/grader-committees";
-import { loadGraderExecutions } from "../../../lib/grader-executions";
 import { presentModelCostWorkspace } from "../../../lib/model-cost-workspace";
 import { loadModelCosts } from "../../../lib/model-costs";
-import { loadOperatorDecisions } from "../../../lib/operator-decisions";
-import { projectResearchRunAuditWorkspace } from "../../../lib/research-run-audit-projection";
+import { loadResearchRunFlow } from "../../../lib/research-run-flow";
 import { loadResearchRun } from "../../../lib/research-runs";
-import { loadReadinessThesis } from "../../../lib/readiness-theses";
-import { loadValuationSnapshot } from "../../../lib/valuation-snapshots";
 import {
   presentResearchRunState,
   resolveResearchRunWorkspace,
@@ -108,74 +100,8 @@ export default async function ResearchRunWorkspace({
   const run = resolution.run;
   const modelCosts = await loadModelCosts(run.operator_id, run.id);
   const modelCostPresentation = presentModelCostWorkspace(modelCosts);
-  const bundle = await loadEvidenceBundle(run.operator_id, run.id);
-  const valuationSnapshot = await loadValuationSnapshot(run.operator_id, run.id);
-  const graderExecutions =
-    bundle === null
-      ? []
-      : await loadGraderExecutions(run.operator_id, run.id, {
-          evidenceBundleId: bundle.id,
-          evidenceBundleHash: bundle.bundle_hash,
-          evidenceIds: bundle.manifest.map((item) => item.item_id),
-          calculationIds: valuationSnapshot?.calculation_ids ?? [],
-        });
-  const graderCommittee =
-    bundle === null
-      ? null
-      : await loadGraderCommittee(run.operator_id, run.id, {
-          evidenceBundleId: bundle.id,
-          evidenceBundleHash: bundle.bundle_hash,
-          evidenceIds: bundle.manifest.map((item) => item.item_id),
-          calculationIds: valuationSnapshot?.calculation_ids ?? [],
-        });
-  const committeeMemo =
-    bundle === null || graderCommittee === null
-      ? null
-      : await loadCommitteeMemo(run.operator_id, run.id, graderCommittee, {
-          evidenceIds: bundle.manifest.map((item) => item.item_id),
-          calculationIds: valuationSnapshot?.calculation_ids ?? [],
-        });
-  const readinessThesis =
-    bundle === null || graderCommittee === null || committeeMemo === null
-      ? {
-          readiness: null,
-          creation: null,
-          thesis: null,
-          chain: await loadExistingThesisChain(
-            run.operator_id,
-            run.security_id,
-            run.thesis_contract_id,
-          ),
-        }
-      : await loadReadinessThesis(run.operator_id, {
-          run,
-          bundle,
-          committee: graderCommittee,
-          memo: committeeMemo,
-          allowedReferenceIds: [
-            ...bundle.manifest.map((item) => item.item_id),
-            ...(valuationSnapshot?.calculation_ids ?? []),
-            ...committeeMemo.statements.map((statement) => statement.statement_id),
-            ...committeeMemo.disagreement_records.map(
-              (disagreement) => disagreement.disagreement_id,
-            ),
-          ],
-        });
-  const operatorDecisions = await loadOperatorDecisions(
-    run.operator_id,
-    run.security_id,
-    run.thesis_contract_id,
-  );
-  const projection = projectResearchRunAuditWorkspace(run.operator_id, {
-    run,
-    bundle,
-    valuationSnapshot,
-    graderExecutions,
-    committee: graderCommittee,
-    memo: committeeMemo,
-    readinessThesis,
-    operatorDecisions,
-  });
+  const projection = await loadResearchRunFlow(run.operator_id, run.id);
+  if (projection === null) notFound();
   const {
     evidence: bundlePresentation,
     valuation: valuationPresentation,
