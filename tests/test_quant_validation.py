@@ -62,6 +62,16 @@ CLOSED_LIQUIDITY = ParticipationLimit(
     min_fill_shares=0,
 )
 
+# One basis point of a 1,000,000-share session is a 100-share cap, well under
+# the ~200 shares buy-and-hold needs. It trades, but never reaches exposure.
+TIGHT_LIQUIDITY = ParticipationLimit(
+    max_participation_bps=Decimal("1"),
+    volume_basis="execution_bar",
+    zero_volume_policy="block",
+    unfilled_policy="cancel",
+    min_fill_shares=0,
+)
+
 CONFIG = BacktestConfig(
     starting_cash=Decimal("100000"),
     fractional_share_policy="error",
@@ -409,6 +419,37 @@ class LiquidityTests(unittest.TestCase):
         report = validate(liquidity=CLOSED_LIQUIDITY)
         self.assertEqual(report.outcome, "insufficient_data")
         self.assertIn("benchmark_unfillable", report.reason_codes)
+
+    def test_a_partially_filled_benchmark_does_not_count_as_reachable(self) -> None:
+        # The benchmark buys some shares under a 1 bp cap but never reaches
+        # full exposure, so it sits mostly in cash. A flat strategy would
+        # "beat" that capacity artefact rather than the security.
+        report = validate(liquidity=TIGHT_LIQUIDITY)
+        self.assertNotEqual(report.outcome, "validated")
+        self.assertEqual(report.outcome, "insufficient_data")
+        self.assertIn("benchmark_unfillable", report.reason_codes)
+        traded = [
+            result
+            for result in report.window_results
+            if result.benchmark_entry_shortfall > 0
+        ]
+        self.assertTrue(traded, "the benchmark must have traded and still fallen short")
+        self.assertTrue(all(not result.benchmark_reachable for result in traded))
+
+    def test_a_fully_filled_benchmark_is_reachable_despite_cash_trimming(self) -> None:
+        # Whole-share rounding and commission leave an unfilled remainder under
+        # retail costs. That is a capital constraint, not a capacity one, and
+        # must not be mistaken for an unreachable benchmark.
+        report = validate()
+        self.assertTrue(
+            all(result.benchmark_reachable for result in report.window_results)
+        )
+        self.assertTrue(
+            all(
+                result.benchmark_entry_shortfall == 0
+                for result in report.window_results
+            )
+        )
 
     def test_changing_the_limit_changes_the_hash(self) -> None:
         tight = ParticipationLimit(

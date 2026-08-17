@@ -41,6 +41,7 @@ from investment_research_os.quant.costs import CostModel
 from investment_research_os.quant.engine import (
     ENGINE_VERSION,
     BacktestConfig,
+    BacktestResult,
     BarWindow,
     Strategy,
     run_backtest,
@@ -64,6 +65,13 @@ ValidationOutcome = Literal[
     "insufficient_data",
     "inconclusive",
 ]
+
+#: Fill constraints that mean the market could not absorb the order. A
+#: ``cash_capped`` attempt is a capital constraint, not a capacity one, and
+#: says nothing about whether the benchmark was reachable.
+LIQUIDITY_LIMIT_REASONS = frozenset(
+    {"participation_capped", "zero_volume_blocked", "below_min_fill"}
+)
 
 BENCHMARK_STRATEGY_ID = "buy-and-hold"
 _BENCHMARK_CONFIG_RECORD = {"strategy": "buy_and_hold", "target_exposure": "1"}
@@ -349,7 +357,9 @@ class WindowScenarioResult:
     strategy_backtest_sha256: str
     benchmark_backtest_sha256: str
     trade_count: int
-    benchmark_filled: bool
+    benchmark_entry_shortfall: int
+    benchmark_end_shares: int
+    benchmark_reachable: bool
     strategy_return: Decimal
     benchmark_return: Decimal
     excess_return: Decimal
@@ -357,7 +367,9 @@ class WindowScenarioResult:
     def to_record(self) -> dict[str, object]:
         return {
             "benchmark_backtest_sha256": self.benchmark_backtest_sha256,
-            "benchmark_filled": self.benchmark_filled,
+            "benchmark_end_shares": self.benchmark_end_shares,
+            "benchmark_entry_shortfall": self.benchmark_entry_shortfall,
+            "benchmark_reachable": self.benchmark_reachable,
             "benchmark_return": decimal_text(self.benchmark_return),
             "excess_return": decimal_text(self.excess_return),
             "scenario_label": self.scenario_label,
@@ -502,6 +514,22 @@ def _filter_actions(
     )
 
 
+def _benchmark_entry_shortfall(result: BacktestResult) -> int:
+    """Buy-side shares the market refused the benchmark over one test window.
+
+    Only capacity constraints count. A benchmark trimmed by cash still reached
+    the position its capital allowed, whereas one trimmed by the participation
+    cap, a halted session, or a minimum-fill floor holds exposure it wanted and
+    could not get.
+    """
+
+    return sum(
+        attempt.unfilled_quantity
+        for attempt in result.fill_attempts
+        if attempt.side == "buy" and attempt.limit_reason in LIQUIDITY_LIMIT_REASONS
+    )
+
+
 def validate_walk_forward(
     *,
     series: BarSeries,
@@ -634,6 +662,8 @@ def validate_walk_forward(
             )
             with quant_decimal_context():
                 excess = strategy_result.total_return - benchmark_result.total_return
+            shortfall = _benchmark_entry_shortfall(benchmark_result)
+            benchmark_end_shares = benchmark_result.equity_curve[-1].shares
             results.append(
                 WindowScenarioResult(
                     window_index=window.window_index,
@@ -642,9 +672,15 @@ def validate_walk_forward(
                     strategy_backtest_sha256=strategy_result.content_sha256,
                     benchmark_backtest_sha256=benchmark_result.content_sha256,
                     trade_count=len(strategy_result.trades),
-                    benchmark_filled=any(
-                        trade.quantity > 0 for trade in benchmark_result.trades
-                    ),
+                    benchmark_entry_shortfall=shortfall,
+                    benchmark_end_shares=benchmark_end_shares,
+                    # Reachable means the benchmark actually held the position
+                    # it is meant to represent: it ends the window invested and
+                    # never had entry exposure the market refused. A benchmark
+                    # that bought a token quantity under a tight cap sits mostly
+                    # in cash, and a flat strategy would beat that capacity
+                    # artefact rather than the security.
+                    benchmark_reachable=shortfall == 0 and benchmark_end_shares > 0,
                     strategy_return=strategy_result.total_return,
                     benchmark_return=benchmark_result.total_return,
                     excess_return=excess,
@@ -708,7 +744,7 @@ def validate_walk_forward(
         insufficient.append("too_few_trades_in_window")
     if sum(result.trade_count for result in baseline_results) < schedule.min_total_trades:
         insufficient.append("too_few_total_trades")
-    if not all(result.benchmark_filled for result in baseline_results):
+    if not all(result.benchmark_reachable for result in baseline_results):
         insufficient.append("benchmark_unfillable")
     if baseline.statistics.stdev == 0:
         insufficient.append("zero_variance")
