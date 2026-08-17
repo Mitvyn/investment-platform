@@ -20,6 +20,9 @@ from workers.quant_sources.live import (
     TEST_WINDOW_SEMANTICS_EVIDENCE_SHA256,
     TEST_WINDOW_SEMANTICS_POLICY_ID,
     WINDOW_SEMANTICS_REGISTRY,
+    YFINANCE_END_EXCLUSIVE_EVIDENCE_SHA256,
+    YFINANCE_END_EXCLUSIVE_POLICY_ID,
+    YFINANCE_END_EXCLUSIVE_VERIFIED_ON,
     YFINANCE_WINDOW_BLOCKER,
     LiveQuantSource,
     MoomooHistoryTransport,
@@ -27,6 +30,7 @@ from workers.quant_sources.live import (
     YFinanceHistoryTransport,
     authorize_window_semantics,
     test_window_semantics_policy,
+    yfinance_end_exclusive_policy,
 )
 from workers.quant_sources.transports import (
     BoundedCaller,
@@ -1012,22 +1016,25 @@ class WindowSemanticsAuthorizationTests(unittest.TestCase):
 
     # --- the production path stays blocked by an absent record -----------
 
-    def test_no_verified_policy_is_registered(self) -> None:
-        # The production path is blocked by the absence of a record, not by a
-        # flag anyone could flip. This test fails the moment someone registers
-        # a verified yfinance policy, which is when the claim needs review.
+    def test_exactly_one_verified_policy_is_registered(self) -> None:
+        # Still a tripwire, now with a known-good set rather than an empty one.
+        # It fails the moment a second verified record appears, which is when a
+        # new claim needs the same human review this one got.
         self.assertEqual(
             [
                 policy_id
                 for policy_id, entry in WINDOW_SEMANTICS_REGISTRY.items()
                 if entry.scope != "test"
             ],
-            [],
+            [YFINANCE_END_EXCLUSIVE_POLICY_ID],
         )
 
-    def test_the_only_registered_policy_is_the_test_fixture(self) -> None:
+    def test_the_registry_holds_exactly_the_expected_policies(self) -> None:
         self.assertEqual(
-            list(WINDOW_SEMANTICS_REGISTRY), [TEST_WINDOW_SEMANTICS_POLICY_ID]
+            sorted(WINDOW_SEMANTICS_REGISTRY),
+            sorted(
+                [TEST_WINDOW_SEMANTICS_POLICY_ID, YFINANCE_END_EXCLUSIVE_POLICY_ID]
+            ),
         )
 
     def test_authorization_is_reusable_outside_the_transport(self) -> None:
@@ -1036,6 +1043,165 @@ class WindowSemanticsAuthorizationTests(unittest.TestCase):
         )
         self.assertEqual(registered.scope, "test")
         self.assertIn("Fixture only", registered.note)
+
+
+class VerifiedYFinancePolicyTests(unittest.TestCase):
+    """The verified record authorizes a live path, and only on its own terms."""
+
+    def record(self):
+        return WINDOW_SEMANTICS_REGISTRY[YFINANCE_END_EXCLUSIVE_POLICY_ID]
+
+    def live_transport(self, **overrides: object) -> YFinanceHistoryTransport:
+        """A transport with no injected module, so live_path is True.
+
+        The importer returns the fake module rather than importing yfinance, so
+        the authorization path is exercised without a network call and without
+        the library installed.
+        """
+
+        kwargs: dict[str, object] = {
+            "window_semantics": yfinance_end_exclusive_policy(),
+            "importer": FakeYFinanceModule,
+        }
+        kwargs.update(overrides)
+        return YFinanceHistoryTransport(
+            YFinanceSettings(),
+            **kwargs,  # type: ignore[arg-type]
+        )
+
+    # --- the record itself ------------------------------------------------
+
+    def test_the_pinned_digest_is_the_one_recorded_in_the_response(self) -> None:
+        # The digest is the whole authorization. If it drifts from the value
+        # published in response 2026-08-18-030, the record no longer attests to
+        # anything a reviewer can recompute.
+        self.assertEqual(
+            YFINANCE_END_EXCLUSIVE_EVIDENCE_SHA256,
+            "acd3af838820bcfd3ebf8bda972712c32868577c3494f58151cd6ae0a5ac665c",
+        )
+        self.assertEqual(
+            self.record().evidence_sha256, YFINANCE_END_EXCLUSIVE_EVIDENCE_SHA256
+        )
+
+    def test_the_record_pins_its_metadata(self) -> None:
+        record = self.record()
+        self.assertEqual(record.scope, "verified")
+        self.assertIs(record.end_is_exclusive, True)
+        self.assertEqual(record.verified_on, date(2026, 8, 17))
+        self.assertEqual(record.verified_on, YFINANCE_END_EXCLUSIVE_VERIFIED_ON)
+        self.assertEqual(record.library_version, "1.5.1")
+        self.assertEqual(record.library_version, YFinanceSettings().library_version)
+
+    def test_the_record_cites_its_evidence_and_states_its_limit(self) -> None:
+        record = self.record()
+        self.assertEqual(len(record.evidence_urls), 3)
+        for url in record.evidence_urls:
+            self.assertTrue(url.startswith("https://"), url)
+        self.assertIn("1.5.1", record.evidence_urls[0])
+        # The note must not let a reader mistake documentary verification for a
+        # live provider proof.
+        self.assertIn("no live yfinance call was made", record.note.lower())
+        self.assertIn("2026-08-18-030", record.note)
+
+    # --- what it authorizes ----------------------------------------------
+
+    def test_the_verified_policy_authorizes_a_live_path(self) -> None:
+        result = self.live_transport().fetch_daily_history(
+            "RXRX", start=START, end=CUTOFF
+        )
+        self.assertEqual(len(result.bars), 3)
+
+    def test_it_needs_no_test_opt_in(self) -> None:
+        registered = authorize_window_semantics(
+            yfinance_end_exclusive_policy(),
+            allow_test_scope=False,
+            live_path=True,
+            library_version="1.5.1",
+        )
+        self.assertEqual(registered.scope, "verified")
+
+    def test_the_window_it_authorizes_still_includes_the_cutoff(self) -> None:
+        module = FakeYFinanceModule()
+        self.live_transport(module=module).fetch_daily_history(
+            "RXRX", start=START, end=CUTOFF
+        )
+        # end is exclusive per the verified record, so the request must reach
+        # the day after the cutoff for the cutoff session to be returned.
+        self.assertEqual(module.history_calls[0]["end"], "2026-01-08")
+        self.assertEqual(module.history_calls[0]["start"], "2026-01-05")
+
+    # --- what it does not authorize --------------------------------------
+
+    def test_a_different_library_version_is_refused(self) -> None:
+        with self.assertRaisesRegex(
+            TransportBlockedError, r"verified against library version '1\.5\.1'"
+        ):
+            authorize_window_semantics(
+                yfinance_end_exclusive_policy(),
+                allow_test_scope=False,
+                live_path=True,
+                library_version="1.6.0",
+            )
+
+    def test_the_transport_binds_its_own_pinned_library_version(self) -> None:
+        # Asserting this through authorize_window_semantics alone would pass
+        # even if the transport never forwarded its version, so the check has
+        # to run through the transport.
+        with self.assertRaisesRegex(
+            TransportBlockedError, r"verified against library version '1\.5\.1'"
+        ):
+            YFinanceHistoryTransport(
+                YFinanceSettings(library_version="1.6.0"),
+                window_semantics=yfinance_end_exclusive_policy(),
+                importer=FakeYFinanceModule,
+            ).fetch_daily_history("RXRX", start=START, end=CUTOFF)
+
+    def test_a_restated_verification_date_is_refused(self) -> None:
+        forged = WindowSemanticsPolicy(
+            policy_id=YFINANCE_END_EXCLUSIVE_POLICY_ID,
+            end_is_exclusive=True,
+            evidence_sha256=YFINANCE_END_EXCLUSIVE_EVIDENCE_SHA256,
+            verified_on=date(2026, 8, 18),
+        )
+        with self.assertRaisesRegex(TransportBlockedError, "claims verification on"):
+            self.live_transport(window_semantics=forged).fetch_daily_history(
+                "RXRX", start=START, end=CUTOFF
+            )
+
+    def test_a_flipped_boundary_claim_is_still_refused(self) -> None:
+        forged = WindowSemanticsPolicy(
+            policy_id=YFINANCE_END_EXCLUSIVE_POLICY_ID,
+            end_is_exclusive=False,
+            evidence_sha256=YFINANCE_END_EXCLUSIVE_EVIDENCE_SHA256,
+            verified_on=YFINANCE_END_EXCLUSIVE_VERIFIED_ON,
+        )
+        with self.assertRaisesRegex(TransportBlockedError, "different end boundary"):
+            self.live_transport(window_semantics=forged).fetch_daily_history(
+                "RXRX", start=START, end=CUTOFF
+            )
+
+    def test_a_tampered_digest_is_still_refused(self) -> None:
+        forged = WindowSemanticsPolicy(
+            policy_id=YFINANCE_END_EXCLUSIVE_POLICY_ID,
+            end_is_exclusive=True,
+            evidence_sha256="f" * 64,
+            verified_on=YFINANCE_END_EXCLUSIVE_VERIFIED_ON,
+        )
+        with self.assertRaisesRegex(TransportBlockedError, "pinned evidence digest"):
+            self.live_transport(window_semantics=forged).fetch_daily_history(
+                "RXRX", start=START, end=CUTOFF
+            )
+
+    def test_the_verified_policy_does_not_unblock_moomoo(self) -> None:
+        # Authorization is per finding, not a global unlock. Nothing about the
+        # yfinance window boundary says anything about a Moomoo endpoint.
+        with self.assertRaises(TransportBlockedError):
+            MoomooHistoryTransport().fetch_daily_history(
+                "US.RXRX", start=START, end=CUTOFF
+            )
+        self.assertIn("pagination", MOOMOO_HISTORY_BLOCKER)
+        self.assertIn("adjustment", MOOMOO_HISTORY_BLOCKER)
+        self.assertIn("corporate-action", MOOMOO_HISTORY_BLOCKER)
 
 
 if __name__ == "__main__":

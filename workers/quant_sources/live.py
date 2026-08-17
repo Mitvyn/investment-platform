@@ -65,7 +65,8 @@ YFINANCE_WINDOW_BLOCKER = (
     "semantics against official documentation, register the pinned evidence "
     "record in WINDOW_SEMANTICS_REGISTRY, and pass the resulting "
     "WindowSemanticsPolicy. No free-form reference, plausible policy name, or "
-    "test-scoped fixture can unblock a live fetch."
+    "test-scoped fixture can unblock a live fetch. A verified record exists for "
+    "yfinance 1.5.1; see yfinance_end_exclusive_policy."
 )
 
 MOOMOO_HISTORY_BLOCKER = (
@@ -123,12 +124,26 @@ class WindowSemanticsPolicy:
 
 @dataclass(frozen=True, slots=True)
 class _RegisteredPolicy:
-    """What the registry pins for one policy ID."""
+    """What the registry pins for one policy ID.
+
+    Everything a caller could otherwise assert for itself is pinned here and
+    checked against the policy it presents: the evidence digest, the boundary
+    claim, the date the claim was verified, and the library version the claim
+    was verified against. A policy may restate these; it may not choose them.
+
+    ``library_version`` matters as much as the boundary. The evidence is a
+    docstring in one tagged release. A policy verified against that release
+    says nothing about another, so a transport pinning a different version is
+    refused rather than allowed to inherit the finding.
+    """
 
     evidence_sha256: str
     end_is_exclusive: bool
     scope: str
     note: str
+    verified_on: date
+    library_version: str
+    evidence_urls: tuple[str, ...] = ()
 
 
 #: The fixture policy. Its scope is ``test``, which the transport refuses on any
@@ -142,14 +157,30 @@ TEST_WINDOW_SEMANTICS_EVIDENCE = (
 TEST_WINDOW_SEMANTICS_EVIDENCE_SHA256 = hashlib.sha256(
     TEST_WINDOW_SEMANTICS_EVIDENCE
 ).hexdigest()
+_TEST_LIBRARY_VERSION = "1.5.1"
+
+#: The verified yfinance boundary finding.
+#:
+#: The digest is over the exact quoted docstring recorded in collaboration
+#: response 2026-08-18-030, reproduced there byte for byte so anyone can
+#: recompute it. It is a hash of the recorded quotation, not of the upstream
+#: file: the fetch path returns processed text rather than the served bytes, so
+#: a file digest would pin a rendering and could not be reproduced by a
+#: reviewer. The digest attests to what was read; the URLs say where.
+YFINANCE_END_EXCLUSIVE_POLICY_ID = "yfinance-1-5-1-end-exclusive"
+YFINANCE_END_EXCLUSIVE_EVIDENCE_SHA256 = (
+    "acd3af838820bcfd3ebf8bda972712c32868577c3494f58151cd6ae0a5ac665c"
+)
+YFINANCE_END_EXCLUSIVE_VERIFIED_ON = date(2026, 8, 17)
 
 #: Read-only on purpose. A mutable registry would let any caller register the
 #: policy it wants and satisfy the allowlist it just wrote.
 #:
-#: There is deliberately **no verified yfinance entry**. Adding one requires
-#: reading official documentation, which has not happened, so the production
-#: path is blocked by the absence of a record rather than by a flag someone
-#: could flip.
+#: One verified entry exists: the yfinance end-boundary finding from
+#: collaboration response 2026-08-18-030. It authorizes a live fetch only for a
+#: transport pinning library version 1.5.1, which is the release its evidence
+#: was read from. Every other provider and version remains blocked by the
+#: absence of a record rather than by a flag someone could flip.
 WINDOW_SEMANTICS_REGISTRY: Mapping[str, _RegisteredPolicy] = MappingProxyType(
     {
         TEST_WINDOW_SEMANTICS_POLICY_ID: _RegisteredPolicy(
@@ -160,7 +191,33 @@ WINDOW_SEMANTICS_REGISTRY: Mapping[str, _RegisteredPolicy] = MappingProxyType(
                 "Fixture only. Records the untested assumption that yfinance "
                 "treats end as exclusive. Not evidence of anything."
             ),
-        )
+            verified_on=date(2026, 8, 17),
+            library_version=_TEST_LIBRARY_VERSION,
+        ),
+        YFINANCE_END_EXCLUSIVE_POLICY_ID: _RegisteredPolicy(
+            evidence_sha256=YFINANCE_END_EXCLUSIVE_EVIDENCE_SHA256,
+            end_is_exclusive=True,
+            scope="verified",
+            note=(
+                "yfinance 1.5.1 PriceHistory.history docstring states that end "
+                "is exclusive, with the worked example end=2023-01-01 yielding "
+                "a last data point of 2022-12-31. Verified 2026-08-17 against "
+                "the source at tag 1.5.1, the source at main, and the official "
+                "documentation site. Documentary verification only: no live "
+                "yfinance call was made. See collaboration response "
+                "2026-08-18-030."
+            ),
+            verified_on=date(2026, 8, 17),
+            library_version="1.5.1",
+            evidence_urls=(
+                "https://raw.githubusercontent.com/ranaroussi/yfinance/1.5.1"
+                "/yfinance/scrapers/history.py",
+                "https://raw.githubusercontent.com/ranaroussi/yfinance/main"
+                "/yfinance/scrapers/history.py",
+                "https://ranaroussi.github.io/yfinance/reference"
+                "/yfinance.price_history.html",
+            ),
+        ),
     }
 )
 
@@ -176,15 +233,32 @@ def test_window_semantics_policy() -> WindowSemanticsPolicy:
     )
 
 
+def yfinance_end_exclusive_policy() -> WindowSemanticsPolicy:
+    """The verified yfinance boundary policy, restating the pinned record."""
+
+    return WindowSemanticsPolicy(
+        policy_id=YFINANCE_END_EXCLUSIVE_POLICY_ID,
+        end_is_exclusive=True,
+        evidence_sha256=YFINANCE_END_EXCLUSIVE_EVIDENCE_SHA256,
+        verified_on=YFINANCE_END_EXCLUSIVE_VERIFIED_ON,
+    )
+
+
 def authorize_window_semantics(
-    policy: object, *, allow_test_scope: bool, live_path: bool
+    policy: object,
+    *,
+    allow_test_scope: bool,
+    live_path: bool,
+    library_version: str | None = None,
 ) -> _RegisteredPolicy:
     """Resolve a policy against the registry, or refuse.
 
     Fails closed in every direction: a non-policy object, an unregistered ID, a
     digest that does not match the pinned record, a boundary claim that does not
-    match the pinned record, a test-scoped policy without the explicit test
-    opt-in, and a test-scoped policy on a path that could reach a provider.
+    match the pinned record, a verification date that does not match the pinned
+    record, a library version the record was not verified against, a test-scoped
+    policy without the explicit test opt-in, and a test-scoped policy on a path
+    that could reach a provider.
 
     ``TransportBlockedError`` is used throughout rather than ``TransportError``,
     because none of these are retryable conditions: they are all missing
@@ -208,6 +282,20 @@ def authorize_window_semantics(
         raise TransportBlockedError(
             f"window semantics policy {policy.policy_id!r} claims a different "
             "end boundary than the pinned record. " + YFINANCE_WINDOW_BLOCKER
+        )
+    if policy.verified_on != registered.verified_on:
+        raise TransportBlockedError(
+            f"window semantics policy {policy.policy_id!r} claims verification "
+            f"on {policy.verified_on.isoformat()}, but the pinned record was "
+            f"verified on {registered.verified_on.isoformat()}. "
+            + YFINANCE_WINDOW_BLOCKER
+        )
+    if library_version is not None and library_version != registered.library_version:
+        raise TransportBlockedError(
+            f"window semantics policy {policy.policy_id!r} was verified against "
+            f"library version {registered.library_version!r}, not the pinned "
+            f"{library_version!r}; a finding read from one release proves "
+            "nothing about another. " + YFINANCE_WINDOW_BLOCKER
         )
     if registered.scope == "test":
         if not allow_test_scope:
@@ -424,6 +512,7 @@ class YFinanceHistoryTransport:
             self._window_semantics,
             allow_test_scope=self._allow_test_scope,
             live_path=self._module is None,
+            library_version=self.settings.library_version,
         )
         module = self._module if self._module is not None else self._importer()
         version = getattr(module, "__version__", None)
@@ -666,6 +755,10 @@ class MoomooHistoryTransport:
 __all__ = [
     "MOOMOO_HISTORY_BLOCKER",
     "TEST_WINDOW_SEMANTICS_EVIDENCE_SHA256",
+    "YFINANCE_END_EXCLUSIVE_EVIDENCE_SHA256",
+    "YFINANCE_END_EXCLUSIVE_POLICY_ID",
+    "YFINANCE_END_EXCLUSIVE_VERIFIED_ON",
+    "yfinance_end_exclusive_policy",
     "TEST_WINDOW_SEMANTICS_POLICY_ID",
     "WINDOW_SEMANTICS_REGISTRY",
     "WindowSemanticsPolicy",
