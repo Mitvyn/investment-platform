@@ -274,7 +274,7 @@ class MultipleTestingDisclosure:
     alpha: str
 
     def __post_init__(self) -> None:
-        _check_disclosure(self)
+        _check_disclosure(self, coerce=True)
 
     @property
     def alpha_effective(self) -> Decimal:
@@ -342,6 +342,25 @@ def revalidate_walk_forward_config(config: object) -> WalkForwardConfig:
     return config
 
 
+def revalidate_annualisation_periods(periods: object) -> int:
+    """Check the scaling factor before any window is measured.
+
+    It reaches ``summarise_returns`` only after every backtest has run, so an
+    unchecked zero or negative would spend the whole run to produce a
+    meaningless annualised figure.
+    """
+
+    if isinstance(periods, bool) or not isinstance(periods, int):
+        raise QuantContractError(
+            f"annualisation_periods must be an integer, got {type(periods).__name__}"
+        )
+    if periods < 1:
+        raise QuantContractError(
+            f"annualisation_periods must be positive, got {periods}"
+        )
+    return periods
+
+
 def _check_scenario(scenario: CostScenario) -> None:
     """Every ``CostScenario`` invariant. Costs are checked by their own owner."""
 
@@ -397,13 +416,20 @@ def revalidate_cost_sensitivity(config: object) -> CostSensitivityConfig:
     return config
 
 
-def _check_disclosure(disclosure: MultipleTestingDisclosure) -> None:
+def _check_disclosure(
+    disclosure: MultipleTestingDisclosure, *, coerce: bool
+) -> None:
     """Every ``MultipleTestingDisclosure`` invariant.
 
-    ``alpha`` is required to be stored as text at both construction and
-    runtime. It is written verbatim into the report record, so a ``Decimal``
-    there would not survive canonical JSON, and accepting one would trade a
-    clear error here for an obscure one at hashing time.
+    ``alpha`` accepts anything ``to_decimal`` accepts — text, ``Decimal``, or
+    an integer — and is **stored** as canonical decimal text. It is written
+    verbatim into the report record, so a raw ``Decimal`` would not survive
+    canonical JSON, and canonicalising means ``"0.0500"`` and
+    ``Decimal("0.05")`` produce the same stored value and the same report hash.
+
+    Runtime revalidation requires that canonical stored form and repairs
+    nothing: a value written back after construction is tampering, even when it
+    is a value the constructor itself would have accepted and normalised.
     """
 
     if (
@@ -420,11 +446,16 @@ def _check_disclosure(disclosure: MultipleTestingDisclosure) -> None:
         raise QuantContractError(
             "adjustment none is only honest for a single declared trial"
         )
-    if not isinstance(disclosure.alpha, str):
-        raise QuantContractError("alpha must be decimal text")
     alpha = to_decimal(disclosure.alpha, field="alpha")
     if alpha <= 0 or alpha >= 1:
         raise QuantContractError("alpha must lie between 0 and 1")
+    canonical = decimal_text(alpha)
+    if coerce:
+        object.__setattr__(disclosure, "alpha", canonical)
+    elif not isinstance(disclosure.alpha, str) or disclosure.alpha != canonical:
+        raise QuantContractError(
+            f"alpha must be stored as canonical decimal text {canonical!r}"
+        )
 
 
 def revalidate_multiple_testing_disclosure(
@@ -441,7 +472,7 @@ def revalidate_multiple_testing_disclosure(
         raise QuantContractError(
             f"expected a MultipleTestingDisclosure, got {type(disclosure).__name__}"
         )
-    _check_disclosure(disclosure)
+    _check_disclosure(disclosure, coerce=False)
     return disclosure
 
 
@@ -699,6 +730,7 @@ def validate_walk_forward(
     revalidate_walk_forward_config(schedule)
     revalidate_multiple_testing_disclosure(disclosure)
     revalidate_cost_sensitivity(cost_sensitivity)
+    revalidate_annualisation_periods(annualisation_periods)
 
     series, corporate_actions = _enforced_inputs(dataset)
     # Every scenario's costs too: a mutated scenario would otherwise reach the

@@ -945,6 +945,88 @@ class PolicyRevalidationTests(unittest.TestCase):
         self.assertTrue(schedule(window_mode="anchored").window_mode == "anchored")
 
 
+ANNUALISATION_MUTATIONS = (
+    ("zero", 0),
+    ("negative", -4),
+    ("boolean", True),
+    ("string", "252"),
+    ("float", 252.0),
+    ("none", None),
+)
+
+
+class AlphaCompatibilityTests(unittest.TestCase):
+    def test_previously_accepted_alpha_inputs_still_construct(self) -> None:
+        # to_decimal accepted str, Decimal, and int before AC-028. All three
+        # must keep constructing, and all three must land on the same stored
+        # canonical text so the report hash does not depend on call style.
+        for value in ("0.05", Decimal("0.05"), Decimal("0.0500")):
+            with self.subTest(alpha=repr(value)):
+                subject = disclosure(alpha=value)
+                self.assertEqual(subject.alpha, "0.05")
+                self.assertEqual(subject.alpha_effective, Decimal("0.025"))
+                self.assertEqual(subject.to_record()["alpha"], "0.05")
+
+    def test_a_decimal_alpha_hashes_identically_to_its_text_form(self) -> None:
+        from_text = validate(testing=disclosure(alpha="0.05"))
+        from_decimal = validate(testing=disclosure(alpha=Decimal("0.05")))
+        self.assertEqual(from_text.content_sha256, from_decimal.content_sha256)
+
+    def test_a_float_alpha_is_still_rejected(self) -> None:
+        with self.assertRaises(QuantContractError):
+            disclosure(alpha=0.05)
+
+    def test_an_out_of_range_alpha_is_still_rejected(self) -> None:
+        for value in ("0", "1", Decimal("-0.05"), 1):
+            with self.subTest(alpha=repr(value)):
+                with self.assertRaises(QuantContractError):
+                    disclosure(alpha=value)
+
+    def test_a_noncanonical_stored_alpha_is_refused_before_any_fitting(self) -> None:
+        # Construction canonicalises; runtime must not. Each of these is a
+        # value the constructor would have normalised, written back after the
+        # fact, and revalidation has to reject rather than re-normalise it.
+        for value in (Decimal("0.05"), "0.050", " 0.05", "5E-2", 0.05, None):
+            with self.subTest(alpha=repr(value)):
+                mutated = disclosure(alpha="0.05")
+                object.__setattr__(mutated, "alpha", value)
+                factory = FlatFactory()
+                with self.assertRaises(QuantContractError):
+                    validate(factory=factory, testing=mutated)
+                self.assertEqual(factory.calls, 0)
+
+
+class AnnualisationPeriodsTests(unittest.TestCase):
+    def _validate(self, *, factory, periods):
+        return validate_walk_forward(
+            dataset=make_dataset(make_series(declining_prices(120))),
+            liquidity=OPEN_LIQUIDITY,
+            config=CONFIG,
+            schedule=schedule(),
+            factory=factory,
+            strategy_id="fixture-strategy",
+            cost_sensitivity=sensitivity(
+                ("free", _fresh(FREE)), ("retail", _fresh(RETAIL))
+            ),
+            disclosure=disclosure(),
+            annualisation_periods=periods,
+        )
+
+    def test_an_invalid_period_count_is_refused_before_any_fitting(self) -> None:
+        for label, value in ANNUALISATION_MUTATIONS:
+            with self.subTest(periods=label):
+                factory = FlatFactory()
+                with self.assertRaises(QuantContractError):
+                    self._validate(factory=factory, periods=value)
+                self.assertEqual(factory.calls, 0)
+
+    def test_a_positive_period_count_still_runs(self) -> None:
+        factory = FlatFactory()
+        report = self._validate(factory=factory, periods=252)
+        self.assertGreater(factory.calls, 0)
+        self.assertTrue(report.windows)
+
+
 class LiquidityTests(unittest.TestCase):
     def test_the_liquidity_limit_is_pinned_in_the_record(self) -> None:
         report = validate()
