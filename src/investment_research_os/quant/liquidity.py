@@ -37,27 +37,7 @@ class ParticipationLimit:
     min_fill_shares: int
 
     def __post_init__(self) -> None:
-        rate = to_decimal(
-            self.max_participation_bps,
-            field="max_participation_bps",
-        )
-        if rate < 0 or rate > _BASIS_POINTS:
-            raise QuantContractError(
-                "max_participation_bps must be between 0 and 10000"
-            )
-        object.__setattr__(self, "max_participation_bps", rate)
-        if self.volume_basis != "execution_bar":
-            raise QuantContractError("volume_basis must be execution_bar")
-        if self.zero_volume_policy not in ("block", "error"):
-            raise QuantContractError("zero_volume_policy must be block or error")
-        if self.unfilled_policy != "cancel":
-            raise QuantContractError("unfilled_policy must be cancel")
-        if (
-            isinstance(self.min_fill_shares, bool)
-            or not isinstance(self.min_fill_shares, int)
-            or self.min_fill_shares < 0
-        ):
-            raise QuantContractError("min_fill_shares must be a non-negative integer")
+        _check_participation_limit(self, coerce=True)
 
     def cap_for_volume(self, volume: int) -> int:
         """Conservative whole-share cap for one execution bar's volume."""
@@ -80,3 +60,59 @@ class ParticipationLimit:
     @property
     def content_sha256(self) -> str:
         return canonical_sha256(self.to_record())
+
+
+def _check_participation_limit(
+    limit: "ParticipationLimit", *, coerce: bool
+) -> None:
+    """Every ``ParticipationLimit`` invariant, shared by both callers.
+
+    A mutated cap is the one that matters most here: above 10000 bps the engine
+    would fill more shares than the session traded, which is capacity the market
+    never offered.
+    """
+
+    raw = limit.max_participation_bps
+    if coerce:
+        rate = to_decimal(raw, field="max_participation_bps")
+    else:
+        if type(raw) is not Decimal:
+            raise QuantContractError(
+                "max_participation_bps must be a stored Decimal, got "
+                f"{type(raw).__name__}"
+            )
+        if not raw.is_finite():
+            raise QuantContractError(
+                f"max_participation_bps must be finite, got {raw}"
+            )
+        rate = raw
+    if rate < 0 or rate > _BASIS_POINTS:
+        raise QuantContractError("max_participation_bps must be between 0 and 10000")
+    if coerce:
+        object.__setattr__(limit, "max_participation_bps", rate)
+    if limit.volume_basis != "execution_bar":
+        raise QuantContractError("volume_basis must be execution_bar")
+    if limit.zero_volume_policy not in ("block", "error"):
+        raise QuantContractError("zero_volume_policy must be block or error")
+    if limit.unfilled_policy != "cancel":
+        raise QuantContractError("unfilled_policy must be cancel")
+    if (
+        isinstance(limit.min_fill_shares, bool)
+        or not isinstance(limit.min_fill_shares, int)
+        or limit.min_fill_shares < 0
+    ):
+        raise QuantContractError("min_fill_shares must be a non-negative integer")
+
+
+def revalidate_participation_limit(limit: object) -> "ParticipationLimit":
+    """Re-check a participation limit at an execution boundary, unchanged.
+
+    Raises ``QuantContractError`` and nothing else. No coercion, no repair.
+    """
+
+    if not isinstance(limit, ParticipationLimit):
+        raise QuantContractError(
+            f"expected a ParticipationLimit, got {type(limit).__name__}"
+        )
+    _check_participation_limit(limit, coerce=False)
+    return limit

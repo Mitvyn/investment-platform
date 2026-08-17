@@ -37,8 +37,11 @@ from investment_research_os.quant.bars import (
     to_decimal,
 )
 from investment_research_os.quant.corporate_actions import CorporateActionSet
+from investment_research_os.quant.dataset import PointInTimeDataset
 from investment_research_os.quant.costs import CostModel
 from investment_research_os.quant.engine import (
+    _enforced_inputs,
+    revalidate_execution_inputs,
     ENGINE_VERSION,
     BacktestConfig,
     BacktestResult,
@@ -55,7 +58,7 @@ from investment_research_os.quant.statistics import (
     summarise_returns,
 )
 
-VALIDATION_VERSION = "quant-validation-1"
+VALIDATION_VERSION = "quant-validation-2"
 
 WindowMode = Literal["rolling", "anchored"]
 Adjustment = Literal["bonferroni", "none"]
@@ -107,24 +110,7 @@ class WalkForwardConfig:
     min_total_trades: int
 
     def __post_init__(self) -> None:
-        def integer(field: str, minimum: int) -> int:
-            value = getattr(self, field)
-            if isinstance(value, bool) or not isinstance(value, int):
-                raise QuantContractError(f"{field} must be an integer")
-            if value < minimum:
-                raise QuantContractError(f"{field} must be at least {minimum}")
-            return value
-
-        # A BarSeries needs two bars, so a one-session window cannot exist.
-        integer("train_sessions", 2)
-        integer("test_sessions", 2)
-        integer("step_sessions", 1)
-        integer("embargo_sessions", 0)
-        integer("min_windows", 1)
-        integer("min_trades_per_window", 0)
-        integer("min_total_trades", 0)
-        if self.window_mode not in ("rolling", "anchored"):
-            raise QuantContractError("window_mode must be rolling or anchored")
+        _check_schedule(self)
 
     @property
     def test_windows_overlap(self) -> bool:
@@ -189,6 +175,10 @@ def build_walk_forward_windows(
     averaging it in unweighted is a quiet error.
     """
 
+    # Guarded here, not only in validate_walk_forward: this is exported from
+    # quant.__init__, and a mutated zero step makes the loop below compute the
+    # same window forever rather than return a wrong one.
+    revalidate_walk_forward_config(config)
     if isinstance(session_count, bool) or not isinstance(session_count, int):
         raise QuantContractError("session_count must be an integer")
     placeholder = sessions is None
@@ -236,8 +226,7 @@ class CostScenario:
     costs: CostModel
 
     def __post_init__(self) -> None:
-        if not isinstance(self.label, str) or not self.label.strip():
-            raise QuantContractError("cost scenario label must be non-empty")
+        _check_scenario(self)
 
     def to_record(self) -> dict[str, object]:
         return {"costs": self.costs.to_record(), "label": self.label}
@@ -255,17 +244,7 @@ class CostSensitivityConfig:
     baseline_label: str
 
     def __post_init__(self) -> None:
-        scenarios = tuple(self.scenarios)
-        object.__setattr__(self, "scenarios", scenarios)
-        if len(scenarios) < 2:
-            raise QuantContractError(
-                "cost sensitivity needs at least two scenarios to show sensitivity"
-            )
-        labels = [scenario.label for scenario in scenarios]
-        if len(set(labels)) != len(labels):
-            raise QuantContractError("cost scenario labels must be unique")
-        if self.baseline_label not in labels:
-            raise QuantContractError("baseline_label must name a declared scenario")
+        _check_sensitivity(self, coerce=True)
 
     @property
     def baseline(self) -> CostScenario:
@@ -299,23 +278,7 @@ class MultipleTestingDisclosure:
     alpha: str
 
     def __post_init__(self) -> None:
-        if (
-            isinstance(self.trials_declared, bool)
-            or not isinstance(self.trials_declared, int)
-            or self.trials_declared < 1
-        ):
-            raise QuantContractError("trials_declared must be a positive integer")
-        if not isinstance(self.family_label, str) or not self.family_label.strip():
-            raise QuantContractError("family_label must be non-empty")
-        if self.adjustment not in ("bonferroni", "none"):
-            raise QuantContractError("adjustment must be bonferroni or none")
-        if self.adjustment == "none" and self.trials_declared > 1:
-            raise QuantContractError(
-                "adjustment none is only honest for a single declared trial"
-            )
-        alpha = to_decimal(self.alpha, field="alpha")
-        if alpha <= 0 or alpha >= 1:
-            raise QuantContractError("alpha must lie between 0 and 1")
+        _check_disclosure(self, coerce=True)
 
     @property
     def alpha_effective(self) -> Decimal:
@@ -333,6 +296,188 @@ class MultipleTestingDisclosure:
             "family_label": self.family_label,
             "trials_declared": self.trials_declared,
         }
+
+
+# ------------------------------------------------------- policy revalidation
+#
+# Unlike the market-data and execution-input contracts, only
+# ``CostSensitivityConfig`` coerces anything at construction (a sequence of
+# scenarios into a tuple), so only its helper takes a ``coerce`` flag. The rest
+# validate without normalising, and one shared function per contract keeps the
+# construction-time and runtime rules from drifting apart.
+
+
+def _check_schedule(config: WalkForwardConfig) -> None:
+    """Every ``WalkForwardConfig`` invariant."""
+
+    def integer(field: str, minimum: int) -> int:
+        value = getattr(config, field)
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise QuantContractError(f"{field} must be an integer")
+        if value < minimum:
+            raise QuantContractError(f"{field} must be at least {minimum}")
+        return value
+
+    # A BarSeries needs two bars, so a one-session window cannot exist.
+    integer("train_sessions", 2)
+    integer("test_sessions", 2)
+    integer("step_sessions", 1)
+    integer("embargo_sessions", 0)
+    integer("min_windows", 1)
+    integer("min_trades_per_window", 0)
+    integer("min_total_trades", 0)
+    if config.window_mode not in ("rolling", "anchored"):
+        raise QuantContractError("window_mode must be rolling or anchored")
+
+
+def revalidate_walk_forward_config(config: object) -> WalkForwardConfig:
+    """Re-check a schedule before it decides window geometry.
+
+    A mutated ``step_sessions`` of 0 is the reason this cannot be left to the
+    generator: the window loop advances by that value, so a zero would spin
+    forever rather than raise.
+    """
+
+    if not isinstance(config, WalkForwardConfig):
+        raise QuantContractError(
+            f"expected a WalkForwardConfig, got {type(config).__name__}"
+        )
+    _check_schedule(config)
+    return config
+
+
+def revalidate_annualisation_periods(periods: object) -> int:
+    """Check the scaling factor before any window is measured.
+
+    It reaches ``summarise_returns`` only after every backtest has run, so an
+    unchecked zero or negative would spend the whole run to produce a
+    meaningless annualised figure.
+    """
+
+    if isinstance(periods, bool) or not isinstance(periods, int):
+        raise QuantContractError(
+            f"annualisation_periods must be an integer, got {type(periods).__name__}"
+        )
+    if periods < 1:
+        raise QuantContractError(
+            f"annualisation_periods must be positive, got {periods}"
+        )
+    return periods
+
+
+def _check_scenario(scenario: CostScenario) -> None:
+    """Every ``CostScenario`` invariant. Costs are checked by their own owner."""
+
+    if not isinstance(scenario.label, str) or not scenario.label.strip():
+        raise QuantContractError("cost scenario label must be non-empty")
+
+
+def _check_sensitivity(config: CostSensitivityConfig, *, coerce: bool) -> None:
+    """Every ``CostSensitivityConfig`` invariant, including scenario labels."""
+
+    if coerce:
+        scenarios = tuple(config.scenarios)
+        object.__setattr__(config, "scenarios", scenarios)
+    else:
+        if type(config.scenarios) is not tuple:
+            raise QuantContractError(
+                "cost scenarios must be a stored tuple, got "
+                f"{type(config.scenarios).__name__}"
+            )
+        scenarios = config.scenarios
+        for scenario in scenarios:
+            if not isinstance(scenario, CostScenario):
+                raise QuantContractError(
+                    f"cost scenarios must hold CostScenario, got "
+                    f"{type(scenario).__name__}"
+                )
+            _check_scenario(scenario)
+    if len(scenarios) < 2:
+        raise QuantContractError(
+            "cost sensitivity needs at least two scenarios to show sensitivity"
+        )
+    labels = [scenario.label for scenario in scenarios]
+    if len(set(labels)) != len(labels):
+        raise QuantContractError("cost scenario labels must be unique")
+    if not isinstance(config.baseline_label, str):
+        raise QuantContractError("baseline_label must be a string")
+    if config.baseline_label not in labels:
+        raise QuantContractError("baseline_label must name a declared scenario")
+
+
+def revalidate_cost_sensitivity(config: object) -> CostSensitivityConfig:
+    """Re-check the scenario set and the label the verdict is read from.
+
+    An unknown ``baseline_label`` used to surface as a raw ``KeyError`` after
+    every window had already run.
+    """
+
+    if not isinstance(config, CostSensitivityConfig):
+        raise QuantContractError(
+            f"expected a CostSensitivityConfig, got {type(config).__name__}"
+        )
+    _check_sensitivity(config, coerce=False)
+    return config
+
+
+def _check_disclosure(
+    disclosure: MultipleTestingDisclosure, *, coerce: bool
+) -> None:
+    """Every ``MultipleTestingDisclosure`` invariant.
+
+    ``alpha`` accepts anything ``to_decimal`` accepts — text, ``Decimal``, or
+    an integer — and is **stored** as canonical decimal text. It is written
+    verbatim into the report record, so a raw ``Decimal`` would not survive
+    canonical JSON, and canonicalising means ``"0.0500"`` and
+    ``Decimal("0.05")`` produce the same stored value and the same report hash.
+
+    Runtime revalidation requires that canonical stored form and repairs
+    nothing: a value written back after construction is tampering, even when it
+    is a value the constructor itself would have accepted and normalised.
+    """
+
+    if (
+        isinstance(disclosure.trials_declared, bool)
+        or not isinstance(disclosure.trials_declared, int)
+        or disclosure.trials_declared < 1
+    ):
+        raise QuantContractError("trials_declared must be a positive integer")
+    if not isinstance(disclosure.family_label, str) or not disclosure.family_label.strip():
+        raise QuantContractError("family_label must be non-empty")
+    if disclosure.adjustment not in ("bonferroni", "none"):
+        raise QuantContractError("adjustment must be bonferroni or none")
+    if disclosure.adjustment == "none" and disclosure.trials_declared > 1:
+        raise QuantContractError(
+            "adjustment none is only honest for a single declared trial"
+        )
+    alpha = to_decimal(disclosure.alpha, field="alpha")
+    if alpha <= 0 or alpha >= 1:
+        raise QuantContractError("alpha must lie between 0 and 1")
+    canonical = decimal_text(alpha)
+    if coerce:
+        object.__setattr__(disclosure, "alpha", canonical)
+    elif not isinstance(disclosure.alpha, str) or disclosure.alpha != canonical:
+        raise QuantContractError(
+            f"alpha must be stored as canonical decimal text {canonical!r}"
+        )
+
+
+def revalidate_multiple_testing_disclosure(
+    disclosure: object,
+) -> MultipleTestingDisclosure:
+    """Re-check the disclosure before it sets the significance threshold.
+
+    A mutated ``adjustment`` of ``"none"`` alongside several declared trials
+    would restore the unadjusted alpha, letting a run clear a threshold the
+    correction says it never met.
+    """
+
+    if not isinstance(disclosure, MultipleTestingDisclosure):
+        raise QuantContractError(
+            f"expected a MultipleTestingDisclosure, got {type(disclosure).__name__}"
+        )
+    _check_disclosure(disclosure, coerce=False)
+    return disclosure
 
 
 class StrategyFactory(Protocol):
@@ -406,6 +551,7 @@ class ScenarioSummary:
 @dataclass(frozen=True, slots=True)
 class ValidationReport:
     security_id: str
+    dataset_sha256: str
     series_sha256: str
     corporate_actions_sha256: str
     liquidity: ParticipationLimit
@@ -449,6 +595,7 @@ class ValidationReport:
             "config": self.config.to_record(),
             "corporate_actions_sha256": self.corporate_actions_sha256,
             "cost_sensitivity": self.cost_sensitivity.to_record(),
+            "dataset_sha256": self.dataset_sha256,
             "degrees_of_freedom": self.degrees_of_freedom,
             "degrees_of_freedom_bucket": self.degrees_of_freedom_bucket,
             "disclosure": self.disclosure.to_record(),
@@ -494,6 +641,31 @@ def _slice_series(series: BarSeries, start: int, end: int) -> BarSeries:
     )
 
 
+def _slice_dataset(
+    dataset: PointInTimeDataset, start: int, end: int
+) -> PointInTimeDataset:
+    """A window's inputs, derived only from the parent receipt.
+
+    The parent cutoff and every source declaration carry over unchanged: a
+    window is a view of one dataset, not a dataset of its own, and inventing a
+    tighter cutoff per window would assert an availability claim nobody made.
+    Only the parent's own bars and actions can appear, so no external market
+    data can enter at a window boundary.
+    """
+
+    sliced = _slice_series(dataset.series, start, end)
+    covered = frozenset(bar.session for bar in sliced.bars[1:])
+    return PointInTimeDataset(
+        series=sliced,
+        corporate_actions=_filter_actions(dataset.corporate_actions, covered),
+        as_of_cutoff=dataset.as_of_cutoff,
+        source_id=dataset.source_id,
+        source_revision=dataset.source_revision,
+        source_content_sha256=dataset.source_content_sha256,
+        coverage_scope=dataset.coverage_scope,
+    )
+
+
 def _filter_actions(
     actions: CorporateActionSet, sessions: frozenset[date]
 ) -> CorporateActionSet:
@@ -532,8 +704,7 @@ def _benchmark_entry_shortfall(result: BacktestResult) -> int:
 
 def validate_walk_forward(
     *,
-    series: BarSeries,
-    corporate_actions: CorporateActionSet,
+    dataset: PointInTimeDataset,
     liquidity: ParticipationLimit,
     config: BacktestConfig,
     schedule: WalkForwardConfig,
@@ -552,9 +723,25 @@ def validate_walk_forward(
             "factory must expose build(train_window); a pre-built strategy "
             "would carry fitted state across windows"
         )
-    if corporate_actions.security_id != series.security_id:
-        raise QuantContractError(
-            "corporate actions must match the bar-series security_id"
+    # Fail closed here, before a single window is fitted. Train windows never
+    # run through the engine, so a leaked future bar or a forged provenance
+    # field would otherwise reach a factory without ever meeting the engine's
+    # own recheck.
+    # Policy first: the schedule decides window geometry and the disclosure
+    # decides the significance threshold, so both must be sound before anything
+    # is measured. The scenario shape is checked here too, so an unknown
+    # baseline label cannot surface as a KeyError after every window has run.
+    revalidate_walk_forward_config(schedule)
+    revalidate_multiple_testing_disclosure(disclosure)
+    revalidate_cost_sensitivity(cost_sensitivity)
+    revalidate_annualisation_periods(annualisation_periods)
+
+    series, corporate_actions = _enforced_inputs(dataset)
+    # Every scenario's costs too: a mutated scenario would otherwise reach the
+    # engine only on the window that used it, after fitting had already run.
+    for scenario in cost_sensitivity.scenarios:
+        revalidate_execution_inputs(
+            costs=scenario.costs, liquidity=liquidity, config=config
         )
 
     trials_observed = len(cost_sensitivity.scenarios)
@@ -588,6 +775,7 @@ def validate_walk_forward(
     if insufficient:
         return ValidationReport(
             security_id=series.security_id,
+            dataset_sha256=dataset.content_sha256,
             series_sha256=series.content_sha256,
             corporate_actions_sha256=corporate_actions.content_sha256,
             liquidity=liquidity,
@@ -632,29 +820,25 @@ def validate_walk_forward(
         # The lead-in bar is the decision bar for the first test fill. Without
         # it the test period's opening session is one the engine never
         # transitions into, so it can be neither traded into nor carry a split.
-        test_slice = _slice_series(
-            series, window.test_start_index - 1, window.test_end_index
+        window_dataset = _slice_dataset(
+            dataset, window.test_start_index - 1, window.test_end_index
         )
-        covered = frozenset(bar.session for bar in test_slice.bars[1:])
-        window_actions = _filter_actions(corporate_actions, covered)
         strategy, config_hash = fitted[window.window_index]
 
         for scenario in cost_sensitivity.scenarios:
             strategy_result = run_backtest(
-                series=test_slice,
+                dataset=window_dataset,
                 strategy=strategy,
                 costs=scenario.costs,
-                corporate_actions=window_actions,
                 liquidity=liquidity,
                 config=config,
                 strategy_id=strategy_id,
                 strategy_config_sha256=config_hash,
             )
             benchmark_result = run_backtest(
-                series=test_slice,
+                dataset=window_dataset,
                 strategy=benchmark,
                 costs=scenario.costs,
-                corporate_actions=window_actions,
                 liquidity=liquidity,
                 config=config,
                 strategy_id=BENCHMARK_STRATEGY_ID,
@@ -779,6 +963,7 @@ def validate_walk_forward(
 
     return ValidationReport(
         security_id=series.security_id,
+        dataset_sha256=dataset.content_sha256,
         series_sha256=series.content_sha256,
         corporate_actions_sha256=corporate_actions.content_sha256,
         liquidity=liquidity,

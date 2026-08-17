@@ -27,14 +27,23 @@ from investment_research_os.quant.bars import (
     quant_decimal_context,
     to_decimal,
 )
-from investment_research_os.quant.costs import CASH_QUANTUM, CostModel, TradeCharges
+from investment_research_os.quant.costs import (
+    CASH_QUANTUM,
+    CostModel,
+    TradeCharges,
+    revalidate_cost_model,
+)
 from investment_research_os.quant.corporate_actions import (
     CorporateActionSet,
     StockSplit,
 )
-from investment_research_os.quant.liquidity import ParticipationLimit
+from investment_research_os.quant.dataset import PointInTimeDataset, revalidate_dataset
+from investment_research_os.quant.liquidity import (
+    ParticipationLimit,
+    revalidate_participation_limit,
+)
 
-ENGINE_VERSION = "quant-backtest-3"
+ENGINE_VERSION = "quant-backtest-4"
 RATIO_QUANTUM = Decimal("0.000001")
 _SHA256_PATTERN = re.compile(r"[0-9a-f]{64}")
 CloseBasis = Literal["split_adjusted", "unadjusted"]
@@ -129,14 +138,7 @@ class BacktestConfig:
     fractional_share_policy: FractionalSharePolicy
 
     def __post_init__(self) -> None:
-        value = to_decimal(self.starting_cash, field="starting_cash")
-        if value <= 0:
-            raise QuantContractError(f"starting_cash must be positive, got {value}")
-        object.__setattr__(self, "starting_cash", value)
-        if self.fractional_share_policy != "error":
-            raise QuantContractError(
-                "fractional_share_policy must be error; cash-in-lieu is unsupported"
-            )
+        _check_config(self, coerce=True)
 
     def to_record(self) -> dict[str, str]:
         return {
@@ -144,6 +146,44 @@ class BacktestConfig:
             "fractional_share_policy": self.fractional_share_policy,
             "starting_cash": decimal_text(self.starting_cash),
         }
+
+
+def _check_config(config: "BacktestConfig", *, coerce: bool) -> None:
+    """Every ``BacktestConfig`` invariant, shared by both callers."""
+
+    raw = config.starting_cash
+    if coerce:
+        value = to_decimal(raw, field="starting_cash")
+    else:
+        if type(raw) is not Decimal:
+            raise QuantContractError(
+                f"starting_cash must be a stored Decimal, got {type(raw).__name__}"
+            )
+        if not raw.is_finite():
+            raise QuantContractError(f"starting_cash must be finite, got {raw}")
+        value = raw
+    if value <= 0:
+        raise QuantContractError(f"starting_cash must be positive, got {value}")
+    if coerce:
+        object.__setattr__(config, "starting_cash", value)
+    if config.fractional_share_policy != "error":
+        raise QuantContractError(
+            "fractional_share_policy must be error; cash-in-lieu is unsupported"
+        )
+
+
+def revalidate_backtest_config(config: object) -> "BacktestConfig":
+    """Re-check a backtest config at an execution boundary, returning it.
+
+    Raises ``QuantContractError`` and nothing else. No coercion, no repair.
+    """
+
+    if not isinstance(config, BacktestConfig):
+        raise QuantContractError(
+            f"expected a BacktestConfig, got {type(config).__name__}"
+        )
+    _check_config(config, coerce=False)
+    return config
 
 
 @dataclass(frozen=True, slots=True)
@@ -262,6 +302,7 @@ class BacktestResult:
     security_id: str
     currency: str
     series_sha256: str
+    dataset_sha256: str
     config: BacktestConfig
     costs: CostModel
     corporate_actions: CorporateActionSet
@@ -335,9 +376,11 @@ class BacktestResult:
             "corporate_actions_sha256": self.corporate_actions.content_sha256,
             "costs": self.costs.to_record(),
             "currency": self.currency,
+            "dataset_sha256": self.dataset_sha256,
             "decisions": [decision.to_record() for decision in self.decisions],
             "equity_curve": [point.to_record() for point in self.equity_curve],
             "fill_attempts": [attempt.to_record() for attempt in self.fill_attempts],
+            "engine_version": ENGINE_VERSION,
             "liquidity": self.liquidity.to_record(),
             "liquidity_sha256": self.liquidity.content_sha256,
             "outcome": {
@@ -393,12 +436,45 @@ def _affordable_quantity(
     return 0
 
 
+def _enforced_inputs(
+    dataset: PointInTimeDataset,
+) -> tuple[BarSeries, CorporateActionSet]:
+    """Re-check the whole dataset receipt at the execution boundary.
+
+    ``PointInTimeDataset`` validates itself at construction, but a frozen
+    dataclass is only as immutable as ``object.__setattr__`` allows, so a
+    receipt reaching execution may bear none of the guarantees its type
+    implies. Every invariant is rechecked through ``revalidate_dataset`` — the
+    single definition in ``dataset.py`` — rather than a subset restated here,
+    because a partial second copy drifts and a drifted guard is worse than an
+    absent one.
+    """
+
+    dataset = revalidate_dataset(dataset)
+    return dataset.series, dataset.corporate_actions
+
+
+def revalidate_execution_inputs(
+    *, costs: object, liquidity: object, config: object
+) -> None:
+    """Re-check the inputs that decide fill economics and capacity.
+
+    Market data has its own receipt; these do not. They are frozen dataclasses
+    accepted once and trusted thereafter, which makes them the remaining way an
+    invalid number reaches a hashed result. Each rule lives in its owning
+    module, so nothing here restates one.
+    """
+
+    revalidate_cost_model(costs)
+    revalidate_participation_limit(liquidity)
+    revalidate_backtest_config(config)
+
+
 def run_backtest(
     *,
-    series: BarSeries,
+    dataset: PointInTimeDataset,
     strategy: Strategy,
     costs: CostModel,
-    corporate_actions: CorporateActionSet,
     liquidity: ParticipationLimit,
     config: BacktestConfig,
     strategy_id: str,
@@ -410,14 +486,17 @@ def run_backtest(
     The final bar produces no decision, because there is no later bar to fill
     it — acting on the last close would be look-ahead. Split actions must be
     dated on a later covered session that the engine transitions into.
+
+    Market data arrives only as a ``PointInTimeDataset``. Passing bars and
+    corporate actions separately is no longer possible, so every result can
+    name the receipt that supplied its inputs.
     """
 
     with quant_decimal_context():
         return _run_backtest(
-            series=series,
+            dataset=dataset,
             strategy=strategy,
             costs=costs,
-            corporate_actions=corporate_actions,
             liquidity=liquidity,
             config=config,
             strategy_id=strategy_id,
@@ -427,10 +506,9 @@ def run_backtest(
 
 def _run_backtest(
     *,
-    series: BarSeries,
+    dataset: PointInTimeDataset,
     strategy: Strategy,
     costs: CostModel,
-    corporate_actions: CorporateActionSet,
     liquidity: ParticipationLimit,
     config: BacktestConfig,
     strategy_id: str,
@@ -444,10 +522,8 @@ def _run_backtest(
         raise QuantContractError(
             "strategy_config_sha256 must be a lowercase SHA-256 digest"
         )
-    if corporate_actions.security_id != series.security_id:
-        raise QuantContractError(
-            "corporate actions must match the bar-series security_id"
-        )
+    series, corporate_actions = _enforced_inputs(dataset)
+    revalidate_execution_inputs(costs=costs, liquidity=liquidity, config=config)
     covered_action_sessions = {bar.session for bar in series.bars[1:]}
     if any(
         action.effective_session not in covered_action_sessions
@@ -617,6 +693,7 @@ def _run_backtest(
         security_id=series.security_id,
         currency=series.currency,
         series_sha256=series.content_sha256,
+        dataset_sha256=dataset.content_sha256,
         config=config,
         costs=costs,
         corporate_actions=corporate_actions,

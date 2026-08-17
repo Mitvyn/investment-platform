@@ -140,27 +140,7 @@ class OhlcvBar:
     volume: int
 
     def __post_init__(self) -> None:
-        if type(self.session) is not date:
-            raise QuantContractError("session must be a date")
-        for field in ("open", "high", "low", "close"):
-            value = to_decimal(getattr(self, field), field=field)
-            object.__setattr__(self, field, value)
-            if value < PRICE_QUANTUM:
-                raise QuantContractError(
-                    f"{field} must be at least price quantum {PRICE_QUANTUM}, got {value}"
-                )
-        if isinstance(self.volume, bool) or not isinstance(self.volume, int):
-            raise QuantContractError("volume must be an integer")
-        if self.volume < 0:
-            raise QuantContractError(f"volume must not be negative, got {self.volume}")
-        if self.high < max(self.open, self.close, self.low):
-            raise QuantContractError(
-                f"high {self.high} is below another price on {self.session.isoformat()}"
-            )
-        if self.low > min(self.open, self.close, self.high):
-            raise QuantContractError(
-                f"low {self.low} is above another price on {self.session.isoformat()}"
-            )
+        _check_bar(self, coerce=True)
 
     def to_record(self) -> dict[str, object]:
         return {
@@ -190,35 +170,7 @@ class BarSeries:
     bars: tuple[OhlcvBar, ...]
 
     def __post_init__(self) -> None:
-        canonical_security_id(self.security_id)
-        if (
-            not isinstance(self.currency, str)
-            or len(self.currency) != 3
-            or not self.currency.isupper()
-        ):
-            raise QuantContractError("currency must be an upper-case ISO 4217 code")
-        if self.interval not in SUPPORTED_INTERVALS:
-            raise QuantContractError(f"unsupported interval: {self.interval!r}")
-        if self.price_basis != "unadjusted":
-            raise QuantContractError(
-                "price_basis must be unadjusted before corporate actions are applied"
-            )
-        if not isinstance(self.source, str) or not self.source.strip():
-            raise QuantContractError("source must name where the bars came from")
-
-        bars = tuple(self.bars)
-        object.__setattr__(self, "bars", bars)
-        if len(bars) < 2:
-            raise QuantContractError(
-                "a bar series needs at least two sessions to evaluate a decision"
-            )
-        for earlier, later in zip(bars, bars[1:]):
-            if later.session <= earlier.session:
-                raise QuantContractError(
-                    "sessions must be strictly increasing; "
-                    f"{later.session.isoformat()} does not follow "
-                    f"{earlier.session.isoformat()}"
-                )
+        _check_series(self, coerce=True)
 
     @classmethod
     def from_rows(
@@ -273,3 +225,110 @@ class BarSeries:
     @property
     def content_sha256(self) -> str:
         return canonical_sha256(self.to_record())
+
+
+def _check_bar(bar: "OhlcvBar", *, coerce: bool) -> None:
+    """Every ``OhlcvBar`` invariant, shared by construction and revalidation.
+
+    ``coerce`` is the whole difference between the two callers. At construction
+    a caller may hand over ``"100"`` or ``100`` and have it stored as a
+    ``Decimal``. At runtime nothing is repaired: a tampered object must be
+    rejected as it stands, because normalising it would launder a mutation back
+    into a valid-looking contract.
+    """
+
+    if type(bar.session) is not date:
+        raise QuantContractError("session must be a date")
+    for field in ("open", "high", "low", "close"):
+        raw = getattr(bar, field)
+        if coerce:
+            value = to_decimal(raw, field=field)
+            object.__setattr__(bar, field, value)
+        else:
+            if type(raw) is not Decimal:
+                raise QuantContractError(
+                    f"{field} must be a stored Decimal, got {type(raw).__name__}"
+                )
+            if not raw.is_finite():
+                raise QuantContractError(f"{field} must be finite, got {raw}")
+            value = raw
+        if value < PRICE_QUANTUM:
+            raise QuantContractError(
+                f"{field} must be at least price quantum {PRICE_QUANTUM}, got {value}"
+            )
+    if isinstance(bar.volume, bool) or not isinstance(bar.volume, int):
+        raise QuantContractError("volume must be an integer")
+    if bar.volume < 0:
+        raise QuantContractError(f"volume must not be negative, got {bar.volume}")
+    if bar.high < max(bar.open, bar.close, bar.low):
+        raise QuantContractError(
+            f"high {bar.high} is below another price on {bar.session.isoformat()}"
+        )
+    if bar.low > min(bar.open, bar.close, bar.high):
+        raise QuantContractError(
+            f"low {bar.low} is above another price on {bar.session.isoformat()}"
+        )
+
+
+def _check_series(series: "BarSeries", *, coerce: bool) -> None:
+    """Every ``BarSeries`` invariant, including each bar it holds."""
+
+    canonical_security_id(series.security_id)
+    if (
+        not isinstance(series.currency, str)
+        or len(series.currency) != 3
+        or not series.currency.isupper()
+    ):
+        raise QuantContractError("currency must be an upper-case ISO 4217 code")
+    if series.interval not in SUPPORTED_INTERVALS:
+        raise QuantContractError(f"unsupported interval: {series.interval!r}")
+    if series.price_basis != "unadjusted":
+        raise QuantContractError(
+            "price_basis must be unadjusted before corporate actions are applied"
+        )
+    if not isinstance(series.source, str) or not series.source.strip():
+        raise QuantContractError("source must name where the bars came from")
+
+    if coerce:
+        bars = tuple(series.bars)
+        object.__setattr__(series, "bars", bars)
+    else:
+        # A list here is not a shape to fix up; it is evidence the object was
+        # written to after construction.
+        if type(series.bars) is not tuple:
+            raise QuantContractError(
+                f"bars must be a stored tuple, got {type(series.bars).__name__}"
+            )
+        bars = series.bars
+        for bar in bars:
+            if not isinstance(bar, OhlcvBar):
+                raise QuantContractError(
+                    f"bars must hold OhlcvBar, got {type(bar).__name__}"
+                )
+            _check_bar(bar, coerce=False)
+    if len(bars) < 2:
+        raise QuantContractError(
+            "a bar series needs at least two sessions to evaluate a decision"
+        )
+    for earlier, later in zip(bars, bars[1:]):
+        if later.session <= earlier.session:
+            raise QuantContractError(
+                "sessions must be strictly increasing; "
+                f"{later.session.isoformat()} does not follow "
+                f"{earlier.session.isoformat()}"
+            )
+
+
+def revalidate_bar_series(series: object) -> "BarSeries":
+    """Re-check a series and every bar in it, returning it unchanged.
+
+    Raises ``QuantContractError`` and nothing else. No coercion, no repair, no
+    I/O.
+    """
+
+    if not isinstance(series, BarSeries):
+        raise QuantContractError(
+            f"expected a BarSeries, got {type(series).__name__}"
+        )
+    _check_series(series, coerce=False)
+    return series

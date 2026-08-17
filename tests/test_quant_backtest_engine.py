@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import unittest
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from decimal import Decimal, localcontext
 
 from investment_research_os.quant import (
@@ -13,6 +13,7 @@ from investment_research_os.quant import (
     LookAheadError,
     OhlcvBar,
     ParticipationLimit,
+    PointInTimeDataset,
     QuantContractError,
     StockSplit,
     run_backtest,
@@ -153,18 +154,22 @@ class FloatStrategy:
 
 
 def run(
-    series: BarSeries,
+    source: object,
     strategy: object,
     costs: CostModel = FREE,
     cash: str = "10000",
     corporate_actions: CorporateActionSet = NO_ACTIONS,
     liquidity: ParticipationLimit = FULL_SESSION_LIQUIDITY,
 ):
+    dataset = (
+        source
+        if isinstance(source, PointInTimeDataset)
+        else make_dataset(source, corporate_actions)  # type: ignore[arg-type]
+    )
     return run_backtest(
-        series=series,
+        dataset=dataset,  # type: ignore[arg-type]
         strategy=strategy,  # type: ignore[arg-type]
         costs=costs,
-        corporate_actions=corporate_actions,
         liquidity=liquidity,
         config=BacktestConfig(
             starting_cash=Decimal(cash),
@@ -552,12 +557,15 @@ class ExecutionTests(unittest.TestCase):
         with self.assertRaisesRegex(QuantContractError, "transition session"):
             run(series, AlwaysLong(), corporate_actions=first_session)
 
+        # An action dated after the last bar can no longer reach the engine at
+        # all: the dataset receipt refuses it first, which is the stricter and
+        # earlier of the two guards.
         outside = CorporateActionSet(
             security_id=SECURITY_ID,
             source="fixture-actions",
             actions=(StockSplit(date(2026, 1, 9), 2, 1),),
         )
-        with self.assertRaisesRegex(QuantContractError, "transition session"):
+        with self.assertRaisesRegex(QuantContractError, "cutoff"):
             run(series, AlwaysLong(), corporate_actions=outside)
 
     def test_split_adjusts_held_shares_before_next_open_rebalance(self) -> None:
@@ -792,7 +800,7 @@ class ReproducibilityTests(unittest.TestCase):
         self.assertEqual(record["security_id"], SECURITY_ID)
         self.assertEqual(record["strategy_id"], "test-strategy")
         self.assertEqual(record["strategy_config_sha256"], STRATEGY_CONFIG_SHA256)
-        self.assertEqual(record["config"]["engine_version"], "quant-backtest-3")
+        self.assertEqual(record["config"]["engine_version"], "quant-backtest-4")
         self.assertEqual(record["config"]["fractional_share_policy"], "error")
 
     def test_starting_cash_must_be_positive(self) -> None:
@@ -805,10 +813,9 @@ class ReproducibilityTests(unittest.TestCase):
     def test_strategy_id_is_required(self) -> None:
         with self.assertRaises(QuantContractError):
             run_backtest(
-                series=flat_series(["100", "101"]),
+                dataset=make_dataset(flat_series(["100", "101"])),
                 strategy=AlwaysLong(),
                 costs=FREE,
-                corporate_actions=NO_ACTIONS,
                 liquidity=FULL_SESSION_LIQUIDITY,
                 config=BacktestConfig(
                     starting_cash=Decimal("1000"),
@@ -823,6 +830,46 @@ class ReproducibilityTests(unittest.TestCase):
             QuantContractError, "strategy_config_sha256 must be"
         ):
             run_backtest(
+                dataset=make_dataset(flat_series(["100", "101"])),
+                strategy=AlwaysLong(),
+                costs=FREE,
+                liquidity=FULL_SESSION_LIQUIDITY,
+                config=BacktestConfig(
+                    starting_cash=Decimal("1000"),
+                    fractional_share_policy="error",
+                ),
+                strategy_id="always-long.v1",
+                strategy_config_sha256="A" * 64,
+            )
+
+
+SOURCE_HASH = "b" * 64
+
+
+def make_dataset(
+    series: BarSeries,
+    corporate_actions: CorporateActionSet = NO_ACTIONS,
+    **overrides: object,
+) -> PointInTimeDataset:
+    """Wrap fixtures in the receipt the engine now requires."""
+
+    base: dict[str, object] = {
+        "series": series,
+        "corporate_actions": corporate_actions,
+        "as_of_cutoff": series.bars[-1].session,
+        "source_id": "fixture-source",
+        "source_revision": "rev-1",
+        "source_content_sha256": SOURCE_HASH,
+        "coverage_scope": "single_security",
+    }
+    base.update(overrides)
+    return PointInTimeDataset(**base)  # type: ignore[arg-type]
+
+
+class DatasetBoundaryTests(unittest.TestCase):
+    def test_raw_series_and_actions_are_no_longer_accepted(self) -> None:
+        with self.assertRaises(TypeError):
+            run_backtest(  # type: ignore[call-arg]
                 series=flat_series(["100", "101"]),
                 strategy=AlwaysLong(),
                 costs=FREE,
@@ -833,8 +880,486 @@ class ReproducibilityTests(unittest.TestCase):
                     fractional_share_policy="error",
                 ),
                 strategy_id="always-long.v1",
-                strategy_config_sha256="A" * 64,
+                strategy_config_sha256=STRATEGY_CONFIG_SHA256,
             )
+
+    def test_the_result_pins_the_dataset_hash(self) -> None:
+        dataset = make_dataset(flat_series(["100", "101"]))
+        result = run(dataset, AlwaysLong())
+        self.assertEqual(result.dataset_sha256, dataset.content_sha256)
+        self.assertEqual(
+            result.to_record()["dataset_sha256"], dataset.content_sha256
+        )
+        self.assertEqual(result.to_record()["engine_version"], "quant-backtest-4")
+
+    def test_source_revision_alone_changes_the_result_hash(self) -> None:
+        series = flat_series(["100", "101"])
+        first = run(make_dataset(series), AlwaysLong())
+        second = run(make_dataset(series, source_revision="rev-2"), AlwaysLong())
+        self.assertEqual(first.series_sha256, second.series_sha256)
+        self.assertNotEqual(first.content_sha256, second.content_sha256)
+
+    def test_source_content_hash_alone_changes_the_result_hash(self) -> None:
+        series = flat_series(["100", "101"])
+        first = run(make_dataset(series), AlwaysLong())
+        second = run(
+            make_dataset(series, source_content_sha256="c" * 64), AlwaysLong()
+        )
+        self.assertNotEqual(first.content_sha256, second.content_sha256)
+
+    def test_a_bar_after_the_cutoff_is_refused_before_the_strategy_runs(self) -> None:
+        # The dataclass would have refused this at construction, so the only
+        # way to reach the engine guard is to mutate a valid dataset. The
+        # engine must not trust an upstream check it cannot see.
+        dataset = make_dataset(flat_series(["100", "101", "102"]))
+        object.__setattr__(dataset, "as_of_cutoff", dataset.series.bars[0].session)
+        strategy = RecordingStrategy()
+        with self.assertRaisesRegex(QuantContractError, "cutoff"):
+            run(dataset, strategy)
+        self.assertEqual(strategy.cutoffs, [])
+
+    def test_an_action_after_the_cutoff_is_refused_before_the_strategy_runs(
+        self,
+    ) -> None:
+        series = flat_series(["100", "101", "102"])
+        actions = CorporateActionSet(
+            security_id=SECURITY_ID,
+            source="fixture-actions",
+            actions=(StockSplit(date(2026, 1, 7), 2, 1),),
+        )
+        dataset = make_dataset(series, actions)
+        object.__setattr__(dataset, "as_of_cutoff", date(2026, 1, 6))
+        strategy = RecordingStrategy()
+        with self.assertRaisesRegex(QuantContractError, "cutoff"):
+            run(dataset, strategy)
+        self.assertEqual(strategy.cutoffs, [])
+
+    def test_a_non_dataset_input_is_refused(self) -> None:
+        with self.assertRaisesRegex(QuantContractError, "PointInTimeDataset"):
+            run_backtest(
+                dataset=flat_series(["100", "101"]),  # type: ignore[arg-type]
+                strategy=AlwaysLong(),
+                costs=FREE,
+                liquidity=FULL_SESSION_LIQUIDITY,
+                config=BacktestConfig(
+                    starting_cash=Decimal("1000"),
+                    fractional_share_policy="error",
+                ),
+                strategy_id="always-long.v1",
+                strategy_config_sha256=STRATEGY_CONFIG_SHA256,
+            )
+
+    def test_the_result_hash_ignores_the_ambient_decimal_context(self) -> None:
+        dataset = make_dataset(flat_series(["100", "104", "99"]))
+        baseline = run(dataset, AlwaysLong()).content_sha256
+        for precision in (5, 60):
+            with localcontext() as ctx:
+                ctx.prec = precision
+                self.assertEqual(run(dataset, AlwaysLong()).content_sha256, baseline)
+
+    def test_a_split_still_applies_through_the_dataset(self) -> None:
+        series = flat_series(["100", "50", "50"])
+        actions = CorporateActionSet(
+            security_id=SECURITY_ID,
+            source="fixture-actions",
+            actions=(StockSplit(date(2026, 1, 6), 2, 1),),
+        )
+        result = run(make_dataset(series, actions), AlwaysLong())
+        applications = result.corporate_action_applications
+        self.assertEqual(len(applications), 1)
+        self.assertEqual(applications[0].shares_before * 2, applications[0].shares_after)
+
+    def test_the_participation_cap_still_applies_through_the_dataset(self) -> None:
+        capped = ParticipationLimit(
+            max_participation_bps=Decimal("1"),
+            volume_basis="execution_bar",
+            zero_volume_policy="block",
+            unfilled_policy="cancel",
+            min_fill_shares=0,
+        )
+        result = run(
+            make_dataset(flat_series(["100", "100"])),
+            AlwaysLong(),
+            liquidity=capped,
+        )
+        self.assertEqual(result.fill_attempts[0].limit_reason, "participation_capped")
+        self.assertGreater(result.total_unfilled_shares, 0)
+
+    def test_a_forged_receipt_field_is_refused_before_the_strategy_runs(self) -> None:
+        # Frozen is not sealed. Every mutation below produces a dataset that
+        # could never have been constructed, and each must be refused at the
+        # boundary rather than silently hashed into a result.
+        mutations: tuple[tuple[str, object], ...] = (
+            ("source_content_sha256", "forged"),
+            ("source_id", "   "),
+            ("source_revision", ""),
+            ("coverage_scope", "universe"),
+            ("as_of_cutoff", datetime(2026, 1, 6, 20, 0)),
+            ("series", object()),
+            ("corporate_actions", object()),
+        )
+        for field, value in mutations:
+            with self.subTest(field=field):
+                dataset = make_dataset(flat_series(["100", "101"]))
+                object.__setattr__(dataset, field, value)
+                strategy = RecordingStrategy()
+                with self.assertRaises(QuantContractError):
+                    run(dataset, strategy)
+                self.assertEqual(strategy.cutoffs, [])
+
+    def test_a_valid_receipt_still_runs_after_the_recheck(self) -> None:
+        dataset = make_dataset(flat_series(["100", "104", "99"]))
+        baseline = run(dataset, AlwaysLong())
+        self.assertEqual(baseline.dataset_sha256, dataset.content_sha256)
+        for precision in (5, 60):
+            with localcontext() as ctx:
+                ctx.prec = precision
+                self.assertEqual(
+                    run(dataset, AlwaysLong()).content_sha256, baseline.content_sha256
+                )
+
+
+def _split_dataset() -> PointInTimeDataset:
+    """A valid receipt carrying two ordered splits, for action mutations."""
+
+    series = flat_series(["100", "50", "25", "25"])
+    actions = CorporateActionSet(
+        security_id=SECURITY_ID,
+        source="fixture-actions",
+        actions=(
+            StockSplit(date(2026, 1, 6), 2, 1),
+            StockSplit(date(2026, 1, 7), 2, 1),
+        ),
+    )
+    return make_dataset(series, actions)
+
+
+def _plain_dataset() -> PointInTimeDataset:
+    return make_dataset(flat_series(["100", "101", "102"]))
+
+
+def _mutate_bar_open_negative(dataset: PointInTimeDataset) -> None:
+    object.__setattr__(dataset.series.bars[0], "open", Decimal("-1"))
+
+
+def _mutate_bar_open_float(dataset: PointInTimeDataset) -> None:
+    object.__setattr__(dataset.series.bars[0], "open", 100.0)
+
+
+def _mutate_bar_session_duplicate(dataset: PointInTimeDataset) -> None:
+    bars = dataset.series.bars
+    object.__setattr__(bars[1], "session", bars[0].session)
+
+
+def _mutate_bar_session_datetime(dataset: PointInTimeDataset) -> None:
+    object.__setattr__(
+        dataset.series.bars[0], "session", datetime(2026, 1, 5, 16, 0)
+    )
+
+
+def _mutate_bar_high_below_open(dataset: PointInTimeDataset) -> None:
+    object.__setattr__(dataset.series.bars[0], "high", Decimal("1"))
+
+
+def _mutate_bar_volume_negative(dataset: PointInTimeDataset) -> None:
+    object.__setattr__(dataset.series.bars[0], "volume", -5)
+
+
+def _mutate_bars_to_list(dataset: PointInTimeDataset) -> None:
+    object.__setattr__(dataset.series, "bars", list(dataset.series.bars))
+
+
+def _mutate_bars_contain_object(dataset: PointInTimeDataset) -> None:
+    object.__setattr__(
+        dataset.series, "bars", dataset.series.bars + (object(),)
+    )
+
+
+def _mutate_series_currency(dataset: PointInTimeDataset) -> None:
+    object.__setattr__(dataset.series, "currency", "usd")
+
+
+def _mutate_split_ratio_zero(dataset: PointInTimeDataset) -> None:
+    object.__setattr__(dataset.corporate_actions.actions[0], "new_shares", 0)
+
+
+def _mutate_split_ratio_bool(dataset: PointInTimeDataset) -> None:
+    object.__setattr__(dataset.corporate_actions.actions[0], "new_shares", True)
+
+
+def _mutate_split_ratio_unreduced(dataset: PointInTimeDataset) -> None:
+    # 4:2 is numerically 2:1, which is what the constructor would have stored.
+    # Runtime revalidation must reject the stored form rather than quietly
+    # reducing it, or a tampered object could be laundered back into a valid one.
+    action = dataset.corporate_actions.actions[0]
+    object.__setattr__(action, "new_shares", 4)
+    object.__setattr__(action, "old_shares", 2)
+
+
+def _mutate_split_ratio_identity(dataset: PointInTimeDataset) -> None:
+    object.__setattr__(dataset.corporate_actions.actions[0], "new_shares", 1)
+
+
+def _mutate_split_session_datetime(dataset: PointInTimeDataset) -> None:
+    object.__setattr__(
+        dataset.corporate_actions.actions[0],
+        "effective_session",
+        datetime(2026, 1, 6, 9, 30),
+    )
+
+
+def _mutate_actions_unordered(dataset: PointInTimeDataset) -> None:
+    actions = dataset.corporate_actions.actions
+    object.__setattr__(
+        dataset.corporate_actions, "actions", tuple(reversed(actions))
+    )
+
+
+def _mutate_actions_duplicate_session(dataset: PointInTimeDataset) -> None:
+    actions = dataset.corporate_actions.actions
+    object.__setattr__(
+        actions[1], "effective_session", actions[0].effective_session
+    )
+
+
+def _mutate_actions_to_list(dataset: PointInTimeDataset) -> None:
+    object.__setattr__(
+        dataset.corporate_actions,
+        "actions",
+        list(dataset.corporate_actions.actions),
+    )
+
+
+def _mutate_actions_contain_object(dataset: PointInTimeDataset) -> None:
+    object.__setattr__(
+        dataset.corporate_actions,
+        "actions",
+        (object(),),
+    )
+
+
+def _mutate_action_source(dataset: PointInTimeDataset) -> None:
+    object.__setattr__(dataset.corporate_actions, "source", "  ")
+
+
+BAR_MUTATIONS = (
+    ("bar_open_negative", _mutate_bar_open_negative),
+    ("bar_open_float", _mutate_bar_open_float),
+    ("bar_session_duplicate", _mutate_bar_session_duplicate),
+    ("bar_session_datetime", _mutate_bar_session_datetime),
+    ("bar_high_below_open", _mutate_bar_high_below_open),
+    ("bar_volume_negative", _mutate_bar_volume_negative),
+    ("bars_to_list", _mutate_bars_to_list),
+    ("bars_contain_object", _mutate_bars_contain_object),
+    ("series_currency", _mutate_series_currency),
+)
+
+ACTION_MUTATIONS = (
+    ("split_ratio_zero", _mutate_split_ratio_zero),
+    ("split_ratio_bool", _mutate_split_ratio_bool),
+    ("split_ratio_unreduced", _mutate_split_ratio_unreduced),
+    ("split_ratio_identity", _mutate_split_ratio_identity),
+    ("split_session_datetime", _mutate_split_session_datetime),
+    ("actions_unordered", _mutate_actions_unordered),
+    ("actions_duplicate_session", _mutate_actions_duplicate_session),
+    ("actions_to_list", _mutate_actions_to_list),
+    ("actions_contain_object", _mutate_actions_contain_object),
+    ("action_source_blank", _mutate_action_source),
+)
+
+
+class ChildContractRevalidationTests(unittest.TestCase):
+    def test_a_mutated_child_contract_is_refused_before_the_strategy_runs(
+        self,
+    ) -> None:
+        cases = tuple(
+            (label, mutate, _plain_dataset) for label, mutate in BAR_MUTATIONS
+        ) + tuple(
+            (label, mutate, _split_dataset) for label, mutate in ACTION_MUTATIONS
+        )
+        for label, mutate, build in cases:
+            with self.subTest(mutation=label):
+                dataset = build()
+                mutate(dataset)
+                strategy = RecordingStrategy()
+                with self.assertRaises(QuantContractError):
+                    run(dataset, strategy)
+                self.assertEqual(strategy.cutoffs, [])
+
+    def test_a_valid_receipt_with_splits_still_runs_and_hashes_stably(self) -> None:
+        dataset = _split_dataset()
+        baseline = run(dataset, AlwaysLong())
+        self.assertEqual(baseline.dataset_sha256, dataset.content_sha256)
+        self.assertEqual(len(baseline.corporate_action_applications), 2)
+        for precision in (5, 60):
+            with localcontext() as ctx:
+                ctx.prec = precision
+                self.assertEqual(
+                    run(dataset, AlwaysLong()).content_sha256,
+                    baseline.content_sha256,
+                )
+
+    def test_normal_construction_still_normalises_caller_input(self) -> None:
+        # Constructors keep coercing compatible inputs. Only runtime
+        # revalidation is strict, so this is not a tightening of the API.
+        self.assertEqual(StockSplit(date(2026, 1, 6), 4, 2).new_shares, 2)
+        bar = OhlcvBar(
+            session=date(2026, 1, 5),
+            open="100",
+            high="100",
+            low="100",
+            close="100",
+            volume=1,
+        )
+        self.assertEqual(bar.open, Decimal("100"))
+
+
+def _valid_config() -> BacktestConfig:
+    return BacktestConfig(
+        starting_cash=Decimal("10000"), fractional_share_policy="error"
+    )
+
+
+def _valid_costs() -> CostModel:
+    return CostModel(
+        commission_per_share=Decimal("0.01"),
+        commission_bps=Decimal("0"),
+        commission_minimum=Decimal("1.00"),
+        transaction_cost_bps=Decimal("5"),
+        slippage_bps=Decimal("10"),
+    )
+
+
+def _valid_liquidity() -> ParticipationLimit:
+    return ParticipationLimit(
+        max_participation_bps=Decimal("500"),
+        volume_basis="execution_bar",
+        zero_volume_policy="block",
+        unfilled_policy="cancel",
+        min_fill_shares=0,
+    )
+
+
+CONFIG_MUTATIONS = (
+    ("starting_cash_negative", "starting_cash", Decimal("-1")),
+    ("starting_cash_zero", "starting_cash", Decimal("0")),
+    ("starting_cash_string", "starting_cash", "10000"),
+    ("starting_cash_float", "starting_cash", 10000.0),
+    ("fractional_share_policy", "fractional_share_policy", "cash_in_lieu"),
+)
+
+COST_MUTATIONS = (
+    ("slippage_negative", "slippage_bps", Decimal("-1")),
+    ("slippage_string", "slippage_bps", "10"),
+    ("slippage_float", "slippage_bps", 10.0),
+    ("commission_minimum_negative", "commission_minimum", Decimal("-1")),
+    ("commission_per_share_string", "commission_per_share", "0.01"),
+)
+
+LIQUIDITY_MUTATIONS = (
+    ("participation_above_cap", "max_participation_bps", Decimal("20000")),
+    ("participation_negative", "max_participation_bps", Decimal("-1")),
+    ("participation_string", "max_participation_bps", "500"),
+    ("participation_float", "max_participation_bps", 500.0),
+    ("zero_volume_policy", "zero_volume_policy", "ignore"),
+    ("unfilled_policy", "unfilled_policy", "queue"),
+    ("volume_basis", "volume_basis", "session"),
+    ("min_fill_shares_negative", "min_fill_shares", -1),
+    ("min_fill_shares_bool", "min_fill_shares", True),
+)
+
+
+class ExecutionInputRevalidationTests(unittest.TestCase):
+    def _run(self, *, config, costs, liquidity, strategy):
+        return run_backtest(
+            dataset=make_dataset(flat_series(["100", "101", "102"])),
+            strategy=strategy,
+            costs=costs,
+            liquidity=liquidity,
+            config=config,
+            strategy_id="test-strategy",
+            strategy_config_sha256=STRATEGY_CONFIG_SHA256,
+        )
+
+    def test_a_mutated_execution_input_is_refused_before_the_strategy_runs(
+        self,
+    ) -> None:
+        cases = (
+            tuple(("config", *case) for case in CONFIG_MUTATIONS)
+            + tuple(("costs", *case) for case in COST_MUTATIONS)
+            + tuple(("liquidity", *case) for case in LIQUIDITY_MUTATIONS)
+        )
+        for owner, label, field, value in cases:
+            with self.subTest(input=owner, mutation=label):
+                inputs = {
+                    "config": _valid_config(),
+                    "costs": _valid_costs(),
+                    "liquidity": _valid_liquidity(),
+                }
+                object.__setattr__(inputs[owner], field, value)
+                strategy = RecordingStrategy()
+                with self.assertRaises(QuantContractError):
+                    self._run(strategy=strategy, **inputs)
+                self.assertEqual(strategy.cutoffs, [])
+
+    def test_a_non_contract_execution_input_is_refused(self) -> None:
+        for owner in ("config", "costs", "liquidity"):
+            with self.subTest(input=owner):
+                inputs = {
+                    "config": _valid_config(),
+                    "costs": _valid_costs(),
+                    "liquidity": _valid_liquidity(),
+                }
+                inputs[owner] = object()
+                strategy = RecordingStrategy()
+                with self.assertRaises(QuantContractError):
+                    self._run(strategy=strategy, **inputs)
+                self.assertEqual(strategy.cutoffs, [])
+
+    def test_valid_execution_inputs_still_run_and_hash_stably(self) -> None:
+        baseline = self._run(
+            config=_valid_config(),
+            costs=_valid_costs(),
+            liquidity=_valid_liquidity(),
+            strategy=AlwaysLong(),
+        )
+        self.assertTrue(baseline.trades)
+        for precision in (5, 60):
+            with localcontext() as ctx:
+                ctx.prec = precision
+                self.assertEqual(
+                    self._run(
+                        config=_valid_config(),
+                        costs=_valid_costs(),
+                        liquidity=_valid_liquidity(),
+                        strategy=AlwaysLong(),
+                    ).content_sha256,
+                    baseline.content_sha256,
+                )
+
+    def test_constructor_coercion_is_unchanged(self) -> None:
+        # Runtime revalidation is strict; construction is not. A caller may
+        # still hand over decimal strings and integers.
+        config = BacktestConfig(
+            starting_cash="10000", fractional_share_policy="error"
+        )
+        self.assertEqual(config.starting_cash, Decimal("10000"))
+        costs = CostModel(
+            commission_per_share="0.01",
+            commission_bps=0,
+            commission_minimum="1.00",
+            transaction_cost_bps="5",
+            slippage_bps=10,
+        )
+        self.assertEqual(costs.slippage_bps, Decimal("10"))
+        liquidity = ParticipationLimit(
+            max_participation_bps="500",
+            volume_basis="execution_bar",
+            zero_volume_policy="block",
+            unfilled_policy="cancel",
+            min_fill_shares=0,
+        )
+        self.assertEqual(liquidity.max_participation_bps, Decimal("500"))
 
 
 class IsolationTests(unittest.TestCase):
