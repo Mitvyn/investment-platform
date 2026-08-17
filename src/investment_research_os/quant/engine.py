@@ -32,9 +32,10 @@ from investment_research_os.quant.corporate_actions import (
     CorporateActionSet,
     StockSplit,
 )
+from investment_research_os.quant.dataset import PointInTimeDataset
 from investment_research_os.quant.liquidity import ParticipationLimit
 
-ENGINE_VERSION = "quant-backtest-3"
+ENGINE_VERSION = "quant-backtest-4"
 RATIO_QUANTUM = Decimal("0.000001")
 _SHA256_PATTERN = re.compile(r"[0-9a-f]{64}")
 CloseBasis = Literal["split_adjusted", "unadjusted"]
@@ -262,6 +263,7 @@ class BacktestResult:
     security_id: str
     currency: str
     series_sha256: str
+    dataset_sha256: str
     config: BacktestConfig
     costs: CostModel
     corporate_actions: CorporateActionSet
@@ -335,9 +337,11 @@ class BacktestResult:
             "corporate_actions_sha256": self.corporate_actions.content_sha256,
             "costs": self.costs.to_record(),
             "currency": self.currency,
+            "dataset_sha256": self.dataset_sha256,
             "decisions": [decision.to_record() for decision in self.decisions],
             "equity_curve": [point.to_record() for point in self.equity_curve],
             "fill_attempts": [attempt.to_record() for attempt in self.fill_attempts],
+            "engine_version": ENGINE_VERSION,
             "liquidity": self.liquidity.to_record(),
             "liquidity_sha256": self.liquidity.content_sha256,
             "outcome": {
@@ -393,12 +397,48 @@ def _affordable_quantity(
     return 0
 
 
+def _enforced_inputs(
+    dataset: PointInTimeDataset,
+) -> tuple[BarSeries, CorporateActionSet]:
+    """Re-check the dataset receipt at the execution boundary.
+
+    ``PointInTimeDataset`` validates itself at construction, but a frozen
+    dataclass is only as immutable as ``object.__setattr__`` allows. The engine
+    is the point where a session later than the cutoff would become a traded
+    bar, so it re-checks rather than trusting a guarantee it cannot observe.
+    """
+
+    if not isinstance(dataset, PointInTimeDataset):
+        raise QuantContractError(
+            "market data enters the engine only as a PointInTimeDataset"
+        )
+    series = dataset.series
+    corporate_actions = dataset.corporate_actions
+    if corporate_actions.security_id != series.security_id:
+        raise QuantContractError(
+            "corporate actions must match the bar-series security_id"
+        )
+    cutoff = dataset.as_of_cutoff
+    for bar in series.bars:
+        if bar.session > cutoff:
+            raise QuantContractError(
+                f"bar session {bar.session.isoformat()} is after the dataset "
+                f"cutoff {cutoff.isoformat()}"
+            )
+    for action in corporate_actions.actions:
+        if action.effective_session > cutoff:
+            raise QuantContractError(
+                f"corporate action effective {action.effective_session.isoformat()} "
+                f"is after the dataset cutoff {cutoff.isoformat()}"
+            )
+    return series, corporate_actions
+
+
 def run_backtest(
     *,
-    series: BarSeries,
+    dataset: PointInTimeDataset,
     strategy: Strategy,
     costs: CostModel,
-    corporate_actions: CorporateActionSet,
     liquidity: ParticipationLimit,
     config: BacktestConfig,
     strategy_id: str,
@@ -410,14 +450,17 @@ def run_backtest(
     The final bar produces no decision, because there is no later bar to fill
     it — acting on the last close would be look-ahead. Split actions must be
     dated on a later covered session that the engine transitions into.
+
+    Market data arrives only as a ``PointInTimeDataset``. Passing bars and
+    corporate actions separately is no longer possible, so every result can
+    name the receipt that supplied its inputs.
     """
 
     with quant_decimal_context():
         return _run_backtest(
-            series=series,
+            dataset=dataset,
             strategy=strategy,
             costs=costs,
-            corporate_actions=corporate_actions,
             liquidity=liquidity,
             config=config,
             strategy_id=strategy_id,
@@ -427,10 +470,9 @@ def run_backtest(
 
 def _run_backtest(
     *,
-    series: BarSeries,
+    dataset: PointInTimeDataset,
     strategy: Strategy,
     costs: CostModel,
-    corporate_actions: CorporateActionSet,
     liquidity: ParticipationLimit,
     config: BacktestConfig,
     strategy_id: str,
@@ -444,10 +486,7 @@ def _run_backtest(
         raise QuantContractError(
             "strategy_config_sha256 must be a lowercase SHA-256 digest"
         )
-    if corporate_actions.security_id != series.security_id:
-        raise QuantContractError(
-            "corporate actions must match the bar-series security_id"
-        )
+    series, corporate_actions = _enforced_inputs(dataset)
     covered_action_sessions = {bar.session for bar in series.bars[1:]}
     if any(
         action.effective_session not in covered_action_sessions
@@ -617,6 +656,7 @@ def _run_backtest(
         security_id=series.security_id,
         currency=series.currency,
         series_sha256=series.content_sha256,
+        dataset_sha256=dataset.content_sha256,
         config=config,
         costs=costs,
         corporate_actions=corporate_actions,

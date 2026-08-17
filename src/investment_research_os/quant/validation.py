@@ -37,8 +37,10 @@ from investment_research_os.quant.bars import (
     to_decimal,
 )
 from investment_research_os.quant.corporate_actions import CorporateActionSet
+from investment_research_os.quant.dataset import PointInTimeDataset
 from investment_research_os.quant.costs import CostModel
 from investment_research_os.quant.engine import (
+    _enforced_inputs,
     ENGINE_VERSION,
     BacktestConfig,
     BacktestResult,
@@ -55,7 +57,7 @@ from investment_research_os.quant.statistics import (
     summarise_returns,
 )
 
-VALIDATION_VERSION = "quant-validation-1"
+VALIDATION_VERSION = "quant-validation-2"
 
 WindowMode = Literal["rolling", "anchored"]
 Adjustment = Literal["bonferroni", "none"]
@@ -406,6 +408,7 @@ class ScenarioSummary:
 @dataclass(frozen=True, slots=True)
 class ValidationReport:
     security_id: str
+    dataset_sha256: str
     series_sha256: str
     corporate_actions_sha256: str
     liquidity: ParticipationLimit
@@ -449,6 +452,7 @@ class ValidationReport:
             "config": self.config.to_record(),
             "corporate_actions_sha256": self.corporate_actions_sha256,
             "cost_sensitivity": self.cost_sensitivity.to_record(),
+            "dataset_sha256": self.dataset_sha256,
             "degrees_of_freedom": self.degrees_of_freedom,
             "degrees_of_freedom_bucket": self.degrees_of_freedom_bucket,
             "disclosure": self.disclosure.to_record(),
@@ -494,6 +498,31 @@ def _slice_series(series: BarSeries, start: int, end: int) -> BarSeries:
     )
 
 
+def _slice_dataset(
+    dataset: PointInTimeDataset, start: int, end: int
+) -> PointInTimeDataset:
+    """A window's inputs, derived only from the parent receipt.
+
+    The parent cutoff and every source declaration carry over unchanged: a
+    window is a view of one dataset, not a dataset of its own, and inventing a
+    tighter cutoff per window would assert an availability claim nobody made.
+    Only the parent's own bars and actions can appear, so no external market
+    data can enter at a window boundary.
+    """
+
+    sliced = _slice_series(dataset.series, start, end)
+    covered = frozenset(bar.session for bar in sliced.bars[1:])
+    return PointInTimeDataset(
+        series=sliced,
+        corporate_actions=_filter_actions(dataset.corporate_actions, covered),
+        as_of_cutoff=dataset.as_of_cutoff,
+        source_id=dataset.source_id,
+        source_revision=dataset.source_revision,
+        source_content_sha256=dataset.source_content_sha256,
+        coverage_scope=dataset.coverage_scope,
+    )
+
+
 def _filter_actions(
     actions: CorporateActionSet, sessions: frozenset[date]
 ) -> CorporateActionSet:
@@ -532,8 +561,7 @@ def _benchmark_entry_shortfall(result: BacktestResult) -> int:
 
 def validate_walk_forward(
     *,
-    series: BarSeries,
-    corporate_actions: CorporateActionSet,
+    dataset: PointInTimeDataset,
     liquidity: ParticipationLimit,
     config: BacktestConfig,
     schedule: WalkForwardConfig,
@@ -552,10 +580,10 @@ def validate_walk_forward(
             "factory must expose build(train_window); a pre-built strategy "
             "would carry fitted state across windows"
         )
-    if corporate_actions.security_id != series.security_id:
-        raise QuantContractError(
-            "corporate actions must match the bar-series security_id"
-        )
+    # Fail closed here, before a single window is fitted: a leaked future bar
+    # would otherwise reach a strategy through train windows, which never run
+    # through the engine and so never hit its own guard.
+    series, corporate_actions = _enforced_inputs(dataset)
 
     trials_observed = len(cost_sensitivity.scenarios)
     if disclosure.trials_declared < trials_observed:
@@ -588,6 +616,7 @@ def validate_walk_forward(
     if insufficient:
         return ValidationReport(
             security_id=series.security_id,
+            dataset_sha256=dataset.content_sha256,
             series_sha256=series.content_sha256,
             corporate_actions_sha256=corporate_actions.content_sha256,
             liquidity=liquidity,
@@ -632,29 +661,25 @@ def validate_walk_forward(
         # The lead-in bar is the decision bar for the first test fill. Without
         # it the test period's opening session is one the engine never
         # transitions into, so it can be neither traded into nor carry a split.
-        test_slice = _slice_series(
-            series, window.test_start_index - 1, window.test_end_index
+        window_dataset = _slice_dataset(
+            dataset, window.test_start_index - 1, window.test_end_index
         )
-        covered = frozenset(bar.session for bar in test_slice.bars[1:])
-        window_actions = _filter_actions(corporate_actions, covered)
         strategy, config_hash = fitted[window.window_index]
 
         for scenario in cost_sensitivity.scenarios:
             strategy_result = run_backtest(
-                series=test_slice,
+                dataset=window_dataset,
                 strategy=strategy,
                 costs=scenario.costs,
-                corporate_actions=window_actions,
                 liquidity=liquidity,
                 config=config,
                 strategy_id=strategy_id,
                 strategy_config_sha256=config_hash,
             )
             benchmark_result = run_backtest(
-                series=test_slice,
+                dataset=window_dataset,
                 strategy=benchmark,
                 costs=scenario.costs,
-                corporate_actions=window_actions,
                 liquidity=liquidity,
                 config=config,
                 strategy_id=BENCHMARK_STRATEGY_ID,
@@ -779,6 +804,7 @@ def validate_walk_forward(
 
     return ValidationReport(
         security_id=series.security_id,
+        dataset_sha256=dataset.content_sha256,
         series_sha256=series.content_sha256,
         corporate_actions_sha256=corporate_actions.content_sha256,
         liquidity=liquidity,

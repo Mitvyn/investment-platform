@@ -13,6 +13,7 @@ from investment_research_os.quant import (
     LookAheadError,
     OhlcvBar,
     ParticipationLimit,
+    PointInTimeDataset,
     QuantContractError,
     StockSplit,
     run_backtest,
@@ -153,18 +154,22 @@ class FloatStrategy:
 
 
 def run(
-    series: BarSeries,
+    source: object,
     strategy: object,
     costs: CostModel = FREE,
     cash: str = "10000",
     corporate_actions: CorporateActionSet = NO_ACTIONS,
     liquidity: ParticipationLimit = FULL_SESSION_LIQUIDITY,
 ):
+    dataset = (
+        source
+        if isinstance(source, PointInTimeDataset)
+        else make_dataset(source, corporate_actions)  # type: ignore[arg-type]
+    )
     return run_backtest(
-        series=series,
+        dataset=dataset,  # type: ignore[arg-type]
         strategy=strategy,  # type: ignore[arg-type]
         costs=costs,
-        corporate_actions=corporate_actions,
         liquidity=liquidity,
         config=BacktestConfig(
             starting_cash=Decimal(cash),
@@ -552,12 +557,15 @@ class ExecutionTests(unittest.TestCase):
         with self.assertRaisesRegex(QuantContractError, "transition session"):
             run(series, AlwaysLong(), corporate_actions=first_session)
 
+        # An action dated after the last bar can no longer reach the engine at
+        # all: the dataset receipt refuses it first, which is the stricter and
+        # earlier of the two guards.
         outside = CorporateActionSet(
             security_id=SECURITY_ID,
             source="fixture-actions",
             actions=(StockSplit(date(2026, 1, 9), 2, 1),),
         )
-        with self.assertRaisesRegex(QuantContractError, "transition session"):
+        with self.assertRaisesRegex(QuantContractError, "cutoff"):
             run(series, AlwaysLong(), corporate_actions=outside)
 
     def test_split_adjusts_held_shares_before_next_open_rebalance(self) -> None:
@@ -792,7 +800,7 @@ class ReproducibilityTests(unittest.TestCase):
         self.assertEqual(record["security_id"], SECURITY_ID)
         self.assertEqual(record["strategy_id"], "test-strategy")
         self.assertEqual(record["strategy_config_sha256"], STRATEGY_CONFIG_SHA256)
-        self.assertEqual(record["config"]["engine_version"], "quant-backtest-3")
+        self.assertEqual(record["config"]["engine_version"], "quant-backtest-4")
         self.assertEqual(record["config"]["fractional_share_policy"], "error")
 
     def test_starting_cash_must_be_positive(self) -> None:
@@ -805,10 +813,9 @@ class ReproducibilityTests(unittest.TestCase):
     def test_strategy_id_is_required(self) -> None:
         with self.assertRaises(QuantContractError):
             run_backtest(
-                series=flat_series(["100", "101"]),
+                dataset=make_dataset(flat_series(["100", "101"])),
                 strategy=AlwaysLong(),
                 costs=FREE,
-                corporate_actions=NO_ACTIONS,
                 liquidity=FULL_SESSION_LIQUIDITY,
                 config=BacktestConfig(
                     starting_cash=Decimal("1000"),
@@ -823,6 +830,46 @@ class ReproducibilityTests(unittest.TestCase):
             QuantContractError, "strategy_config_sha256 must be"
         ):
             run_backtest(
+                dataset=make_dataset(flat_series(["100", "101"])),
+                strategy=AlwaysLong(),
+                costs=FREE,
+                liquidity=FULL_SESSION_LIQUIDITY,
+                config=BacktestConfig(
+                    starting_cash=Decimal("1000"),
+                    fractional_share_policy="error",
+                ),
+                strategy_id="always-long.v1",
+                strategy_config_sha256="A" * 64,
+            )
+
+
+SOURCE_HASH = "b" * 64
+
+
+def make_dataset(
+    series: BarSeries,
+    corporate_actions: CorporateActionSet = NO_ACTIONS,
+    **overrides: object,
+) -> PointInTimeDataset:
+    """Wrap fixtures in the receipt the engine now requires."""
+
+    base: dict[str, object] = {
+        "series": series,
+        "corporate_actions": corporate_actions,
+        "as_of_cutoff": series.bars[-1].session,
+        "source_id": "fixture-source",
+        "source_revision": "rev-1",
+        "source_content_sha256": SOURCE_HASH,
+        "coverage_scope": "single_security",
+    }
+    base.update(overrides)
+    return PointInTimeDataset(**base)  # type: ignore[arg-type]
+
+
+class DatasetBoundaryTests(unittest.TestCase):
+    def test_raw_series_and_actions_are_no_longer_accepted(self) -> None:
+        with self.assertRaises(TypeError):
+            run_backtest(  # type: ignore[call-arg]
                 series=flat_series(["100", "101"]),
                 strategy=AlwaysLong(),
                 costs=FREE,
@@ -833,8 +880,110 @@ class ReproducibilityTests(unittest.TestCase):
                     fractional_share_policy="error",
                 ),
                 strategy_id="always-long.v1",
-                strategy_config_sha256="A" * 64,
+                strategy_config_sha256=STRATEGY_CONFIG_SHA256,
             )
+
+    def test_the_result_pins_the_dataset_hash(self) -> None:
+        dataset = make_dataset(flat_series(["100", "101"]))
+        result = run(dataset, AlwaysLong())
+        self.assertEqual(result.dataset_sha256, dataset.content_sha256)
+        self.assertEqual(
+            result.to_record()["dataset_sha256"], dataset.content_sha256
+        )
+        self.assertEqual(result.to_record()["engine_version"], "quant-backtest-4")
+
+    def test_source_revision_alone_changes_the_result_hash(self) -> None:
+        series = flat_series(["100", "101"])
+        first = run(make_dataset(series), AlwaysLong())
+        second = run(make_dataset(series, source_revision="rev-2"), AlwaysLong())
+        self.assertEqual(first.series_sha256, second.series_sha256)
+        self.assertNotEqual(first.content_sha256, second.content_sha256)
+
+    def test_source_content_hash_alone_changes_the_result_hash(self) -> None:
+        series = flat_series(["100", "101"])
+        first = run(make_dataset(series), AlwaysLong())
+        second = run(
+            make_dataset(series, source_content_sha256="c" * 64), AlwaysLong()
+        )
+        self.assertNotEqual(first.content_sha256, second.content_sha256)
+
+    def test_a_bar_after_the_cutoff_is_refused_before_the_strategy_runs(self) -> None:
+        # The dataclass would have refused this at construction, so the only
+        # way to reach the engine guard is to mutate a valid dataset. The
+        # engine must not trust an upstream check it cannot see.
+        dataset = make_dataset(flat_series(["100", "101", "102"]))
+        object.__setattr__(dataset, "as_of_cutoff", dataset.series.bars[0].session)
+        strategy = RecordingStrategy()
+        with self.assertRaisesRegex(QuantContractError, "cutoff"):
+            run(dataset, strategy)
+        self.assertEqual(strategy.cutoffs, [])
+
+    def test_an_action_after_the_cutoff_is_refused_before_the_strategy_runs(
+        self,
+    ) -> None:
+        series = flat_series(["100", "101", "102"])
+        actions = CorporateActionSet(
+            security_id=SECURITY_ID,
+            source="fixture-actions",
+            actions=(StockSplit(date(2026, 1, 7), 2, 1),),
+        )
+        dataset = make_dataset(series, actions)
+        object.__setattr__(dataset, "as_of_cutoff", date(2026, 1, 6))
+        strategy = RecordingStrategy()
+        with self.assertRaisesRegex(QuantContractError, "cutoff"):
+            run(dataset, strategy)
+        self.assertEqual(strategy.cutoffs, [])
+
+    def test_a_non_dataset_input_is_refused(self) -> None:
+        with self.assertRaisesRegex(QuantContractError, "PointInTimeDataset"):
+            run_backtest(
+                dataset=flat_series(["100", "101"]),  # type: ignore[arg-type]
+                strategy=AlwaysLong(),
+                costs=FREE,
+                liquidity=FULL_SESSION_LIQUIDITY,
+                config=BacktestConfig(
+                    starting_cash=Decimal("1000"),
+                    fractional_share_policy="error",
+                ),
+                strategy_id="always-long.v1",
+                strategy_config_sha256=STRATEGY_CONFIG_SHA256,
+            )
+
+    def test_the_result_hash_ignores_the_ambient_decimal_context(self) -> None:
+        dataset = make_dataset(flat_series(["100", "104", "99"]))
+        baseline = run(dataset, AlwaysLong()).content_sha256
+        for precision in (5, 60):
+            with localcontext() as ctx:
+                ctx.prec = precision
+                self.assertEqual(run(dataset, AlwaysLong()).content_sha256, baseline)
+
+    def test_a_split_still_applies_through_the_dataset(self) -> None:
+        series = flat_series(["100", "50", "50"])
+        actions = CorporateActionSet(
+            security_id=SECURITY_ID,
+            source="fixture-actions",
+            actions=(StockSplit(date(2026, 1, 6), 2, 1),),
+        )
+        result = run(make_dataset(series, actions), AlwaysLong())
+        applications = result.corporate_action_applications
+        self.assertEqual(len(applications), 1)
+        self.assertEqual(applications[0].shares_before * 2, applications[0].shares_after)
+
+    def test_the_participation_cap_still_applies_through_the_dataset(self) -> None:
+        capped = ParticipationLimit(
+            max_participation_bps=Decimal("1"),
+            volume_basis="execution_bar",
+            zero_volume_policy="block",
+            unfilled_policy="cancel",
+            min_fill_shares=0,
+        )
+        result = run(
+            make_dataset(flat_series(["100", "100"])),
+            AlwaysLong(),
+            liquidity=capped,
+        )
+        self.assertEqual(result.fill_attempts[0].limit_reason, "participation_capped")
+        self.assertGreater(result.total_unfilled_shares, 0)
 
 
 class IsolationTests(unittest.TestCase):

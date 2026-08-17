@@ -13,12 +13,14 @@ from investment_research_os.quant import (
     LookAheadError,
     OhlcvBar,
     ParticipationLimit,
+    PointInTimeDataset,
     QuantContractError,
     StockSplit,
     run_backtest,
 )
 from investment_research_os.quant.validation import (
     CostScenario,
+    _slice_dataset,
     CostSensitivityConfig,
     MultipleTestingDisclosure,
     VALIDATION_VERSION,
@@ -207,8 +209,30 @@ def disclosure(**overrides: object) -> MultipleTestingDisclosure:
     return MultipleTestingDisclosure(**base)  # type: ignore[arg-type]
 
 
+SOURCE_HASH = "b" * 64
+
+
+def make_dataset(
+    series: BarSeries,
+    corporate_actions: CorporateActionSet | None = None,
+    **overrides: object,
+) -> PointInTimeDataset:
+    base: dict[str, object] = {
+        "series": series,
+        "corporate_actions": corporate_actions or no_actions(),
+        "as_of_cutoff": series.bars[-1].session,
+        "source_id": "fixture-source",
+        "source_revision": "rev-1",
+        "source_content_sha256": SOURCE_HASH,
+        "coverage_scope": "single_security",
+    }
+    base.update(overrides)
+    return PointInTimeDataset(**base)  # type: ignore[arg-type]
+
+
 def validate(
     *,
+    dataset: PointInTimeDataset | None = None,
     series: BarSeries | None = None,
     factory: object | None = None,
     liquidity: ParticipationLimit = OPEN_LIQUIDITY,
@@ -218,8 +242,11 @@ def validate(
     testing: MultipleTestingDisclosure | None = None,
 ):
     return validate_walk_forward(
-        series=series or make_series(declining_prices(120)),
-        corporate_actions=corporate_actions or no_actions(),
+        dataset=dataset
+        or make_dataset(
+            series or make_series(declining_prices(120)),
+            corporate_actions,
+        ),
         liquidity=liquidity,
         config=CONFIG,
         schedule=walk_forward or schedule(),
@@ -366,10 +393,9 @@ class CorporateActionTests(unittest.TestCase):
         )
         with self.assertRaises(QuantContractError):
             run_backtest(
-                series=naked_slice,
+                dataset=make_dataset(naked_slice, actions),
                 strategy=AlwaysLong(),
                 costs=FREE,
-                corporate_actions=actions,
                 liquidity=OPEN_LIQUIDITY,
                 config=CONFIG,
                 strategy_id="probe",
@@ -406,6 +432,101 @@ class CorporateActionTests(unittest.TestCase):
         )
         report = validate(series=series, corporate_actions=actions)
         self.assertTrue(report.windows)
+
+
+class DatasetBoundaryTests(unittest.TestCase):
+    def test_raw_series_and_actions_are_no_longer_accepted(self) -> None:
+        with self.assertRaises(TypeError):
+            validate_walk_forward(  # type: ignore[call-arg]
+                series=make_series(declining_prices(120)),
+                corporate_actions=no_actions(),
+                liquidity=OPEN_LIQUIDITY,
+                config=CONFIG,
+                schedule=schedule(),
+                factory=FlatFactory(),
+                strategy_id="fixture-strategy",
+                cost_sensitivity=sensitivity(("free", FREE), ("retail", RETAIL)),
+                disclosure=disclosure(),
+                annualisation_periods=1,
+            )
+
+    def test_the_report_pins_the_parent_dataset_hash(self) -> None:
+        dataset = make_dataset(make_series(declining_prices(120)))
+        report = validate(dataset=dataset)
+        record = report.to_record()
+        self.assertEqual(report.dataset_sha256, dataset.content_sha256)
+        self.assertEqual(record["dataset_sha256"], dataset.content_sha256)
+        self.assertEqual(record["validation_version"], "quant-validation-2")
+        self.assertEqual(record["engine_version"], "quant-backtest-4")
+
+    def test_source_revision_alone_changes_the_report_hash(self) -> None:
+        series = make_series(declining_prices(120))
+        first = validate(dataset=make_dataset(series))
+        second = validate(dataset=make_dataset(series, source_revision="rev-2"))
+        self.assertEqual(first.series_sha256, second.series_sha256)
+        self.assertNotEqual(first.content_sha256, second.content_sha256)
+
+    def test_source_content_hash_alone_changes_the_report_hash(self) -> None:
+        series = make_series(declining_prices(120))
+        first = validate(dataset=make_dataset(series))
+        second = validate(
+            dataset=make_dataset(series, source_content_sha256="c" * 64)
+        )
+        self.assertNotEqual(first.content_sha256, second.content_sha256)
+
+    def test_a_bar_after_the_cutoff_is_refused_before_any_fitting(self) -> None:
+        dataset = make_dataset(make_series(declining_prices(120)))
+        object.__setattr__(dataset, "as_of_cutoff", dataset.series.bars[0].session)
+        factory = FlatFactory()
+        with self.assertRaisesRegex(QuantContractError, "cutoff"):
+            validate(dataset=dataset, factory=factory)
+        self.assertEqual(factory.calls, 0)
+
+    def test_an_action_after_the_cutoff_is_refused_before_any_fitting(self) -> None:
+        series = make_series(declining_prices(120))
+        actions = CorporateActionSet(
+            security_id=SECURITY_ID,
+            source="fixture",
+            actions=(
+                StockSplit(
+                    effective_session=series.bars[100].session,
+                    new_shares=2,
+                    old_shares=1,
+                ),
+            ),
+        )
+        dataset = make_dataset(series, actions)
+        object.__setattr__(dataset, "as_of_cutoff", series.bars[50].session)
+        factory = FlatFactory()
+        with self.assertRaisesRegex(QuantContractError, "cutoff"):
+            validate(dataset=dataset, factory=factory)
+        self.assertEqual(factory.calls, 0)
+
+    def test_a_window_slice_keeps_the_parent_declarations_and_no_future_bars(
+        self,
+    ) -> None:
+        series = make_series(declining_prices(120))
+        parent = make_dataset(series)
+        sliced = _slice_dataset(parent, 10, 20)
+        self.assertEqual(sliced.source_id, parent.source_id)
+        self.assertEqual(sliced.source_revision, parent.source_revision)
+        self.assertEqual(
+            sliced.source_content_sha256, parent.source_content_sha256
+        )
+        self.assertEqual(sliced.as_of_cutoff, parent.as_of_cutoff)
+        self.assertEqual(sliced.coverage_scope, parent.coverage_scope)
+        self.assertEqual(sliced.security_id, parent.security_id)
+        self.assertEqual(sliced.series.bars, series.bars[10:21])
+        self.assertEqual(sliced.series.bars[-1].session, series.bars[20].session)
+
+    def test_the_report_hash_ignores_the_ambient_decimal_context(self) -> None:
+        from decimal import Context, localcontext
+
+        dataset = make_dataset(make_series(declining_prices(120)))
+        baseline = validate(dataset=dataset).content_sha256
+        for precision in (5, 60):
+            with localcontext(Context(prec=precision)):
+                self.assertEqual(validate(dataset=dataset).content_sha256, baseline)
 
 
 class LiquidityTests(unittest.TestCase):
@@ -637,7 +758,7 @@ class RecordTests(unittest.TestCase):
         self.assertEqual(record["series_sha256"], series.content_sha256)
         self.assertEqual(record["security_id"], SECURITY_ID)
         self.assertEqual(record["validation_version"], VALIDATION_VERSION)
-        self.assertEqual(record["engine_version"], "quant-backtest-3")
+        self.assertEqual(record["engine_version"], "quant-backtest-4")
         self.assertIn("benchmark_config_sha256", record)
 
     def test_the_record_contains_no_floats(self) -> None:
