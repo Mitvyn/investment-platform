@@ -110,24 +110,7 @@ class WalkForwardConfig:
     min_total_trades: int
 
     def __post_init__(self) -> None:
-        def integer(field: str, minimum: int) -> int:
-            value = getattr(self, field)
-            if isinstance(value, bool) or not isinstance(value, int):
-                raise QuantContractError(f"{field} must be an integer")
-            if value < minimum:
-                raise QuantContractError(f"{field} must be at least {minimum}")
-            return value
-
-        # A BarSeries needs two bars, so a one-session window cannot exist.
-        integer("train_sessions", 2)
-        integer("test_sessions", 2)
-        integer("step_sessions", 1)
-        integer("embargo_sessions", 0)
-        integer("min_windows", 1)
-        integer("min_trades_per_window", 0)
-        integer("min_total_trades", 0)
-        if self.window_mode not in ("rolling", "anchored"):
-            raise QuantContractError("window_mode must be rolling or anchored")
+        _check_schedule(self)
 
     @property
     def test_windows_overlap(self) -> bool:
@@ -239,8 +222,7 @@ class CostScenario:
     costs: CostModel
 
     def __post_init__(self) -> None:
-        if not isinstance(self.label, str) or not self.label.strip():
-            raise QuantContractError("cost scenario label must be non-empty")
+        _check_scenario(self)
 
     def to_record(self) -> dict[str, object]:
         return {"costs": self.costs.to_record(), "label": self.label}
@@ -258,17 +240,7 @@ class CostSensitivityConfig:
     baseline_label: str
 
     def __post_init__(self) -> None:
-        scenarios = tuple(self.scenarios)
-        object.__setattr__(self, "scenarios", scenarios)
-        if len(scenarios) < 2:
-            raise QuantContractError(
-                "cost sensitivity needs at least two scenarios to show sensitivity"
-            )
-        labels = [scenario.label for scenario in scenarios]
-        if len(set(labels)) != len(labels):
-            raise QuantContractError("cost scenario labels must be unique")
-        if self.baseline_label not in labels:
-            raise QuantContractError("baseline_label must name a declared scenario")
+        _check_sensitivity(self, coerce=True)
 
     @property
     def baseline(self) -> CostScenario:
@@ -302,23 +274,7 @@ class MultipleTestingDisclosure:
     alpha: str
 
     def __post_init__(self) -> None:
-        if (
-            isinstance(self.trials_declared, bool)
-            or not isinstance(self.trials_declared, int)
-            or self.trials_declared < 1
-        ):
-            raise QuantContractError("trials_declared must be a positive integer")
-        if not isinstance(self.family_label, str) or not self.family_label.strip():
-            raise QuantContractError("family_label must be non-empty")
-        if self.adjustment not in ("bonferroni", "none"):
-            raise QuantContractError("adjustment must be bonferroni or none")
-        if self.adjustment == "none" and self.trials_declared > 1:
-            raise QuantContractError(
-                "adjustment none is only honest for a single declared trial"
-            )
-        alpha = to_decimal(self.alpha, field="alpha")
-        if alpha <= 0 or alpha >= 1:
-            raise QuantContractError("alpha must lie between 0 and 1")
+        _check_disclosure(self)
 
     @property
     def alpha_effective(self) -> Decimal:
@@ -336,6 +292,157 @@ class MultipleTestingDisclosure:
             "family_label": self.family_label,
             "trials_declared": self.trials_declared,
         }
+
+
+# ------------------------------------------------------- policy revalidation
+#
+# Unlike the market-data and execution-input contracts, only
+# ``CostSensitivityConfig`` coerces anything at construction (a sequence of
+# scenarios into a tuple), so only its helper takes a ``coerce`` flag. The rest
+# validate without normalising, and one shared function per contract keeps the
+# construction-time and runtime rules from drifting apart.
+
+
+def _check_schedule(config: WalkForwardConfig) -> None:
+    """Every ``WalkForwardConfig`` invariant."""
+
+    def integer(field: str, minimum: int) -> int:
+        value = getattr(config, field)
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise QuantContractError(f"{field} must be an integer")
+        if value < minimum:
+            raise QuantContractError(f"{field} must be at least {minimum}")
+        return value
+
+    # A BarSeries needs two bars, so a one-session window cannot exist.
+    integer("train_sessions", 2)
+    integer("test_sessions", 2)
+    integer("step_sessions", 1)
+    integer("embargo_sessions", 0)
+    integer("min_windows", 1)
+    integer("min_trades_per_window", 0)
+    integer("min_total_trades", 0)
+    if config.window_mode not in ("rolling", "anchored"):
+        raise QuantContractError("window_mode must be rolling or anchored")
+
+
+def revalidate_walk_forward_config(config: object) -> WalkForwardConfig:
+    """Re-check a schedule before it decides window geometry.
+
+    A mutated ``step_sessions`` of 0 is the reason this cannot be left to the
+    generator: the window loop advances by that value, so a zero would spin
+    forever rather than raise.
+    """
+
+    if not isinstance(config, WalkForwardConfig):
+        raise QuantContractError(
+            f"expected a WalkForwardConfig, got {type(config).__name__}"
+        )
+    _check_schedule(config)
+    return config
+
+
+def _check_scenario(scenario: CostScenario) -> None:
+    """Every ``CostScenario`` invariant. Costs are checked by their own owner."""
+
+    if not isinstance(scenario.label, str) or not scenario.label.strip():
+        raise QuantContractError("cost scenario label must be non-empty")
+
+
+def _check_sensitivity(config: CostSensitivityConfig, *, coerce: bool) -> None:
+    """Every ``CostSensitivityConfig`` invariant, including scenario labels."""
+
+    if coerce:
+        scenarios = tuple(config.scenarios)
+        object.__setattr__(config, "scenarios", scenarios)
+    else:
+        if type(config.scenarios) is not tuple:
+            raise QuantContractError(
+                "cost scenarios must be a stored tuple, got "
+                f"{type(config.scenarios).__name__}"
+            )
+        scenarios = config.scenarios
+        for scenario in scenarios:
+            if not isinstance(scenario, CostScenario):
+                raise QuantContractError(
+                    f"cost scenarios must hold CostScenario, got "
+                    f"{type(scenario).__name__}"
+                )
+            _check_scenario(scenario)
+    if len(scenarios) < 2:
+        raise QuantContractError(
+            "cost sensitivity needs at least two scenarios to show sensitivity"
+        )
+    labels = [scenario.label for scenario in scenarios]
+    if len(set(labels)) != len(labels):
+        raise QuantContractError("cost scenario labels must be unique")
+    if not isinstance(config.baseline_label, str):
+        raise QuantContractError("baseline_label must be a string")
+    if config.baseline_label not in labels:
+        raise QuantContractError("baseline_label must name a declared scenario")
+
+
+def revalidate_cost_sensitivity(config: object) -> CostSensitivityConfig:
+    """Re-check the scenario set and the label the verdict is read from.
+
+    An unknown ``baseline_label`` used to surface as a raw ``KeyError`` after
+    every window had already run.
+    """
+
+    if not isinstance(config, CostSensitivityConfig):
+        raise QuantContractError(
+            f"expected a CostSensitivityConfig, got {type(config).__name__}"
+        )
+    _check_sensitivity(config, coerce=False)
+    return config
+
+
+def _check_disclosure(disclosure: MultipleTestingDisclosure) -> None:
+    """Every ``MultipleTestingDisclosure`` invariant.
+
+    ``alpha`` is required to be stored as text at both construction and
+    runtime. It is written verbatim into the report record, so a ``Decimal``
+    there would not survive canonical JSON, and accepting one would trade a
+    clear error here for an obscure one at hashing time.
+    """
+
+    if (
+        isinstance(disclosure.trials_declared, bool)
+        or not isinstance(disclosure.trials_declared, int)
+        or disclosure.trials_declared < 1
+    ):
+        raise QuantContractError("trials_declared must be a positive integer")
+    if not isinstance(disclosure.family_label, str) or not disclosure.family_label.strip():
+        raise QuantContractError("family_label must be non-empty")
+    if disclosure.adjustment not in ("bonferroni", "none"):
+        raise QuantContractError("adjustment must be bonferroni or none")
+    if disclosure.adjustment == "none" and disclosure.trials_declared > 1:
+        raise QuantContractError(
+            "adjustment none is only honest for a single declared trial"
+        )
+    if not isinstance(disclosure.alpha, str):
+        raise QuantContractError("alpha must be decimal text")
+    alpha = to_decimal(disclosure.alpha, field="alpha")
+    if alpha <= 0 or alpha >= 1:
+        raise QuantContractError("alpha must lie between 0 and 1")
+
+
+def revalidate_multiple_testing_disclosure(
+    disclosure: object,
+) -> MultipleTestingDisclosure:
+    """Re-check the disclosure before it sets the significance threshold.
+
+    A mutated ``adjustment`` of ``"none"`` alongside several declared trials
+    would restore the unadjusted alpha, letting a run clear a threshold the
+    correction says it never met.
+    """
+
+    if not isinstance(disclosure, MultipleTestingDisclosure):
+        raise QuantContractError(
+            f"expected a MultipleTestingDisclosure, got {type(disclosure).__name__}"
+        )
+    _check_disclosure(disclosure)
+    return disclosure
 
 
 class StrategyFactory(Protocol):
@@ -585,19 +692,18 @@ def validate_walk_forward(
     # run through the engine, so a leaked future bar or a forged provenance
     # field would otherwise reach a factory without ever meeting the engine's
     # own recheck.
+    # Policy first: the schedule decides window geometry and the disclosure
+    # decides the significance threshold, so both must be sound before anything
+    # is measured. The scenario shape is checked here too, so an unknown
+    # baseline label cannot surface as a KeyError after every window has run.
+    revalidate_walk_forward_config(schedule)
+    revalidate_multiple_testing_disclosure(disclosure)
+    revalidate_cost_sensitivity(cost_sensitivity)
+
     series, corporate_actions = _enforced_inputs(dataset)
     # Every scenario's costs too: a mutated scenario would otherwise reach the
     # engine only on the window that used it, after fitting had already run.
-    if type(cost_sensitivity.scenarios) is not tuple:
-        raise QuantContractError(
-            "cost scenarios must be a stored tuple, got "
-            f"{type(cost_sensitivity.scenarios).__name__}"
-        )
     for scenario in cost_sensitivity.scenarios:
-        if not isinstance(scenario, CostScenario):
-            raise QuantContractError(
-                f"cost scenarios must hold CostScenario, got {type(scenario).__name__}"
-            )
         revalidate_execution_inputs(
             costs=scenario.costs, liquidity=liquidity, config=config
         )

@@ -784,6 +784,167 @@ class ExecutionInputRevalidationTests(unittest.TestCase):
                 )
 
 
+SCHEDULE_MUTATIONS = (
+    ("train_sessions_zero", "train_sessions", 0),
+    ("train_sessions_negative", "train_sessions", -5),
+    ("test_sessions_one", "test_sessions", 1),
+    ("step_sessions_zero", "step_sessions", 0),
+    ("embargo_negative", "embargo_sessions", -1),
+    ("embargo_boolean", "embargo_sessions", True),
+    ("min_windows_zero", "min_windows", 0),
+    ("min_trades_negative", "min_trades_per_window", -1),
+    ("min_total_trades_negative", "min_total_trades", -1),
+    ("min_total_trades_string", "min_total_trades", "0"),
+    ("window_mode_invalid", "window_mode", "expanding"),
+)
+
+DISCLOSURE_MUTATIONS = (
+    ("trials_zero", "trials_declared", 0),
+    ("trials_negative", "trials_declared", -3),
+    ("trials_boolean", "trials_declared", True),
+    ("trials_string", "trials_declared", "2"),
+    ("adjustment_invalid", "adjustment", "holm"),
+    ("adjustment_none_with_many_trials", "adjustment", "none"),
+    ("alpha_zero", "alpha", "0"),
+    ("alpha_one", "alpha", "1"),
+    ("alpha_negative", "alpha", "-0.05"),
+    ("alpha_not_a_number", "alpha", "forged"),
+    ("alpha_float", "alpha", 0.05),
+    ("family_label_blank", "family_label", "   "),
+    ("family_label_non_string", "family_label", 7),
+)
+
+
+class PolicyRevalidationTests(unittest.TestCase):
+    def _validate(self, *, factory, schedule_config=None, testing=None, costs=None):
+        return validate_walk_forward(
+            dataset=make_dataset(make_series(declining_prices(120))),
+            liquidity=OPEN_LIQUIDITY,
+            config=CONFIG,
+            schedule=schedule_config or schedule(),
+            factory=factory,
+            strategy_id="fixture-strategy",
+            cost_sensitivity=costs
+            or sensitivity(("free", _fresh(FREE)), ("retail", _fresh(RETAIL))),
+            disclosure=testing or disclosure(),
+            annualisation_periods=1,
+        )
+
+    def test_a_mutated_schedule_is_refused_before_any_fitting(self) -> None:
+        for label, field, value in SCHEDULE_MUTATIONS:
+            with self.subTest(mutation=label):
+                mutated = schedule()
+                object.__setattr__(mutated, field, value)
+                factory = FlatFactory()
+                with self.assertRaises(QuantContractError):
+                    self._validate(factory=factory, schedule_config=mutated)
+                self.assertEqual(factory.calls, 0)
+
+    def test_a_mutated_disclosure_is_refused_before_any_fitting(self) -> None:
+        for label, field, value in DISCLOSURE_MUTATIONS:
+            with self.subTest(mutation=label):
+                mutated = disclosure(trials_declared=4)
+                object.__setattr__(mutated, field, value)
+                factory = FlatFactory()
+                with self.assertRaises(QuantContractError):
+                    self._validate(factory=factory, testing=mutated)
+                self.assertEqual(factory.calls, 0)
+
+    def test_declaring_no_adjustment_cannot_dodge_the_correction(self) -> None:
+        # The constructor refuses adjustment="none" with several trials, so the
+        # only way to reach it is mutation. If it crossed, alpha_effective would
+        # be the raw alpha and the run would clear a threshold it never met.
+        mutated = disclosure(trials_declared=4, alpha="0.05")
+        object.__setattr__(mutated, "adjustment", "none")
+        self.assertEqual(mutated.alpha_effective, Decimal("0.05"))
+        factory = FlatFactory()
+        with self.assertRaises(QuantContractError):
+            self._validate(factory=factory, testing=mutated)
+        self.assertEqual(factory.calls, 0)
+
+    def test_a_mutated_cost_sensitivity_is_refused_before_any_fitting(self) -> None:
+        def to_list(config: CostSensitivityConfig) -> None:
+            object.__setattr__(config, "scenarios", list(config.scenarios))
+
+        def to_empty(config: CostSensitivityConfig) -> None:
+            object.__setattr__(config, "scenarios", ())
+
+        def to_single(config: CostSensitivityConfig) -> None:
+            object.__setattr__(config, "scenarios", config.scenarios[:1])
+
+        def to_objects(config: CostSensitivityConfig) -> None:
+            object.__setattr__(config, "scenarios", (object(), object()))
+
+        def duplicate_labels(config: CostSensitivityConfig) -> None:
+            object.__setattr__(config.scenarios[1], "label", "free")
+
+        def blank_label(config: CostSensitivityConfig) -> None:
+            object.__setattr__(config.scenarios[0], "label", "  ")
+
+        def non_string_label(config: CostSensitivityConfig) -> None:
+            object.__setattr__(config.scenarios[0], "label", 3)
+
+        def unknown_baseline(config: CostSensitivityConfig) -> None:
+            object.__setattr__(config, "baseline_label", "forged")
+
+        def non_string_baseline(config: CostSensitivityConfig) -> None:
+            object.__setattr__(config, "baseline_label", None)
+
+        def scenario_costs_negative(config: CostSensitivityConfig) -> None:
+            object.__setattr__(
+                config.scenarios[1].costs, "slippage_bps", Decimal("-1")
+            )
+
+        mutations = (
+            ("scenarios_to_list", to_list),
+            ("scenarios_empty", to_empty),
+            ("scenarios_single", to_single),
+            ("scenarios_are_objects", to_objects),
+            ("duplicate_labels", duplicate_labels),
+            ("blank_label", blank_label),
+            ("non_string_label", non_string_label),
+            ("unknown_baseline", unknown_baseline),
+            ("non_string_baseline", non_string_baseline),
+            ("scenario_costs_negative", scenario_costs_negative),
+        )
+        for label, mutate in mutations:
+            with self.subTest(mutation=label):
+                mutated = sensitivity(
+                    ("free", _fresh(FREE)), ("retail", _fresh(RETAIL))
+                )
+                mutate(mutated)
+                factory = FlatFactory()
+                with self.assertRaises(QuantContractError):
+                    self._validate(factory=factory, costs=mutated)
+                self.assertEqual(factory.calls, 0)
+
+    def test_a_non_contract_policy_input_is_refused(self) -> None:
+        for field in ("schedule_config", "testing", "costs"):
+            with self.subTest(input=field):
+                factory = FlatFactory()
+                with self.assertRaises(QuantContractError):
+                    self._validate(factory=factory, **{field: object()})
+                self.assertEqual(factory.calls, 0)
+
+    def test_valid_policy_inputs_still_report_and_hash_stably(self) -> None:
+        from decimal import Context, localcontext
+
+        factory_report = self._validate(factory=FlatFactory())
+        for precision in (5, 60):
+            with localcontext(Context(prec=precision)):
+                self.assertEqual(
+                    self._validate(factory=FlatFactory()).content_sha256,
+                    factory_report.content_sha256,
+                )
+
+    def test_policy_constructors_still_accept_their_declared_input(self) -> None:
+        self.assertEqual(disclosure(alpha="0.05").alpha_effective, Decimal("0.025"))
+        self.assertEqual(
+            sensitivity(("free", FREE), ("retail", RETAIL)).baseline.label, "retail"
+        )
+        self.assertTrue(schedule(window_mode="anchored").window_mode == "anchored")
+
+
 class LiquidityTests(unittest.TestCase):
     def test_the_liquidity_limit_is_pinned_in_the_record(self) -> None:
         report = validate()
