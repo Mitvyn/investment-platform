@@ -16,9 +16,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+from dataclasses import dataclass
 from datetime import date, timedelta
 from decimal import Decimal
-from typing import Callable, Sequence
+from types import MappingProxyType
+from typing import Callable, Mapping, Sequence
 
 from investment_research_os.quant import PointInTimeDataset, QuantContractError
 from investment_research_os.quant_sources import (
@@ -60,10 +62,10 @@ YFINANCE_WINDOW_BLOCKER = (
     "cannot reach the network to confirm it. If the assumption is wrong every "
     "receipt is one session short or one session long, which is a silent "
     "point-in-time error rather than a loud one. Confirm the end-boundary "
-    "semantics against official documentation, then pass "
-    "window_semantics_reference to unblock the fetch. Offline mapping tests "
-    "may pass a fixture reference; only a real citation should reach a live "
-    "call."
+    "semantics against official documentation, register the pinned evidence "
+    "record in WINDOW_SEMANTICS_REGISTRY, and pass the resulting "
+    "WindowSemanticsPolicy. No free-form reference, plausible policy name, or "
+    "test-scoped fixture can unblock a live fetch."
 )
 
 MOOMOO_HISTORY_BLOCKER = (
@@ -78,6 +80,152 @@ MOOMOO_HISTORY_BLOCKER = (
     "against official documentation first, then implement fetch_daily_history "
     "to return a HistoryPayload; nothing above this transport changes."
 )
+
+
+@dataclass(frozen=True, slots=True)
+class WindowSemanticsPolicy:
+    """One claim about a provider's history-window boundary, with its evidence.
+
+    ``end_is_exclusive`` decides whether the cutoff session is included in a
+    receipt. It is a point-in-time correctness fact, not a preference, so it may
+    not be asserted by whoever happens to be calling. A policy is only honoured
+    if its ID is registered in :data:`WINDOW_SEMANTICS_REGISTRY` and its pinned
+    evidence digest and boundary claim both match what was registered.
+
+    The evidence digest pins the documentation that was read. It does not prove
+    the documentation says what the registrant claims; it proves that the claim
+    has not drifted from the artifact it was recorded against, and that nobody
+    edited the boundary flag afterwards.
+    """
+
+    policy_id: str
+    end_is_exclusive: bool
+    evidence_sha256: str
+    verified_on: date
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.policy_id, str) or not self.policy_id.strip():
+            raise TransportError("policy_id must be a non-empty string")
+        if type(self.end_is_exclusive) is not bool:
+            raise TransportError("end_is_exclusive must be a boolean")
+        digest = self.evidence_sha256
+        if (
+            not isinstance(digest, str)
+            or len(digest) != 64
+            or not set(digest) <= frozenset("0123456789abcdef")
+        ):
+            raise TransportError(
+                "evidence_sha256 must be a lowercase 64-character SHA-256 digest"
+            )
+        if type(self.verified_on) is not date:
+            raise TransportError("verified_on must be a date")
+
+
+@dataclass(frozen=True, slots=True)
+class _RegisteredPolicy:
+    """What the registry pins for one policy ID."""
+
+    evidence_sha256: str
+    end_is_exclusive: bool
+    scope: str
+    note: str
+
+
+#: The fixture policy. Its scope is ``test``, which the transport refuses on any
+#: path that could reach a provider. It exists so offline mapping tests can run
+#: without inventing a plausible-looking verified policy, which is exactly the
+#: thing an adversarial caller would do.
+TEST_WINDOW_SEMANTICS_POLICY_ID = "test-fixture-unverified-window-semantics"
+TEST_WINDOW_SEMANTICS_EVIDENCE = (
+    b"investment-research-os/test-fixture/yfinance-window-semantics/unverified"
+)
+TEST_WINDOW_SEMANTICS_EVIDENCE_SHA256 = hashlib.sha256(
+    TEST_WINDOW_SEMANTICS_EVIDENCE
+).hexdigest()
+
+#: Read-only on purpose. A mutable registry would let any caller register the
+#: policy it wants and satisfy the allowlist it just wrote.
+#:
+#: There is deliberately **no verified yfinance entry**. Adding one requires
+#: reading official documentation, which has not happened, so the production
+#: path is blocked by the absence of a record rather than by a flag someone
+#: could flip.
+WINDOW_SEMANTICS_REGISTRY: Mapping[str, _RegisteredPolicy] = MappingProxyType(
+    {
+        TEST_WINDOW_SEMANTICS_POLICY_ID: _RegisteredPolicy(
+            evidence_sha256=TEST_WINDOW_SEMANTICS_EVIDENCE_SHA256,
+            end_is_exclusive=True,
+            scope="test",
+            note=(
+                "Fixture only. Records the untested assumption that yfinance "
+                "treats end as exclusive. Not evidence of anything."
+            ),
+        )
+    }
+)
+
+
+def test_window_semantics_policy() -> WindowSemanticsPolicy:
+    """The one policy offline tests may use. Refused on any live path."""
+
+    return WindowSemanticsPolicy(
+        policy_id=TEST_WINDOW_SEMANTICS_POLICY_ID,
+        end_is_exclusive=True,
+        evidence_sha256=TEST_WINDOW_SEMANTICS_EVIDENCE_SHA256,
+        verified_on=date(2026, 8, 17),
+    )
+
+
+def authorize_window_semantics(
+    policy: object, *, allow_test_scope: bool, live_path: bool
+) -> _RegisteredPolicy:
+    """Resolve a policy against the registry, or refuse.
+
+    Fails closed in every direction: a non-policy object, an unregistered ID, a
+    digest that does not match the pinned record, a boundary claim that does not
+    match the pinned record, a test-scoped policy without the explicit test
+    opt-in, and a test-scoped policy on a path that could reach a provider.
+
+    ``TransportBlockedError`` is used throughout rather than ``TransportError``,
+    because none of these are retryable conditions: they are all missing
+    authorization.
+    """
+
+    if not isinstance(policy, WindowSemanticsPolicy):
+        raise TransportBlockedError(YFINANCE_WINDOW_BLOCKER)
+    registered = WINDOW_SEMANTICS_REGISTRY.get(policy.policy_id)
+    if registered is None:
+        raise TransportBlockedError(
+            f"window semantics policy {policy.policy_id!r} is not registered. "
+            + YFINANCE_WINDOW_BLOCKER
+        )
+    if policy.evidence_sha256 != registered.evidence_sha256:
+        raise TransportBlockedError(
+            f"window semantics policy {policy.policy_id!r} does not match its "
+            "pinned evidence digest. " + YFINANCE_WINDOW_BLOCKER
+        )
+    if policy.end_is_exclusive != registered.end_is_exclusive:
+        raise TransportBlockedError(
+            f"window semantics policy {policy.policy_id!r} claims a different "
+            "end boundary than the pinned record. " + YFINANCE_WINDOW_BLOCKER
+        )
+    if registered.scope == "test":
+        if not allow_test_scope:
+            raise TransportBlockedError(
+                "a test-scoped window semantics policy requires an explicit "
+                "test opt-in. " + YFINANCE_WINDOW_BLOCKER
+            )
+        if live_path:
+            raise TransportBlockedError(
+                "a test-scoped window semantics policy may never authorize a "
+                "live fetch. " + YFINANCE_WINDOW_BLOCKER
+            )
+    elif registered.scope != "verified":
+        raise TransportBlockedError(
+            f"window semantics scope {registered.scope!r} is not recognized. "
+            + YFINANCE_WINDOW_BLOCKER
+        )
+    return registered
 
 
 class LiveQuantSource:
@@ -254,11 +402,13 @@ class YFinanceHistoryTransport:
         module: object | None = None,
         caller: BoundedCaller | None = None,
         importer: Callable[[], object] | None = None,
-        window_semantics_reference: str | None = None,
+        window_semantics: WindowSemanticsPolicy | None = None,
+        allow_test_scope: bool = False,
     ) -> None:
         self.settings = settings
         self._module = module
-        self._window_semantics_reference = window_semantics_reference
+        self._window_semantics = window_semantics
+        self._allow_test_scope = allow_test_scope
         self._importer = importer or _import_yfinance
         self._caller = caller or BoundedCaller(
             policy=YFINANCE_RETRY_POLICY,
@@ -268,9 +418,13 @@ class YFinanceHistoryTransport:
     def fetch_daily_history(
         self, ticker: str, *, start: date, end: date
     ) -> HistoryPayload:
-        reference = self._window_semantics_reference
-        if not isinstance(reference, str) or not reference.strip():
-            raise TransportBlockedError(YFINANCE_WINDOW_BLOCKER)
+        # A live path is any path that could reach a provider: no injected
+        # module means the real library is imported and called.
+        authorize_window_semantics(
+            self._window_semantics,
+            allow_test_scope=self._allow_test_scope,
+            live_path=self._module is None,
+        )
         module = self._module if self._module is not None else self._importer()
         version = getattr(module, "__version__", None)
         if version != self.settings.library_version:
@@ -511,7 +665,13 @@ class MoomooHistoryTransport:
 
 __all__ = [
     "MOOMOO_HISTORY_BLOCKER",
+    "TEST_WINDOW_SEMANTICS_EVIDENCE_SHA256",
+    "TEST_WINDOW_SEMANTICS_POLICY_ID",
+    "WINDOW_SEMANTICS_REGISTRY",
+    "WindowSemanticsPolicy",
     "YFINANCE_WINDOW_BLOCKER",
+    "authorize_window_semantics",
+    "test_window_semantics_policy",
     "MOOMOO_PROVIDER_ID",
     "LiveQuantSource",
     "MoomooHistoryTransport",

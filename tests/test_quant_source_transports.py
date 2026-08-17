@@ -17,10 +17,16 @@ except ImportError:  # pragma: no cover - exercised by the skip
 from workers.market.client import YFinanceSettings
 from workers.quant_sources.live import (
     MOOMOO_HISTORY_BLOCKER,
+    TEST_WINDOW_SEMANTICS_EVIDENCE_SHA256,
+    TEST_WINDOW_SEMANTICS_POLICY_ID,
+    WINDOW_SEMANTICS_REGISTRY,
     YFINANCE_WINDOW_BLOCKER,
     LiveQuantSource,
     MoomooHistoryTransport,
+    WindowSemanticsPolicy,
     YFinanceHistoryTransport,
+    authorize_window_semantics,
+    test_window_semantics_policy,
 )
 from workers.quant_sources.transports import (
     BoundedCaller,
@@ -38,9 +44,10 @@ SECURITY_ID = "3f1b0c2e-9d4a-4c7f-b1e2-8a5d6c7f0912"
 CUTOFF = date(2026, 1, 7)
 START = date(2026, 1, 5)
 
-#: Stands in for an operator-supplied citation. Tests may assert the gate; only
-#: a real citation may unblock a live fetch.
-WINDOW_REFERENCE = "test-fixture://window-semantics-assumed"
+#: The only policy offline tests may use. It is registered as test-scoped, so
+#: it is refused on any path that could reach a provider, and it must be paired
+#: with an explicit test opt-in.
+TEST_POLICY = test_window_semantics_policy()
 
 
 class FakeClock:
@@ -473,7 +480,8 @@ class YFinanceTransportTests(unittest.TestCase):
         return YFinanceHistoryTransport(
             YFinanceSettings(),
             module=module,
-            window_semantics_reference=WINDOW_REFERENCE,
+            window_semantics=TEST_POLICY,
+            allow_test_scope=True,
             caller=BoundedCaller(
                 policy=RetryPolicy(max_attempts=3, backoff_seconds=1.0),
                 rate_limit=RateLimit(max_calls=5, per_seconds=60.0),
@@ -682,7 +690,8 @@ class NumpyScalarTests(unittest.TestCase):
         transport = YFinanceHistoryTransport(
             YFinanceSettings(),
             module=module,
-            window_semantics_reference=WINDOW_REFERENCE,
+            window_semantics=TEST_POLICY,
+            allow_test_scope=True,
             caller=BoundedCaller(
                 policy=RetryPolicy(max_attempts=1),
                 rate_limit=RateLimit(max_calls=5, per_seconds=60.0),
@@ -767,7 +776,8 @@ class PandasFrameTests(unittest.TestCase):
         result = YFinanceHistoryTransport(
             YFinanceSettings(),
             module=module,
-            window_semantics_reference=WINDOW_REFERENCE,
+            window_semantics=TEST_POLICY,
+            allow_test_scope=True,
         ).fetch_daily_history("RXRX", start=START, end=date(2026, 1, 6))
 
         self.assertEqual([bar.session for bar in result.bars], ["2026-01-05", "2026-01-06"])
@@ -862,31 +872,170 @@ class ProviderIdentityTests(unittest.TestCase):
 # --------------------------------------------------------------------------
 
 
-class WindowSemanticsBlockerTests(unittest.TestCase):
-    def test_the_live_path_is_blocked_without_a_documentation_reference(self) -> None:
-        with self.assertRaises(TransportBlockedError) as caught:
-            YFinanceHistoryTransport(YFinanceSettings()).fetch_daily_history(
-                "RXRX", start=START, end=CUTOFF
-            )
-        self.assertIn("end", str(caught.exception))
+class WindowSemanticsAuthorizationTests(unittest.TestCase):
+    """Nothing but a registered, digest-matching, correctly scoped policy passes."""
 
-    def test_the_blocker_names_official_documentation_as_the_gate(self) -> None:
+    def transport(self, **overrides: object) -> YFinanceHistoryTransport:
+        kwargs: dict[str, object] = {"module": FakeYFinanceModule()}
+        kwargs.update(overrides)
+        return YFinanceHistoryTransport(
+            YFinanceSettings(),
+            **kwargs,  # type: ignore[arg-type]
+        )
+
+    def fetch(self, transport: YFinanceHistoryTransport):
+        return transport.fetch_daily_history("RXRX", start=START, end=CUTOFF)
+
+    # --- the gate itself -------------------------------------------------
+
+    def test_no_policy_blocks_the_fetch(self) -> None:
+        with self.assertRaises(TransportBlockedError):
+            self.fetch(self.transport())
+
+    def test_the_blocker_names_official_documentation_and_the_registry(self) -> None:
         self.assertIn("official documentation", YFINANCE_WINDOW_BLOCKER)
         self.assertIn("exclusive", YFINANCE_WINDOW_BLOCKER)
+        self.assertIn("WINDOW_SEMANTICS_REGISTRY", YFINANCE_WINDOW_BLOCKER)
 
-    def test_an_injected_module_still_requires_a_reference(self) -> None:
-        with self.assertRaises(TransportBlockedError):
-            YFinanceHistoryTransport(
-                YFinanceSettings(), module=FakeYFinanceModule()
-            ).fetch_daily_history("RXRX", start=START, end=CUTOFF)
+    def test_the_registered_test_policy_authorizes_an_injected_module(self) -> None:
+        result = self.fetch(
+            self.transport(window_semantics=TEST_POLICY, allow_test_scope=True)
+        )
+        self.assertEqual(len(result.bars), 3)
 
-    def test_a_blank_reference_does_not_count_as_verification(self) -> None:
+    # --- adversarial: fabricated authorization ---------------------------
+
+    def test_a_free_form_string_cannot_unblock_the_fetch(self) -> None:
+        for fake in (
+            "https://ranchero.com/yfinance/docs",
+            "verified",
+            TEST_WINDOW_SEMANTICS_POLICY_ID,
+            TEST_WINDOW_SEMANTICS_EVIDENCE_SHA256,
+        ):
+            with self.subTest(fake=fake):
+                with self.assertRaises(TransportBlockedError):
+                    self.fetch(
+                        self.transport(
+                            window_semantics=fake, allow_test_scope=True
+                        )
+                    )
+
+    def test_an_unregistered_policy_id_cannot_unblock_the_fetch(self) -> None:
+        forged = WindowSemanticsPolicy(
+            policy_id="yfinance-end-exclusive-verified",
+            end_is_exclusive=True,
+            evidence_sha256=TEST_WINDOW_SEMANTICS_EVIDENCE_SHA256,
+            verified_on=date(2026, 8, 17),
+        )
+        with self.assertRaisesRegex(TransportBlockedError, "is not registered"):
+            self.fetch(
+                self.transport(window_semantics=forged, allow_test_scope=True)
+            )
+
+    def test_a_tampered_evidence_digest_cannot_unblock_the_fetch(self) -> None:
+        tampered = WindowSemanticsPolicy(
+            policy_id=TEST_WINDOW_SEMANTICS_POLICY_ID,
+            end_is_exclusive=True,
+            evidence_sha256="0" * 64,
+            verified_on=date(2026, 8, 17),
+        )
+        with self.assertRaisesRegex(TransportBlockedError, "pinned evidence digest"):
+            self.fetch(
+                self.transport(window_semantics=tampered, allow_test_scope=True)
+            )
+
+    def test_a_flipped_boundary_claim_cannot_unblock_the_fetch(self) -> None:
+        flipped = WindowSemanticsPolicy(
+            policy_id=TEST_WINDOW_SEMANTICS_POLICY_ID,
+            end_is_exclusive=False,
+            evidence_sha256=TEST_WINDOW_SEMANTICS_EVIDENCE_SHA256,
+            verified_on=date(2026, 8, 17),
+        )
+        with self.assertRaisesRegex(TransportBlockedError, "different end boundary"):
+            self.fetch(
+                self.transport(window_semantics=flipped, allow_test_scope=True)
+            )
+
+    def test_a_malformed_policy_cannot_be_constructed(self) -> None:
+        with self.assertRaises(TransportError):
+            WindowSemanticsPolicy(
+                policy_id="  ",
+                end_is_exclusive=True,
+                evidence_sha256=TEST_WINDOW_SEMANTICS_EVIDENCE_SHA256,
+                verified_on=date(2026, 8, 17),
+            )
+        with self.assertRaises(TransportError):
+            WindowSemanticsPolicy(
+                policy_id=TEST_WINDOW_SEMANTICS_POLICY_ID,
+                end_is_exclusive=True,
+                evidence_sha256="not-a-digest",
+                verified_on=date(2026, 8, 17),
+            )
+        with self.assertRaises(TransportError):
+            WindowSemanticsPolicy(
+                policy_id=TEST_WINDOW_SEMANTICS_POLICY_ID,
+                end_is_exclusive=True,
+                evidence_sha256=TEST_WINDOW_SEMANTICS_EVIDENCE_SHA256,
+                verified_on="2026-08-17",  # type: ignore[arg-type]
+            )
+
+    def test_the_registry_cannot_be_extended_at_runtime(self) -> None:
+        with self.assertRaises(TypeError):
+            WINDOW_SEMANTICS_REGISTRY["forged"] = object()  # type: ignore[index]
+
+    # --- adversarial: test scope may not reach production ----------------
+
+    def test_the_test_policy_requires_the_explicit_test_opt_in(self) -> None:
+        with self.assertRaisesRegex(TransportBlockedError, "explicit"):
+            self.fetch(self.transport(window_semantics=TEST_POLICY))
+
+    def test_the_test_policy_can_never_authorize_a_live_fetch(self) -> None:
+        # No injected module means the real library would be imported and
+        # called. The importer is a tripwire: reaching it is the failure.
+        def forbidden() -> object:
+            raise AssertionError("the live import path must not be reached")
+
+        transport = YFinanceHistoryTransport(
+            YFinanceSettings(),
+            window_semantics=TEST_POLICY,
+            allow_test_scope=True,
+            importer=forbidden,
+        )
+        with self.assertRaisesRegex(
+            TransportBlockedError, "may never authorize a live fetch"
+        ):
+            self.fetch(transport)
+
+    def test_the_test_opt_in_alone_authorizes_nothing(self) -> None:
         with self.assertRaises(TransportBlockedError):
-            YFinanceHistoryTransport(
-                YFinanceSettings(),
-                module=FakeYFinanceModule(),
-                window_semantics_reference="   ",
-            ).fetch_daily_history("RXRX", start=START, end=CUTOFF)
+            self.fetch(self.transport(allow_test_scope=True))
+
+    # --- the production path stays blocked by an absent record -----------
+
+    def test_no_verified_policy_is_registered(self) -> None:
+        # The production path is blocked by the absence of a record, not by a
+        # flag anyone could flip. This test fails the moment someone registers
+        # a verified yfinance policy, which is when the claim needs review.
+        self.assertEqual(
+            [
+                policy_id
+                for policy_id, entry in WINDOW_SEMANTICS_REGISTRY.items()
+                if entry.scope != "test"
+            ],
+            [],
+        )
+
+    def test_the_only_registered_policy_is_the_test_fixture(self) -> None:
+        self.assertEqual(
+            list(WINDOW_SEMANTICS_REGISTRY), [TEST_WINDOW_SEMANTICS_POLICY_ID]
+        )
+
+    def test_authorization_is_reusable_outside_the_transport(self) -> None:
+        registered = authorize_window_semantics(
+            TEST_POLICY, allow_test_scope=True, live_path=False
+        )
+        self.assertEqual(registered.scope, "test")
+        self.assertIn("Fixture only", registered.note)
 
 
 if __name__ == "__main__":
