@@ -1019,6 +1019,201 @@ class DatasetBoundaryTests(unittest.TestCase):
                 )
 
 
+def _split_dataset() -> PointInTimeDataset:
+    """A valid receipt carrying two ordered splits, for action mutations."""
+
+    series = flat_series(["100", "50", "25", "25"])
+    actions = CorporateActionSet(
+        security_id=SECURITY_ID,
+        source="fixture-actions",
+        actions=(
+            StockSplit(date(2026, 1, 6), 2, 1),
+            StockSplit(date(2026, 1, 7), 2, 1),
+        ),
+    )
+    return make_dataset(series, actions)
+
+
+def _plain_dataset() -> PointInTimeDataset:
+    return make_dataset(flat_series(["100", "101", "102"]))
+
+
+def _mutate_bar_open_negative(dataset: PointInTimeDataset) -> None:
+    object.__setattr__(dataset.series.bars[0], "open", Decimal("-1"))
+
+
+def _mutate_bar_open_float(dataset: PointInTimeDataset) -> None:
+    object.__setattr__(dataset.series.bars[0], "open", 100.0)
+
+
+def _mutate_bar_session_duplicate(dataset: PointInTimeDataset) -> None:
+    bars = dataset.series.bars
+    object.__setattr__(bars[1], "session", bars[0].session)
+
+
+def _mutate_bar_session_datetime(dataset: PointInTimeDataset) -> None:
+    object.__setattr__(
+        dataset.series.bars[0], "session", datetime(2026, 1, 5, 16, 0)
+    )
+
+
+def _mutate_bar_high_below_open(dataset: PointInTimeDataset) -> None:
+    object.__setattr__(dataset.series.bars[0], "high", Decimal("1"))
+
+
+def _mutate_bar_volume_negative(dataset: PointInTimeDataset) -> None:
+    object.__setattr__(dataset.series.bars[0], "volume", -5)
+
+
+def _mutate_bars_to_list(dataset: PointInTimeDataset) -> None:
+    object.__setattr__(dataset.series, "bars", list(dataset.series.bars))
+
+
+def _mutate_bars_contain_object(dataset: PointInTimeDataset) -> None:
+    object.__setattr__(
+        dataset.series, "bars", dataset.series.bars + (object(),)
+    )
+
+
+def _mutate_series_currency(dataset: PointInTimeDataset) -> None:
+    object.__setattr__(dataset.series, "currency", "usd")
+
+
+def _mutate_split_ratio_zero(dataset: PointInTimeDataset) -> None:
+    object.__setattr__(dataset.corporate_actions.actions[0], "new_shares", 0)
+
+
+def _mutate_split_ratio_bool(dataset: PointInTimeDataset) -> None:
+    object.__setattr__(dataset.corporate_actions.actions[0], "new_shares", True)
+
+
+def _mutate_split_ratio_unreduced(dataset: PointInTimeDataset) -> None:
+    # 4:2 is numerically 2:1, which is what the constructor would have stored.
+    # Runtime revalidation must reject the stored form rather than quietly
+    # reducing it, or a tampered object could be laundered back into a valid one.
+    action = dataset.corporate_actions.actions[0]
+    object.__setattr__(action, "new_shares", 4)
+    object.__setattr__(action, "old_shares", 2)
+
+
+def _mutate_split_ratio_identity(dataset: PointInTimeDataset) -> None:
+    object.__setattr__(dataset.corporate_actions.actions[0], "new_shares", 1)
+
+
+def _mutate_split_session_datetime(dataset: PointInTimeDataset) -> None:
+    object.__setattr__(
+        dataset.corporate_actions.actions[0],
+        "effective_session",
+        datetime(2026, 1, 6, 9, 30),
+    )
+
+
+def _mutate_actions_unordered(dataset: PointInTimeDataset) -> None:
+    actions = dataset.corporate_actions.actions
+    object.__setattr__(
+        dataset.corporate_actions, "actions", tuple(reversed(actions))
+    )
+
+
+def _mutate_actions_duplicate_session(dataset: PointInTimeDataset) -> None:
+    actions = dataset.corporate_actions.actions
+    object.__setattr__(
+        actions[1], "effective_session", actions[0].effective_session
+    )
+
+
+def _mutate_actions_to_list(dataset: PointInTimeDataset) -> None:
+    object.__setattr__(
+        dataset.corporate_actions,
+        "actions",
+        list(dataset.corporate_actions.actions),
+    )
+
+
+def _mutate_actions_contain_object(dataset: PointInTimeDataset) -> None:
+    object.__setattr__(
+        dataset.corporate_actions,
+        "actions",
+        (object(),),
+    )
+
+
+def _mutate_action_source(dataset: PointInTimeDataset) -> None:
+    object.__setattr__(dataset.corporate_actions, "source", "  ")
+
+
+BAR_MUTATIONS = (
+    ("bar_open_negative", _mutate_bar_open_negative),
+    ("bar_open_float", _mutate_bar_open_float),
+    ("bar_session_duplicate", _mutate_bar_session_duplicate),
+    ("bar_session_datetime", _mutate_bar_session_datetime),
+    ("bar_high_below_open", _mutate_bar_high_below_open),
+    ("bar_volume_negative", _mutate_bar_volume_negative),
+    ("bars_to_list", _mutate_bars_to_list),
+    ("bars_contain_object", _mutate_bars_contain_object),
+    ("series_currency", _mutate_series_currency),
+)
+
+ACTION_MUTATIONS = (
+    ("split_ratio_zero", _mutate_split_ratio_zero),
+    ("split_ratio_bool", _mutate_split_ratio_bool),
+    ("split_ratio_unreduced", _mutate_split_ratio_unreduced),
+    ("split_ratio_identity", _mutate_split_ratio_identity),
+    ("split_session_datetime", _mutate_split_session_datetime),
+    ("actions_unordered", _mutate_actions_unordered),
+    ("actions_duplicate_session", _mutate_actions_duplicate_session),
+    ("actions_to_list", _mutate_actions_to_list),
+    ("actions_contain_object", _mutate_actions_contain_object),
+    ("action_source_blank", _mutate_action_source),
+)
+
+
+class ChildContractRevalidationTests(unittest.TestCase):
+    def test_a_mutated_child_contract_is_refused_before_the_strategy_runs(
+        self,
+    ) -> None:
+        cases = tuple(
+            (label, mutate, _plain_dataset) for label, mutate in BAR_MUTATIONS
+        ) + tuple(
+            (label, mutate, _split_dataset) for label, mutate in ACTION_MUTATIONS
+        )
+        for label, mutate, build in cases:
+            with self.subTest(mutation=label):
+                dataset = build()
+                mutate(dataset)
+                strategy = RecordingStrategy()
+                with self.assertRaises(QuantContractError):
+                    run(dataset, strategy)
+                self.assertEqual(strategy.cutoffs, [])
+
+    def test_a_valid_receipt_with_splits_still_runs_and_hashes_stably(self) -> None:
+        dataset = _split_dataset()
+        baseline = run(dataset, AlwaysLong())
+        self.assertEqual(baseline.dataset_sha256, dataset.content_sha256)
+        self.assertEqual(len(baseline.corporate_action_applications), 2)
+        for precision in (5, 60):
+            with localcontext() as ctx:
+                ctx.prec = precision
+                self.assertEqual(
+                    run(dataset, AlwaysLong()).content_sha256,
+                    baseline.content_sha256,
+                )
+
+    def test_normal_construction_still_normalises_caller_input(self) -> None:
+        # Constructors keep coercing compatible inputs. Only runtime
+        # revalidation is strict, so this is not a tightening of the API.
+        self.assertEqual(StockSplit(date(2026, 1, 6), 4, 2).new_shares, 2)
+        bar = OhlcvBar(
+            session=date(2026, 1, 5),
+            open="100",
+            high="100",
+            low="100",
+            close="100",
+            volume=1,
+        )
+        self.assertEqual(bar.open, Decimal("100"))
+
+
 class IsolationTests(unittest.TestCase):
     def test_quant_imports_no_other_bounded_context(self) -> None:
         import pathlib

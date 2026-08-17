@@ -548,6 +548,142 @@ class DatasetBoundaryTests(unittest.TestCase):
                 self.assertEqual(factory.calls, 0)
 
 
+def _split_receipt() -> PointInTimeDataset:
+    series = make_series(declining_prices(120))
+    actions = CorporateActionSet(
+        security_id=SECURITY_ID,
+        source="fixture",
+        actions=(
+            StockSplit(series.bars[100].session, 2, 1),
+            StockSplit(series.bars[101].session, 2, 1),
+        ),
+    )
+    return make_dataset(series, actions)
+
+
+def _plain_receipt() -> PointInTimeDataset:
+    return make_dataset(make_series(declining_prices(120)))
+
+
+CHILD_MUTATIONS = (
+    (
+        "bar_open_negative",
+        _plain_receipt,
+        lambda d: object.__setattr__(d.series.bars[0], "open", Decimal("-1")),
+    ),
+    (
+        "bar_session_datetime",
+        _plain_receipt,
+        lambda d: object.__setattr__(
+            d.series.bars[0], "session", datetime(2026, 1, 5, 16, 0)
+        ),
+    ),
+    (
+        "bar_session_duplicate",
+        _plain_receipt,
+        lambda d: object.__setattr__(
+            d.series.bars[1], "session", d.series.bars[0].session
+        ),
+    ),
+    (
+        "bar_high_below_open",
+        _plain_receipt,
+        lambda d: object.__setattr__(d.series.bars[0], "high", Decimal("1")),
+    ),
+    (
+        "bars_to_list",
+        _plain_receipt,
+        lambda d: object.__setattr__(d.series, "bars", list(d.series.bars)),
+    ),
+    (
+        "bars_contain_object",
+        _plain_receipt,
+        lambda d: object.__setattr__(d.series, "bars", d.series.bars + (object(),)),
+    ),
+    (
+        "split_ratio_zero",
+        _split_receipt,
+        lambda d: object.__setattr__(d.corporate_actions.actions[0], "new_shares", 0),
+    ),
+    (
+        "split_ratio_bool",
+        _split_receipt,
+        lambda d: object.__setattr__(
+            d.corporate_actions.actions[0], "new_shares", True
+        ),
+    ),
+    (
+        "split_ratio_unreduced",
+        _split_receipt,
+        lambda d: [
+            object.__setattr__(d.corporate_actions.actions[0], "new_shares", 4),
+            object.__setattr__(d.corporate_actions.actions[0], "old_shares", 2),
+        ],
+    ),
+    (
+        "split_session_datetime",
+        _split_receipt,
+        lambda d: object.__setattr__(
+            d.corporate_actions.actions[0],
+            "effective_session",
+            datetime(2026, 4, 15, 9, 30),
+        ),
+    ),
+    (
+        "actions_unordered",
+        _split_receipt,
+        lambda d: object.__setattr__(
+            d.corporate_actions, "actions", tuple(reversed(d.corporate_actions.actions))
+        ),
+    ),
+    (
+        "actions_duplicate_session",
+        _split_receipt,
+        lambda d: object.__setattr__(
+            d.corporate_actions.actions[1],
+            "effective_session",
+            d.corporate_actions.actions[0].effective_session,
+        ),
+    ),
+    (
+        "actions_to_list",
+        _split_receipt,
+        lambda d: object.__setattr__(
+            d.corporate_actions, "actions", list(d.corporate_actions.actions)
+        ),
+    ),
+    (
+        "actions_contain_object",
+        _split_receipt,
+        lambda d: object.__setattr__(d.corporate_actions, "actions", (object(),)),
+    ),
+)
+
+
+class ChildContractRevalidationTests(unittest.TestCase):
+    def test_a_mutated_child_contract_is_refused_before_any_fitting(self) -> None:
+        for label, build, mutate in CHILD_MUTATIONS:
+            with self.subTest(mutation=label):
+                dataset = build()
+                mutate(dataset)
+                factory = FlatFactory()
+                with self.assertRaises(QuantContractError):
+                    validate(dataset=dataset, factory=factory)
+                self.assertEqual(factory.calls, 0)
+
+    def test_a_valid_receipt_with_splits_still_reports_and_hashes_stably(self) -> None:
+        from decimal import Context, localcontext
+
+        dataset = _split_receipt()
+        baseline = validate(dataset=dataset)
+        self.assertEqual(baseline.dataset_sha256, dataset.content_sha256)
+        for precision in (5, 60):
+            with localcontext(Context(prec=precision)):
+                self.assertEqual(
+                    validate(dataset=dataset).content_sha256, baseline.content_sha256
+                )
+
+
 class LiquidityTests(unittest.TestCase):
     def test_the_liquidity_limit_is_pinned_in_the_record(self) -> None:
         report = validate()

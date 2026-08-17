@@ -35,8 +35,12 @@ from investment_research_os.quant.bars import (
     QuantContractError,
     canonical_sha256,
     quant_decimal_context,
+    revalidate_bar_series,
 )
-from investment_research_os.quant.corporate_actions import CorporateActionSet
+from investment_research_os.quant.corporate_actions import (
+    CorporateActionSet,
+    revalidate_corporate_action_set,
+)
 
 DATASET_VERSION = "quant-dataset-1"
 
@@ -183,5 +187,9 @@ def revalidate_dataset(dataset: object) -> PointInTimeDataset:
         raise QuantContractError(
             "market data enters execution only as a PointInTimeDataset"
         )
+    # Children are revalidated by their own owning modules. This module never
+    # restates a bar or split rule; a second partial copy would drift.
+    revalidate_bar_series(dataset.series)
+    revalidate_corporate_action_set(dataset.corporate_actions)
     _check_invariants(dataset)
     return dataset
