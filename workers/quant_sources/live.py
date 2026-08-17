@@ -52,6 +52,20 @@ YFINANCE_RETRY_POLICY = RetryPolicy(
     max_backoff_seconds=16.0,
 )
 
+YFINANCE_WINDOW_BLOCKER = (
+    "yfinance live acquisition is blocked. The transport requests a window "
+    "bounded by the point-in-time cutoff, and including the cutoff session "
+    "depends on whether yfinance treats end as exclusive. That behaviour has "
+    "not been confirmed against official documentation, and this session "
+    "cannot reach the network to confirm it. If the assumption is wrong every "
+    "receipt is one session short or one session long, which is a silent "
+    "point-in-time error rather than a loud one. Confirm the end-boundary "
+    "semantics against official documentation, then pass "
+    "window_semantics_reference to unblock the fetch. Offline mapping tests "
+    "may pass a fixture reference; only a real citation should reach a live "
+    "call."
+)
+
 MOOMOO_HISTORY_BLOCKER = (
     "Moomoo historical daily-bar acquisition is blocked. The Web API "
     "historical-bar route, request parameters, pagination behaviour, "
@@ -108,6 +122,20 @@ class LiveQuantSource:
                 f"transport must return a HistoryPayload, got "
                 f"{type(payload).__name__}"
             )
+        # The payload names its own provider, and the transport names the
+        # provider it is. A mismatch means the receipt would be stamped with a
+        # source that did not produce it, which is the one provenance field
+        # nothing downstream can check.
+        declared = getattr(self.transport, "provider_id", None)
+        if not isinstance(declared, str) or not declared.strip():
+            raise TransportError(
+                "transport must declare a non-empty provider_id"
+            )
+        if payload.provider_id != declared:
+            raise TransportError(
+                f"payload provider {payload.provider_id!r} does not match the "
+                f"transport provider {declared!r}"
+            )
         if payload.symbol.strip().upper() != normalized_ticker:
             raise TransportError(
                 f"transport returned a different symbol {payload.symbol!r}"
@@ -120,7 +148,7 @@ class LiveQuantSource:
         if not payload.bars:
             raise TransportError("transport returned no daily bars")
 
-        bar_rows, split_rows = _rows(payload, as_of_cutoff=as_of_cutoff)
+        bar_rows, split_rows = _rows(payload, start=start, as_of_cutoff=as_of_cutoff)
         try:
             snapshot = SourceSnapshot(
                 source_id=payload.provider_id,
@@ -145,20 +173,33 @@ class LiveQuantSource:
 
 
 def _rows(
-    payload: HistoryPayload, *, as_of_cutoff: date
+    payload: HistoryPayload, *, start: date, as_of_cutoff: date
 ) -> tuple[tuple[dict[str, object], ...], tuple[dict[str, object], ...]]:
-    """Transport bars mapped to adapter rows, with the cutoff enforced here too.
+    """Transport bars mapped to adapter rows, with the whole window enforced.
 
-    The Quant adapter refuses a post-cutoff row as well. Repeating the check is
-    not redundancy for its own sake: the error raised here names the transport
-    and the session, which is the difference between a debuggable rejection and
-    a contract error about an anonymous bar.
+    Both ends of the requested window are checked, and neither is trimmed. The
+    cutoff end is also checked by the Quant adapter; repeating it here is not
+    redundancy for its own sake, because the error raised here names the
+    transport and the session rather than an anonymous bar.
+
+    The lower bound has no downstream equivalent at all. A bar before the
+    requested start is well formed and inside the cutoff, so every contract
+    below accepts it; only the request makes it wrong. Trimming it silently
+    would produce a receipt for a window the caller never asked for, and the
+    hash would then pin the wrong window forever.
     """
 
     bar_rows: list[dict[str, object]] = []
     split_rows: list[dict[str, object]] = []
     for index, bar in enumerate(payload.bars):
         session = bar.session_date
+        if session < start:
+            raise TransportError(
+                f"{payload.provider_id} bar {index} session {bar.session} is "
+                f"before the requested start {start.isoformat()}; the boundary "
+                "refuses rather than trimming, because a trimmed window would "
+                "be hashed as though it had been requested"
+            )
         if session > as_of_cutoff:
             raise TransportError(
                 f"{payload.provider_id} bar {index} session "
@@ -213,9 +254,11 @@ class YFinanceHistoryTransport:
         module: object | None = None,
         caller: BoundedCaller | None = None,
         importer: Callable[[], object] | None = None,
+        window_semantics_reference: str | None = None,
     ) -> None:
         self.settings = settings
         self._module = module
+        self._window_semantics_reference = window_semantics_reference
         self._importer = importer or _import_yfinance
         self._caller = caller or BoundedCaller(
             policy=YFINANCE_RETRY_POLICY,
@@ -225,6 +268,9 @@ class YFinanceHistoryTransport:
     def fetch_daily_history(
         self, ticker: str, *, start: date, end: date
     ) -> HistoryPayload:
+        reference = self._window_semantics_reference
+        if not isinstance(reference, str) or not reference.strip():
+            raise TransportBlockedError(YFINANCE_WINDOW_BLOCKER)
         module = self._module if self._module is not None else self._importer()
         version = getattr(module, "__version__", None)
         if version != self.settings.library_version:
@@ -334,6 +380,33 @@ def _yfinance_payload(
     )
 
 
+def _scalar(value: object, *, field: str) -> object:
+    """One pandas or numpy cell, reduced to a plain Python scalar.
+
+    A real yfinance frame yields ``numpy.float64`` and ``numpy.int64``, not
+    ``float`` and ``int``. Both expose ``item()``, which is the documented way
+    to get the Python equivalent, so unwrapping here means every rule below is
+    written once against plain types instead of once per numpy dtype.
+
+    ``numpy.bool_`` is refused before unwrapping, because it unwraps to ``bool``
+    and ``bool`` is an ``int``. A boolean reaching a price or a volume field
+    means the frame is not what this code thinks it is.
+    """
+
+    if isinstance(value, bool):
+        raise TransportError(f"{field} must be numeric, not a boolean")
+    item = getattr(value, "item", None)
+    if callable(item) and not isinstance(value, (str, bytes, int, float, Decimal)):
+        try:
+            unwrapped = item()
+        except (TypeError, ValueError) as error:
+            raise TransportError(f"{field} is not a numeric scalar") from error
+        if isinstance(unwrapped, bool):
+            raise TransportError(f"{field} must be numeric, not a boolean")
+        return unwrapped
+    return value
+
+
 def _text(value: object, *, field: str) -> str:
     """A yfinance number, carried across as decimal text.
 
@@ -341,25 +414,47 @@ def _text(value: object, *, field: str) -> str:
     the library itself would print, and it is the only decimal available: the
     precision the vendor actually held is gone before this code runs. That
     limitation belongs to the source, and is stated rather than hidden.
+
+    NaN and infinity are refused here rather than passed on. A missing price is
+    the common yfinance defect, and ``Decimal("nan")`` is a legal Decimal that
+    would poison every comparison downstream instead of failing at the source.
     """
 
-    if isinstance(value, bool):
-        raise TransportError(f"{field} must be numeric")
+    value = _scalar(value, field=field)
     if isinstance(value, float):
+        if value != value or value in (float("inf"), float("-inf")):
+            raise TransportError(f"{field} must be a finite number")
         return str(Decimal(str(value)))
-    if isinstance(value, (int, str, Decimal)):
+    if isinstance(value, Decimal):
+        if not value.is_finite():
+            raise TransportError(f"{field} must be a finite number")
+        return str(value)
+    if isinstance(value, (int, str)):
         return str(value)
     raise TransportError(f"{field} must be numeric, got {type(value).__name__}")
 
 
 def _whole(value: object, *, field: str) -> int:
-    if isinstance(value, bool) or value is None:
+    if value is None:
         raise TransportError(f"{field} is missing; Quant requires volume")
+    value = _scalar(value, field=field)
     if isinstance(value, int):
-        return value
-    if isinstance(value, float) and value.is_integer():
-        return int(value)
-    raise TransportError(f"{field} must be a whole number of shares")
+        candidate = value
+    elif isinstance(value, float):
+        if value != value or value in (float("inf"), float("-inf")):
+            raise TransportError(f"{field} must be a finite whole number")
+        if not value.is_integer():
+            raise TransportError(f"{field} must be a whole number of shares")
+        candidate = int(value)
+    elif isinstance(value, Decimal):
+        if not value.is_finite() or value != value.to_integral_value():
+            raise TransportError(f"{field} must be a whole number of shares")
+        candidate = int(value)
+    else:
+        raise TransportError(f"{field} must be a whole number of shares")
+    if candidate < 0:
+        raise TransportError(f"{field} must not be negative")
+    return candidate
 
 
 def _yfinance_revision(
@@ -416,6 +511,7 @@ class MoomooHistoryTransport:
 
 __all__ = [
     "MOOMOO_HISTORY_BLOCKER",
+    "YFINANCE_WINDOW_BLOCKER",
     "MOOMOO_PROVIDER_ID",
     "LiveQuantSource",
     "MoomooHistoryTransport",

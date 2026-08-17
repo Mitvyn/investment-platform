@@ -5,9 +5,19 @@ from datetime import date
 from decimal import Decimal
 
 from investment_research_os.quant_sources import ADAPTER_VERSION  # noqa: F401
+
+try:  # pandas and numpy ship with the market dependency, not with Quant
+    import numpy
+except ImportError:  # pragma: no cover - exercised by the skip
+    numpy = None  # type: ignore[assignment]
+try:
+    import pandas
+except ImportError:  # pragma: no cover - exercised by the skip
+    pandas = None  # type: ignore[assignment]
 from workers.market.client import YFinanceSettings
 from workers.quant_sources.live import (
     MOOMOO_HISTORY_BLOCKER,
+    YFINANCE_WINDOW_BLOCKER,
     LiveQuantSource,
     MoomooHistoryTransport,
     YFinanceHistoryTransport,
@@ -27,6 +37,10 @@ from workers.quant_sources.transports import (
 SECURITY_ID = "3f1b0c2e-9d4a-4c7f-b1e2-8a5d6c7f0912"
 CUTOFF = date(2026, 1, 7)
 START = date(2026, 1, 5)
+
+#: Stands in for an operator-supplied citation. Tests may assert the gate; only
+#: a real citation may unblock a live fetch.
+WINDOW_REFERENCE = "test-fixture://window-semantics-assumed"
 
 
 class FakeClock:
@@ -459,6 +473,7 @@ class YFinanceTransportTests(unittest.TestCase):
         return YFinanceHistoryTransport(
             YFinanceSettings(),
             module=module,
+            window_semantics_reference=WINDOW_REFERENCE,
             caller=BoundedCaller(
                 policy=RetryPolicy(max_attempts=3, backoff_seconds=1.0),
                 rate_limit=RateLimit(max_calls=5, per_seconds=60.0),
@@ -637,6 +652,241 @@ class BoundaryIsolationTests(unittest.TestCase):
             )
             for term in ("access_token", "Authorization", "Bearer", "password"):
                 self.assertNotIn(term, text, f"{name} mentions {term}")
+
+
+# --------------------------------------------------------------------------
+# 7. Real pandas/numpy scalars at the yfinance boundary
+# --------------------------------------------------------------------------
+
+
+def numpy_row(**overrides: object) -> FakeRow:
+    row = {
+        "Open": numpy.float64(100.5),
+        "High": numpy.float64(101.0),
+        "Low": numpy.float64(99.0),
+        "Close": numpy.float64(100.0),
+        "Volume": numpy.int64(1000),
+        "Dividends": numpy.float64(0.0),
+        "Stock Splits": numpy.float64(0.0),
+    }
+    row.update(overrides)
+    return FakeRow(row)
+
+
+@unittest.skipUnless(numpy is not None, "numpy is not installed")
+class NumpyScalarTests(unittest.TestCase):
+    def fetch(self, **overrides: object):
+        module = FakeYFinanceModule()
+        module.history = FakeHistory([numpy_row(**overrides)], [date(2026, 1, 5)])
+        clock = FakeClock()
+        transport = YFinanceHistoryTransport(
+            YFinanceSettings(),
+            module=module,
+            window_semantics_reference=WINDOW_REFERENCE,
+            caller=BoundedCaller(
+                policy=RetryPolicy(max_attempts=1),
+                rate_limit=RateLimit(max_calls=5, per_seconds=60.0),
+                sleep=clock.sleep,
+                monotonic=clock.monotonic,
+            ),
+        )
+        return transport.fetch_daily_history("RXRX", start=START, end=CUTOFF)
+
+    def test_numpy_scalars_normalize_to_decimal_text_and_plain_ints(self) -> None:
+        result = self.fetch()
+        bar = result.bars[0]
+        self.assertEqual(bar.open, "100.5")
+        self.assertEqual(Decimal(bar.close), Decimal("100"))
+        for value in (bar.open, bar.high, bar.low, bar.close, bar.stock_split):
+            self.assertIs(type(value), str)
+        self.assertIs(type(bar.volume), int)
+        self.assertEqual(bar.volume, 1000)
+
+    def test_a_numpy_split_ratio_survives_as_a_decimal(self) -> None:
+        result = self.fetch(**{"Stock Splits": numpy.float64(2.0)})
+        self.assertEqual(Decimal(result.bars[0].stock_split), Decimal(2))
+
+    def test_a_nan_price_is_refused(self) -> None:
+        # HistoryBar refuses a non-finite Decimal too, with a message that also
+        # says finite. Naming the bar and the field proves the transport caught
+        # it, where the error can still say which source cell was empty.
+        with self.assertRaisesRegex(
+            TransportError, r"bar 0 close must be a finite number"
+        ):
+            self.fetch(Close=numpy.float64("nan"))
+
+    def test_an_infinite_price_is_refused(self) -> None:
+        with self.assertRaisesRegex(
+            TransportError, r"bar 0 open must be a finite number"
+        ):
+            self.fetch(Open=numpy.float64("inf"))
+
+    def test_a_numpy_boolean_price_is_refused(self) -> None:
+        with self.assertRaisesRegex(TransportError, "boolean"):
+            self.fetch(Open=numpy.bool_(True))
+
+    def test_an_integral_float_volume_is_accepted(self) -> None:
+        self.assertEqual(self.fetch(Volume=numpy.float64(1000.0)).bars[0].volume, 1000)
+
+    def test_a_fractional_volume_is_refused(self) -> None:
+        with self.assertRaisesRegex(TransportError, "whole number"):
+            self.fetch(Volume=numpy.float64(1000.5))
+
+    def test_a_nan_volume_is_refused(self) -> None:
+        with self.assertRaisesRegex(
+            TransportError, r"bar 0 volume must be a finite whole number"
+        ):
+            self.fetch(Volume=numpy.float64("nan"))
+
+    def test_a_numpy_boolean_volume_is_refused(self) -> None:
+        with self.assertRaisesRegex(TransportError, "volume"):
+            self.fetch(Volume=numpy.bool_(True))
+
+    def test_a_negative_numpy_volume_is_refused(self) -> None:
+        with self.assertRaisesRegex(TransportError, "negative"):
+            self.fetch(Volume=numpy.int64(-1))
+
+
+@unittest.skipUnless(pandas is not None, "pandas is not installed")
+class PandasFrameTests(unittest.TestCase):
+    def test_a_real_pandas_frame_maps_to_decimal_text(self) -> None:
+        frame = pandas.DataFrame(
+            {
+                "Open": [100.5, 50.0],
+                "High": [101.0, 51.0],
+                "Low": [99.0, 49.0],
+                "Close": [100.0, 50.0],
+                "Volume": [1000, 1100],
+                "Dividends": [0.0, 0.0],
+                "Stock Splits": [0.0, 2.0],
+            },
+            index=pandas.to_datetime(["2026-01-05", "2026-01-06"]),
+        )
+        module = FakeYFinanceModule()
+        module.history = frame
+        result = YFinanceHistoryTransport(
+            YFinanceSettings(),
+            module=module,
+            window_semantics_reference=WINDOW_REFERENCE,
+        ).fetch_daily_history("RXRX", start=START, end=date(2026, 1, 6))
+
+        self.assertEqual([bar.session for bar in result.bars], ["2026-01-05", "2026-01-06"])
+        self.assertEqual(result.bars[0].open, "100.5")
+        self.assertIs(type(result.bars[0].volume), int)
+        self.assertEqual(Decimal(result.bars[1].stock_split), Decimal(2))
+
+
+# --------------------------------------------------------------------------
+# 8. Requested window lower bound
+# --------------------------------------------------------------------------
+
+
+class WindowLowerBoundTests(unittest.TestCase):
+    def test_a_bar_before_the_requested_start_is_refused_not_trimmed(self) -> None:
+        # The Quant adapter accepts this bar happily: it is inside the cutoff
+        # and well formed. Only the requested window makes it wrong, so the
+        # assertion names the provider and the session to prove this layer
+        # raised.
+        with self.assertRaisesRegex(
+            TransportError,
+            r"fixture bar 0 session 2026-01-05 is before the requested start "
+            r"2026-01-06",
+        ):
+            LiveQuantSource(FakeTransport()).acquire(
+                ticker="RXRX",
+                security_id=SECURITY_ID,
+                as_of_cutoff=CUTOFF,
+                currency="USD",
+                start=date(2026, 1, 6),
+            )
+
+    def test_a_bar_exactly_on_the_start_is_kept(self) -> None:
+        dataset = LiveQuantSource(FakeTransport()).acquire(
+            ticker="RXRX",
+            security_id=SECURITY_ID,
+            as_of_cutoff=CUTOFF,
+            currency="USD",
+            start=START,
+        )
+        self.assertEqual(len(dataset.series.bars), 3)
+
+
+# --------------------------------------------------------------------------
+# 9. Provider identity binding
+# --------------------------------------------------------------------------
+
+
+class ProviderIdentityTests(unittest.TestCase):
+    def test_a_forged_provider_id_is_refused(self) -> None:
+        transport = FakeTransport(payload(provider_id="moomoo_openapi"))
+        with self.assertRaisesRegex(
+            TransportError,
+            r"payload provider 'moomoo_openapi' does not match the transport "
+            r"provider 'fixture'",
+        ):
+            LiveQuantSource(transport).acquire(
+                ticker="RXRX",
+                security_id=SECURITY_ID,
+                as_of_cutoff=CUTOFF,
+                currency="USD",
+                start=START,
+            )
+
+    def test_a_transport_without_a_provider_id_is_refused(self) -> None:
+        class Anonymous:
+            def fetch_daily_history(self, ticker, *, start, end):
+                return payload()
+
+        with self.assertRaisesRegex(TransportError, "provider_id"):
+            LiveQuantSource(Anonymous()).acquire(  # type: ignore[arg-type]
+                ticker="RXRX",
+                security_id=SECURITY_ID,
+                as_of_cutoff=CUTOFF,
+                currency="USD",
+                start=START,
+            )
+
+    def test_the_receipt_source_is_the_bound_provider(self) -> None:
+        dataset = LiveQuantSource(FakeTransport()).acquire(
+            ticker="RXRX",
+            security_id=SECURITY_ID,
+            as_of_cutoff=CUTOFF,
+            currency="USD",
+            start=START,
+        )
+        self.assertEqual(dataset.source_id, "fixture")
+
+
+# --------------------------------------------------------------------------
+# 10. Unverified yfinance window semantics
+# --------------------------------------------------------------------------
+
+
+class WindowSemanticsBlockerTests(unittest.TestCase):
+    def test_the_live_path_is_blocked_without_a_documentation_reference(self) -> None:
+        with self.assertRaises(TransportBlockedError) as caught:
+            YFinanceHistoryTransport(YFinanceSettings()).fetch_daily_history(
+                "RXRX", start=START, end=CUTOFF
+            )
+        self.assertIn("end", str(caught.exception))
+
+    def test_the_blocker_names_official_documentation_as_the_gate(self) -> None:
+        self.assertIn("official documentation", YFINANCE_WINDOW_BLOCKER)
+        self.assertIn("exclusive", YFINANCE_WINDOW_BLOCKER)
+
+    def test_an_injected_module_still_requires_a_reference(self) -> None:
+        with self.assertRaises(TransportBlockedError):
+            YFinanceHistoryTransport(
+                YFinanceSettings(), module=FakeYFinanceModule()
+            ).fetch_daily_history("RXRX", start=START, end=CUTOFF)
+
+    def test_a_blank_reference_does_not_count_as_verification(self) -> None:
+        with self.assertRaises(TransportBlockedError):
+            YFinanceHistoryTransport(
+                YFinanceSettings(),
+                module=FakeYFinanceModule(),
+                window_semantics_reference="   ",
+            ).fetch_daily_history("RXRX", start=START, end=CUTOFF)
 
 
 if __name__ == "__main__":
