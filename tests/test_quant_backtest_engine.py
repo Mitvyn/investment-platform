@@ -1214,6 +1214,154 @@ class ChildContractRevalidationTests(unittest.TestCase):
         self.assertEqual(bar.open, Decimal("100"))
 
 
+def _valid_config() -> BacktestConfig:
+    return BacktestConfig(
+        starting_cash=Decimal("10000"), fractional_share_policy="error"
+    )
+
+
+def _valid_costs() -> CostModel:
+    return CostModel(
+        commission_per_share=Decimal("0.01"),
+        commission_bps=Decimal("0"),
+        commission_minimum=Decimal("1.00"),
+        transaction_cost_bps=Decimal("5"),
+        slippage_bps=Decimal("10"),
+    )
+
+
+def _valid_liquidity() -> ParticipationLimit:
+    return ParticipationLimit(
+        max_participation_bps=Decimal("500"),
+        volume_basis="execution_bar",
+        zero_volume_policy="block",
+        unfilled_policy="cancel",
+        min_fill_shares=0,
+    )
+
+
+CONFIG_MUTATIONS = (
+    ("starting_cash_negative", "starting_cash", Decimal("-1")),
+    ("starting_cash_zero", "starting_cash", Decimal("0")),
+    ("starting_cash_string", "starting_cash", "10000"),
+    ("starting_cash_float", "starting_cash", 10000.0),
+    ("fractional_share_policy", "fractional_share_policy", "cash_in_lieu"),
+)
+
+COST_MUTATIONS = (
+    ("slippage_negative", "slippage_bps", Decimal("-1")),
+    ("slippage_string", "slippage_bps", "10"),
+    ("slippage_float", "slippage_bps", 10.0),
+    ("commission_minimum_negative", "commission_minimum", Decimal("-1")),
+    ("commission_per_share_string", "commission_per_share", "0.01"),
+)
+
+LIQUIDITY_MUTATIONS = (
+    ("participation_above_cap", "max_participation_bps", Decimal("20000")),
+    ("participation_negative", "max_participation_bps", Decimal("-1")),
+    ("participation_string", "max_participation_bps", "500"),
+    ("participation_float", "max_participation_bps", 500.0),
+    ("zero_volume_policy", "zero_volume_policy", "ignore"),
+    ("unfilled_policy", "unfilled_policy", "queue"),
+    ("volume_basis", "volume_basis", "session"),
+    ("min_fill_shares_negative", "min_fill_shares", -1),
+    ("min_fill_shares_bool", "min_fill_shares", True),
+)
+
+
+class ExecutionInputRevalidationTests(unittest.TestCase):
+    def _run(self, *, config, costs, liquidity, strategy):
+        return run_backtest(
+            dataset=make_dataset(flat_series(["100", "101", "102"])),
+            strategy=strategy,
+            costs=costs,
+            liquidity=liquidity,
+            config=config,
+            strategy_id="test-strategy",
+            strategy_config_sha256=STRATEGY_CONFIG_SHA256,
+        )
+
+    def test_a_mutated_execution_input_is_refused_before_the_strategy_runs(
+        self,
+    ) -> None:
+        cases = (
+            tuple(("config", *case) for case in CONFIG_MUTATIONS)
+            + tuple(("costs", *case) for case in COST_MUTATIONS)
+            + tuple(("liquidity", *case) for case in LIQUIDITY_MUTATIONS)
+        )
+        for owner, label, field, value in cases:
+            with self.subTest(input=owner, mutation=label):
+                inputs = {
+                    "config": _valid_config(),
+                    "costs": _valid_costs(),
+                    "liquidity": _valid_liquidity(),
+                }
+                object.__setattr__(inputs[owner], field, value)
+                strategy = RecordingStrategy()
+                with self.assertRaises(QuantContractError):
+                    self._run(strategy=strategy, **inputs)
+                self.assertEqual(strategy.cutoffs, [])
+
+    def test_a_non_contract_execution_input_is_refused(self) -> None:
+        for owner in ("config", "costs", "liquidity"):
+            with self.subTest(input=owner):
+                inputs = {
+                    "config": _valid_config(),
+                    "costs": _valid_costs(),
+                    "liquidity": _valid_liquidity(),
+                }
+                inputs[owner] = object()
+                strategy = RecordingStrategy()
+                with self.assertRaises(QuantContractError):
+                    self._run(strategy=strategy, **inputs)
+                self.assertEqual(strategy.cutoffs, [])
+
+    def test_valid_execution_inputs_still_run_and_hash_stably(self) -> None:
+        baseline = self._run(
+            config=_valid_config(),
+            costs=_valid_costs(),
+            liquidity=_valid_liquidity(),
+            strategy=AlwaysLong(),
+        )
+        self.assertTrue(baseline.trades)
+        for precision in (5, 60):
+            with localcontext() as ctx:
+                ctx.prec = precision
+                self.assertEqual(
+                    self._run(
+                        config=_valid_config(),
+                        costs=_valid_costs(),
+                        liquidity=_valid_liquidity(),
+                        strategy=AlwaysLong(),
+                    ).content_sha256,
+                    baseline.content_sha256,
+                )
+
+    def test_constructor_coercion_is_unchanged(self) -> None:
+        # Runtime revalidation is strict; construction is not. A caller may
+        # still hand over decimal strings and integers.
+        config = BacktestConfig(
+            starting_cash="10000", fractional_share_policy="error"
+        )
+        self.assertEqual(config.starting_cash, Decimal("10000"))
+        costs = CostModel(
+            commission_per_share="0.01",
+            commission_bps=0,
+            commission_minimum="1.00",
+            transaction_cost_bps="5",
+            slippage_bps=10,
+        )
+        self.assertEqual(costs.slippage_bps, Decimal("10"))
+        liquidity = ParticipationLimit(
+            max_participation_bps="500",
+            volume_basis="execution_bar",
+            zero_volume_policy="block",
+            unfilled_policy="cancel",
+            min_fill_shares=0,
+        )
+        self.assertEqual(liquidity.max_participation_bps, Decimal("500"))
+
+
 class IsolationTests(unittest.TestCase):
     def test_quant_imports_no_other_bounded_context(self) -> None:
         import pathlib

@@ -684,6 +684,106 @@ class ChildContractRevalidationTests(unittest.TestCase):
                 )
 
 
+def _fresh(model: CostModel) -> CostModel:
+    return CostModel(
+        commission_per_share=model.commission_per_share,
+        commission_bps=model.commission_bps,
+        commission_minimum=model.commission_minimum,
+        transaction_cost_bps=model.transaction_cost_bps,
+        slippage_bps=model.slippage_bps,
+    )
+
+
+EXECUTION_MUTATIONS = (
+    ("config", "starting_cash", Decimal("-1")),
+    ("config", "starting_cash", "10000"),
+    ("config", "starting_cash", 10000.0),
+    ("config", "fractional_share_policy", "cash_in_lieu"),
+    ("costs", "slippage_bps", Decimal("-1")),
+    ("costs", "slippage_bps", "10"),
+    ("costs", "slippage_bps", 10.0),
+    ("costs", "commission_minimum", Decimal("-1")),
+    ("liquidity", "max_participation_bps", Decimal("20000")),
+    ("liquidity", "max_participation_bps", Decimal("-1")),
+    ("liquidity", "max_participation_bps", "500"),
+    ("liquidity", "zero_volume_policy", "ignore"),
+    ("liquidity", "unfilled_policy", "queue"),
+    ("liquidity", "volume_basis", "session"),
+    ("liquidity", "min_fill_shares", -1),
+    ("liquidity", "min_fill_shares", True),
+)
+
+
+class ExecutionInputRevalidationTests(unittest.TestCase):
+    def test_a_mutated_execution_input_is_refused_before_any_fitting(self) -> None:
+        for owner, field, value in EXECUTION_MUTATIONS:
+            with self.subTest(input=owner, field=field, value=repr(value)):
+                config = BacktestConfig(
+                    starting_cash=Decimal("10000"),
+                    fractional_share_policy="error",
+                )
+                liquidity = ParticipationLimit(
+                    max_participation_bps=Decimal("10000"),
+                    volume_basis="execution_bar",
+                    zero_volume_policy="block",
+                    unfilled_policy="cancel",
+                    min_fill_shares=0,
+                )
+                # Fresh cost models per case: the module-level FREE and RETAIL
+                # fixtures are shared, and mutating one would poison every
+                # later test in the file.
+                scenarios = sensitivity(
+                    ("free", _fresh(FREE)), ("retail", _fresh(RETAIL))
+                )
+                targets = {
+                    "config": config,
+                    "liquidity": liquidity,
+                    # The second scenario's costs: a nested execution input,
+                    # mutated after the parent objects were assembled.
+                    "costs": scenarios.scenarios[1].costs,
+                }
+                object.__setattr__(targets[owner], field, value)
+                factory = FlatFactory()
+                with self.assertRaises(QuantContractError):
+                    validate_walk_forward(
+                        dataset=make_dataset(make_series(declining_prices(120))),
+                        liquidity=liquidity,
+                        config=config,
+                        schedule=schedule(),
+                        factory=factory,
+                        strategy_id="fixture-strategy",
+                        cost_sensitivity=scenarios,
+                        disclosure=disclosure(),
+                        annualisation_periods=1,
+                    )
+                self.assertEqual(factory.calls, 0)
+
+    def test_a_mutated_scenario_collection_is_refused_before_any_fitting(self) -> None:
+        for mutation in ("list", "object"):
+            with self.subTest(mutation=mutation):
+                scenarios = sensitivity(("free", FREE), ("retail", RETAIL))
+                replacement = (
+                    list(scenarios.scenarios)
+                    if mutation == "list"
+                    else (object(), object())
+                )
+                object.__setattr__(scenarios, "scenarios", replacement)
+                factory = FlatFactory()
+                with self.assertRaises(QuantContractError):
+                    validate(factory=factory, costs=scenarios)
+                self.assertEqual(factory.calls, 0)
+
+    def test_valid_execution_inputs_still_report_and_hash_stably(self) -> None:
+        from decimal import Context, localcontext
+
+        baseline = validate()
+        for precision in (5, 60):
+            with localcontext(Context(prec=precision)):
+                self.assertEqual(
+                    validate().content_sha256, baseline.content_sha256
+                )
+
+
 class LiquidityTests(unittest.TestCase):
     def test_the_liquidity_limit_is_pinned_in_the_record(self) -> None:
         report = validate()

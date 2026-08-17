@@ -41,6 +41,7 @@ from investment_research_os.quant.dataset import PointInTimeDataset
 from investment_research_os.quant.costs import CostModel
 from investment_research_os.quant.engine import (
     _enforced_inputs,
+    revalidate_execution_inputs,
     ENGINE_VERSION,
     BacktestConfig,
     BacktestResult,
@@ -585,6 +586,21 @@ def validate_walk_forward(
     # field would otherwise reach a factory without ever meeting the engine's
     # own recheck.
     series, corporate_actions = _enforced_inputs(dataset)
+    # Every scenario's costs too: a mutated scenario would otherwise reach the
+    # engine only on the window that used it, after fitting had already run.
+    if type(cost_sensitivity.scenarios) is not tuple:
+        raise QuantContractError(
+            "cost scenarios must be a stored tuple, got "
+            f"{type(cost_sensitivity.scenarios).__name__}"
+        )
+    for scenario in cost_sensitivity.scenarios:
+        if not isinstance(scenario, CostScenario):
+            raise QuantContractError(
+                f"cost scenarios must hold CostScenario, got {type(scenario).__name__}"
+            )
+        revalidate_execution_inputs(
+            costs=scenario.costs, liquidity=liquidity, config=config
+        )
 
     trials_observed = len(cost_sensitivity.scenarios)
     if disclosure.trials_declared < trials_observed:
