@@ -1,0 +1,643 @@
+from __future__ import annotations
+
+import unittest
+from datetime import date
+from decimal import Decimal
+
+from investment_research_os.quant_sources import ADAPTER_VERSION  # noqa: F401
+from workers.market.client import YFinanceSettings
+from workers.quant_sources.live import (
+    MOOMOO_HISTORY_BLOCKER,
+    LiveQuantSource,
+    MoomooHistoryTransport,
+    YFinanceHistoryTransport,
+)
+from workers.quant_sources.transports import (
+    BoundedCaller,
+    HistoryBar,
+    HistoryPayload,
+    RateLimit,
+    RetryPolicy,
+    TransientTransportError,
+    TransportBlockedError,
+    TransportError,
+)
+
+
+SECURITY_ID = "3f1b0c2e-9d4a-4c7f-b1e2-8a5d6c7f0912"
+CUTOFF = date(2026, 1, 7)
+START = date(2026, 1, 5)
+
+
+class FakeClock:
+    """Deterministic monotonic clock that only advances when told to sleep."""
+
+    def __init__(self) -> None:
+        self.now = 0.0
+        self.sleeps: list[float] = []
+
+    def monotonic(self) -> float:
+        return self.now
+
+    def sleep(self, seconds: float) -> None:
+        self.sleeps.append(seconds)
+        self.now += seconds
+
+
+def payload(
+    *,
+    provider_id: str = "fixture",
+    symbol: str = "RXRX",
+    currency: str = "USD",
+    revision: str = "rev-1",
+    bars: tuple[HistoryBar, ...] | None = None,
+) -> HistoryPayload:
+    return HistoryPayload(
+        provider_id=provider_id,
+        symbol=symbol,
+        currency=currency,
+        source_revision=revision,
+        bars=bars
+        if bars is not None
+        else (
+            HistoryBar("2026-01-05", "100", "101", "99", "100", 1000),
+            HistoryBar("2026-01-06", "50", "51", "49", "50", 1100, "2"),
+            HistoryBar("2026-01-07", "51", "52", "50", "51", 1200),
+        ),
+    )
+
+
+class FakeTransport:
+    provider_id = "fixture"
+
+    def __init__(self, result: HistoryPayload | Exception | None = None) -> None:
+        self.result = result if result is not None else payload()
+        self.calls: list[tuple[str, date, date]] = []
+
+    def fetch_daily_history(
+        self, ticker: str, *, start: date, end: date
+    ) -> HistoryPayload:
+        self.calls.append((ticker, start, end))
+        if isinstance(self.result, Exception):
+            raise self.result
+        return self.result
+
+
+# --------------------------------------------------------------------------
+# 1. Transport contract
+# --------------------------------------------------------------------------
+
+
+class HistoryContractTests(unittest.TestCase):
+    def test_a_float_price_is_refused_at_the_transport_boundary(self) -> None:
+        # Asserting the type alone would pass even with this guard removed,
+        # because the value would then fall through to the general type check
+        # whose message also contains the word float.
+        with self.assertRaisesRegex(TransportError, "binary floats"):
+            HistoryBar("2026-01-05", 100.0, "101", "99", "100", 1000)
+
+    def test_a_non_numeric_price_is_refused(self) -> None:
+        with self.assertRaisesRegex(TransportError, "decimal"):
+            HistoryBar("2026-01-05", "abc", "101", "99", "100", 1000)
+
+    def test_a_non_iso_session_is_refused(self) -> None:
+        with self.assertRaisesRegex(TransportError, "ISO date"):
+            HistoryBar("05/01/2026", "100", "101", "99", "100", 1000)
+
+    def test_a_boolean_volume_is_refused(self) -> None:
+        with self.assertRaisesRegex(TransportError, "volume"):
+            HistoryBar("2026-01-05", "100", "101", "99", "100", True)
+
+    def test_a_negative_volume_is_refused(self) -> None:
+        with self.assertRaisesRegex(TransportError, "volume"):
+            HistoryBar("2026-01-05", "100", "101", "99", "100", -1)
+
+    def test_currency_must_be_an_iso_code(self) -> None:
+        with self.assertRaisesRegex(TransportError, "currency"):
+            payload(currency="usd")
+
+    def test_a_moving_source_revision_is_refused(self) -> None:
+        with self.assertRaisesRegex(TransportError, "moving target"):
+            payload(revision="latest")
+
+    def test_a_blank_source_revision_is_refused(self) -> None:
+        with self.assertRaisesRegex(TransportError, "source_revision"):
+            payload(revision="  ")
+
+    def test_bars_are_stored_as_a_tuple(self) -> None:
+        self.assertIsInstance(payload().bars, tuple)
+
+
+# --------------------------------------------------------------------------
+# 2. Retry and rate limit
+# --------------------------------------------------------------------------
+
+
+class BoundedCallerTests(unittest.TestCase):
+    def caller(
+        self, *, attempts: int = 3, max_calls: int = 100, per_seconds: float = 60.0
+    ) -> tuple[BoundedCaller, FakeClock]:
+        clock = FakeClock()
+        return (
+            BoundedCaller(
+                policy=RetryPolicy(
+                    max_attempts=attempts,
+                    backoff_seconds=1.0,
+                    backoff_multiplier=2.0,
+                    max_backoff_seconds=4.0,
+                ),
+                rate_limit=RateLimit(max_calls=max_calls, per_seconds=per_seconds),
+                sleep=clock.sleep,
+                monotonic=clock.monotonic,
+            ),
+            clock,
+        )
+
+    def test_a_transient_failure_is_retried_with_bounded_backoff(self) -> None:
+        caller, clock = self.caller()
+        seen: list[int] = []
+
+        def flaky() -> str:
+            seen.append(1)
+            if len(seen) < 3:
+                raise TransientTransportError("temporary")
+            return "ok"
+
+        self.assertEqual(caller.call(flaky), "ok")
+        self.assertEqual(len(seen), 3)
+        self.assertEqual(clock.sleeps, [1.0, 2.0])
+
+    def test_retries_stop_at_max_attempts(self) -> None:
+        caller, clock = self.caller(attempts=2)
+
+        def always() -> str:
+            raise TransientTransportError("temporary")
+
+        with self.assertRaisesRegex(TransportError, "2 attempts"):
+            caller.call(always)
+        self.assertEqual(clock.sleeps, [1.0])
+
+    def test_backoff_is_capped(self) -> None:
+        caller, clock = self.caller(attempts=5)
+
+        def always() -> str:
+            raise TransientTransportError("temporary")
+
+        with self.assertRaises(TransportError):
+            caller.call(always)
+        self.assertEqual(clock.sleeps, [1.0, 2.0, 4.0, 4.0])
+
+    def test_a_permanent_failure_is_not_retried(self) -> None:
+        caller, clock = self.caller()
+        seen: list[int] = []
+
+        def broken() -> str:
+            seen.append(1)
+            raise TransportError("permanent")
+
+        with self.assertRaisesRegex(TransportError, "permanent"):
+            caller.call(broken)
+        self.assertEqual(len(seen), 1)
+        self.assertEqual(clock.sleeps, [])
+
+    def test_a_blocked_transport_is_not_retried(self) -> None:
+        caller, _ = self.caller()
+        seen: list[int] = []
+
+        def blocked() -> str:
+            seen.append(1)
+            raise TransportBlockedError("blocked")
+
+        with self.assertRaises(TransportBlockedError):
+            caller.call(blocked)
+        self.assertEqual(len(seen), 1)
+
+    def test_the_rate_limit_delays_the_call_past_the_window(self) -> None:
+        caller, clock = self.caller(max_calls=2, per_seconds=60.0)
+        for _ in range(2):
+            caller.call(lambda: "ok")
+        self.assertEqual(clock.sleeps, [])
+        caller.call(lambda: "ok")
+        self.assertEqual(clock.sleeps, [60.0])
+
+    def test_the_rate_limit_counts_failed_attempts(self) -> None:
+        caller, clock = self.caller(attempts=3, max_calls=2, per_seconds=60.0)
+
+        def always() -> str:
+            raise TransientTransportError("temporary")
+
+        with self.assertRaises(TransportError):
+            caller.call(always)
+        # Two retry backoffs at t=0 and t=1, then the third attempt waits out
+        # the remainder of the window opened by the first attempt.
+        self.assertEqual(clock.sleeps, [1.0, 2.0, 57.0])
+
+    def test_an_invalid_policy_is_refused(self) -> None:
+        with self.assertRaises(ValueError):
+            RetryPolicy(max_attempts=0)
+        with self.assertRaises(ValueError):
+            RetryPolicy(backoff_seconds=-1.0)
+        with self.assertRaises(ValueError):
+            RetryPolicy(backoff_multiplier=0.5)
+
+    def test_an_invalid_rate_limit_is_refused(self) -> None:
+        with self.assertRaises(ValueError):
+            RateLimit(max_calls=0, per_seconds=60.0)
+        with self.assertRaises(ValueError):
+            RateLimit(max_calls=1, per_seconds=0.0)
+
+
+# --------------------------------------------------------------------------
+# 3. Live acquisition
+# --------------------------------------------------------------------------
+
+
+class LiveQuantSourceTests(unittest.TestCase):
+    def acquire(self, transport: FakeTransport, **overrides: object):
+        kwargs: dict[str, object] = {
+            "ticker": "RXRX",
+            "security_id": SECURITY_ID,
+            "as_of_cutoff": CUTOFF,
+            "currency": "USD",
+            "start": START,
+        }
+        kwargs.update(overrides)
+        return LiveQuantSource(transport).acquire(**kwargs)  # type: ignore[arg-type]
+
+    def test_a_history_payload_becomes_a_quant_receipt(self) -> None:
+        transport = FakeTransport()
+        dataset = self.acquire(transport)
+
+        self.assertEqual(dataset.security_id, SECURITY_ID)
+        self.assertEqual(dataset.as_of_cutoff, CUTOFF)
+        self.assertEqual(dataset.series.price_basis, "unadjusted")
+        self.assertEqual(len(dataset.series.bars), 3)
+        self.assertEqual(len(dataset.corporate_actions.actions), 1)
+        self.assertEqual(dataset.corporate_actions.actions[0].new_shares, 2)
+        self.assertEqual(dataset.corporate_actions.actions[0].old_shares, 1)
+        self.assertEqual(transport.calls, [("RXRX", START, CUTOFF)])
+
+    def test_quant_inputs_are_decimal_not_float(self) -> None:
+        dataset = self.acquire(FakeTransport())
+        for bar in dataset.series.bars:
+            for value in (bar.open, bar.high, bar.low, bar.close):
+                self.assertNotIsInstance(value, float)
+        self.assertEqual(Decimal(str(dataset.series.bars[0].close)), Decimal("100"))
+
+    def test_the_receipt_pins_the_transport_revision_and_payload_hash(self) -> None:
+        dataset = self.acquire(FakeTransport())
+        self.assertEqual(dataset.source_id, "fixture")
+        self.assertEqual(dataset.source_revision, "rev-1")
+        self.assertEqual(len(dataset.source_content_sha256), 64)
+
+    def test_the_same_payload_produces_the_same_receipt_hash(self) -> None:
+        first = self.acquire(FakeTransport())
+        second = self.acquire(FakeTransport())
+        self.assertEqual(first.content_sha256, second.content_sha256)
+
+    def test_a_post_cutoff_bar_is_refused_not_truncated(self) -> None:
+        # The Quant adapter refuses this too, with a message that also says
+        # cutoff. Asserting the transport-named row is what proves the check
+        # fired here, where the error can name the provider and the session.
+        with self.assertRaisesRegex(
+            TransportError, r"fixture bar 2 session 2026-01-07 is after the cutoff"
+        ):
+            self.acquire(FakeTransport(), as_of_cutoff=date(2026, 1, 6))
+
+    def test_a_mismatched_symbol_is_refused(self) -> None:
+        with self.assertRaisesRegex(TransportError, "different symbol"):
+            self.acquire(FakeTransport(payload(symbol="OTHER")))
+
+    def test_a_mismatched_currency_is_refused(self) -> None:
+        with self.assertRaisesRegex(TransportError, "currency"):
+            self.acquire(FakeTransport(payload(currency="HKD")))
+
+    def test_an_empty_history_is_refused(self) -> None:
+        with self.assertRaisesRegex(TransportError, "no daily bars"):
+            self.acquire(FakeTransport(payload(bars=())))
+
+    def test_a_start_after_the_cutoff_is_refused(self) -> None:
+        with self.assertRaisesRegex(TransportError, "start"):
+            self.acquire(FakeTransport(), start=date(2026, 2, 1))
+
+    def test_a_foreign_payload_type_is_refused(self) -> None:
+        class Wrong:
+            provider_id = "fixture"
+
+            def fetch_daily_history(self, ticker, *, start, end):
+                return {"bars": []}
+
+        with self.assertRaisesRegex(TransportError, "HistoryPayload"):
+            LiveQuantSource(Wrong()).acquire(  # type: ignore[arg-type]
+                ticker="RXRX",
+                security_id=SECURITY_ID,
+                as_of_cutoff=CUTOFF,
+                currency="USD",
+                start=START,
+            )
+
+    def test_a_duplicate_session_is_refused(self) -> None:
+        bars = (
+            HistoryBar("2026-01-05", "100", "101", "99", "100", 1000),
+            HistoryBar("2026-01-05", "100", "101", "99", "100", 1000),
+        )
+        with self.assertRaises(TransportError):
+            self.acquire(FakeTransport(payload(bars=bars)))
+
+
+# --------------------------------------------------------------------------
+# 4. yfinance live boundary
+# --------------------------------------------------------------------------
+
+
+class FakeRow(dict):
+    def get(self, key, default=None):  # noqa: D102
+        return super().get(key, default)
+
+
+class FakeIndexEntry:
+    def __init__(self, value: date) -> None:
+        self._value = value
+
+    def date(self) -> date:
+        return self._value
+
+
+class FakeHistory:
+    def __init__(self, rows: list[FakeRow], sessions: list[date]) -> None:
+        self._rows = rows
+        self.index = [FakeIndexEntry(session) for session in sessions]
+
+    class _Iloc:
+        def __init__(self, rows: list[FakeRow]) -> None:
+            self._rows = rows
+
+        def __getitem__(self, index: int) -> FakeRow:
+            return self._rows[index]
+
+    @property
+    def iloc(self) -> "FakeHistory._Iloc":
+        return FakeHistory._Iloc(self._rows)
+
+
+def fake_history() -> FakeHistory:
+    rows = [
+        FakeRow(
+            {
+                "Open": 100.0,
+                "High": 101.0,
+                "Low": 99.0,
+                "Close": 100.0,
+                "Volume": 1000,
+                "Dividends": 0.0,
+                "Stock Splits": 0.0,
+            }
+        ),
+        FakeRow(
+            {
+                "Open": 50.0,
+                "High": 51.0,
+                "Low": 49.0,
+                "Close": 50.0,
+                "Volume": 1100,
+                "Dividends": 0.0,
+                "Stock Splits": 2.0,
+            }
+        ),
+        FakeRow(
+            {
+                "Open": 51.0,
+                "High": 52.0,
+                "Low": 50.0,
+                "Close": 51.0,
+                "Volume": 1200,
+                "Dividends": 0.0,
+                "Stock Splits": 0.0,
+            }
+        ),
+    ]
+    sessions = [date(2026, 1, 5), date(2026, 1, 6), date(2026, 1, 7)]
+    return FakeHistory(rows, sessions)
+
+
+class FakeTicker:
+    def __init__(self, module: "FakeYFinanceModule", ticker: str) -> None:
+        self._module = module
+        self._ticker = ticker
+
+    def history(self, **kwargs: object) -> FakeHistory:
+        self._module.history_calls.append(kwargs)
+        if self._module.failures:
+            raise self._module.failures.pop(0)
+        return self._module.history
+
+    def get_history_metadata(self) -> dict[str, object]:
+        return {"currency": self._module.currency, "exchangeName": "NasdaqGS"}
+
+
+class FakeYFinanceModule:
+    def __init__(
+        self,
+        *,
+        version: str = "1.5.1",
+        currency: str = "USD",
+        failures: list[Exception] | None = None,
+    ) -> None:
+        self.__version__ = version
+        self.currency = currency
+        self.history = fake_history()
+        self.history_calls: list[dict[str, object]] = []
+        self.failures = failures or []
+
+    def Ticker(self, ticker: str) -> FakeTicker:  # noqa: N802
+        return FakeTicker(self, ticker)
+
+
+class YFinanceTransportTests(unittest.TestCase):
+    def transport(self, module: FakeYFinanceModule) -> YFinanceHistoryTransport:
+        clock = FakeClock()
+        return YFinanceHistoryTransport(
+            YFinanceSettings(),
+            module=module,
+            caller=BoundedCaller(
+                policy=RetryPolicy(max_attempts=3, backoff_seconds=1.0),
+                rate_limit=RateLimit(max_calls=5, per_seconds=60.0),
+                sleep=clock.sleep,
+                monotonic=clock.monotonic,
+            ),
+        )
+
+    def test_it_requests_an_unadjusted_window_bounded_by_the_cutoff(self) -> None:
+        module = FakeYFinanceModule()
+        self.transport(module).fetch_daily_history("RXRX", start=START, end=CUTOFF)
+
+        call = module.history_calls[0]
+        self.assertEqual(call["interval"], "1d")
+        self.assertIs(call["auto_adjust"], False)
+        self.assertIs(call["back_adjust"], False)
+        self.assertIs(call["prepost"], False)
+        self.assertIs(call["repair"], False)
+        self.assertIs(call["actions"], True)
+        self.assertEqual(call["start"], "2026-01-05")
+        # yfinance treats end as exclusive, so the cutoff session is included
+        # only when the window ends the day after it.
+        self.assertEqual(call["end"], "2026-01-08")
+        self.assertEqual(call["timeout"], 10.0)
+
+    def test_it_returns_decimal_text_never_floats(self) -> None:
+        result = self.transport(FakeYFinanceModule()).fetch_daily_history(
+            "RXRX", start=START, end=CUTOFF
+        )
+        self.assertEqual(result.provider_id, "yahoo_finance_via_yfinance")
+        self.assertEqual(result.currency, "USD")
+        self.assertEqual(len(result.bars), 3)
+        for bar in result.bars:
+            for value in (bar.open, bar.high, bar.low, bar.close):
+                self.assertIsInstance(value, str)
+        self.assertEqual(Decimal(result.bars[1].stock_split), Decimal(2))
+
+    def test_the_revision_is_deterministic_and_not_moving(self) -> None:
+        first = self.transport(FakeYFinanceModule()).fetch_daily_history(
+            "RXRX", start=START, end=CUTOFF
+        )
+        second = self.transport(FakeYFinanceModule()).fetch_daily_history(
+            "RXRX", start=START, end=CUTOFF
+        )
+        self.assertEqual(first.source_revision, second.source_revision)
+        self.assertNotIn("latest", first.source_revision)
+
+    def test_an_unapproved_library_version_is_refused_and_not_retried(self) -> None:
+        module = FakeYFinanceModule(version="0.9.0")
+        with self.assertRaisesRegex(TransportError, "version"):
+            self.transport(module).fetch_daily_history(
+                "RXRX", start=START, end=CUTOFF
+            )
+        self.assertEqual(module.history_calls, [])
+
+    def test_a_transient_provider_failure_is_retried(self) -> None:
+        module = FakeYFinanceModule(failures=[RuntimeError("connection reset")])
+        result = self.transport(module).fetch_daily_history(
+            "RXRX", start=START, end=CUTOFF
+        )
+        self.assertEqual(len(module.history_calls), 2)
+        self.assertEqual(len(result.bars), 3)
+
+    def test_repeated_failures_surface_as_a_bounded_transport_error(self) -> None:
+        module = FakeYFinanceModule(
+            failures=[RuntimeError("boom"), RuntimeError("boom"), RuntimeError("boom")]
+        )
+        with self.assertRaisesRegex(TransportError, "3 attempts"):
+            self.transport(module).fetch_daily_history(
+                "RXRX", start=START, end=CUTOFF
+            )
+
+    def test_adjusted_settings_cannot_be_configured(self) -> None:
+        with self.assertRaises(ValueError):
+            YFinanceSettings(auto_adjust=True)
+
+    def test_the_live_source_round_trips_into_a_quant_receipt(self) -> None:
+        dataset = LiveQuantSource(
+            self.transport(FakeYFinanceModule())
+        ).acquire(
+            ticker="RXRX",
+            security_id=SECURITY_ID,
+            as_of_cutoff=CUTOFF,
+            currency="USD",
+            start=START,
+        )
+        self.assertEqual(dataset.series.source, "yahoo_finance_via_yfinance")
+        self.assertEqual(len(dataset.series.bars), 3)
+        self.assertEqual(len(dataset.corporate_actions.actions), 1)
+
+
+# --------------------------------------------------------------------------
+# 5. Moomoo blocker
+# --------------------------------------------------------------------------
+
+
+class MoomooTransportTests(unittest.TestCase):
+    def test_the_transport_is_blocked_pending_documented_endpoint_semantics(
+        self,
+    ) -> None:
+        with self.assertRaises(TransportBlockedError) as caught:
+            MoomooHistoryTransport().fetch_daily_history(
+                "US.RXRX", start=START, end=CUTOFF
+            )
+        self.assertIn("historical", str(caught.exception).lower())
+
+    def test_the_blocker_is_stated_and_names_verification_as_the_gate(self) -> None:
+        self.assertIn("official documentation", MOOMOO_HISTORY_BLOCKER)
+
+    def test_the_live_source_surfaces_the_blocker_rather_than_guessing(self) -> None:
+        with self.assertRaises(TransportBlockedError):
+            LiveQuantSource(MoomooHistoryTransport()).acquire(
+                ticker="US.RXRX",
+                security_id=SECURITY_ID,
+                as_of_cutoff=CUTOFF,
+                currency="USD",
+                start=START,
+            )
+
+    def test_the_transport_declares_the_moomoo_provider_id(self) -> None:
+        self.assertEqual(MoomooHistoryTransport().provider_id, "moomoo_openapi")
+
+
+# --------------------------------------------------------------------------
+# 6. Isolation
+# --------------------------------------------------------------------------
+
+
+class BoundaryIsolationTests(unittest.TestCase):
+    def test_quant_core_never_imports_a_provider_or_transport(self) -> None:
+        import pathlib
+
+        root = pathlib.Path("src/investment_research_os/quant")
+        forbidden = (
+            "quant_sources",
+            "workers",
+            "yfinance",
+            "moomoo",
+            "urllib",
+            "socket",
+            "requests",
+        )
+        for module in sorted(root.glob("*.py")):
+            text = module.read_text(encoding="utf-8")
+            for line in text.splitlines():
+                stripped = line.strip()
+                if not stripped.startswith(("import ", "from ")):
+                    continue
+                for term in forbidden:
+                    self.assertNotIn(
+                        term,
+                        stripped,
+                        f"{module.name} imports {term!r}: {stripped}",
+                    )
+
+    def test_the_quant_source_adapter_never_imports_a_transport(self) -> None:
+        import pathlib
+
+        root = pathlib.Path("src/investment_research_os/quant_sources")
+        for module in sorted(root.glob("*.py")):
+            text = module.read_text(encoding="utf-8")
+            for line in text.splitlines():
+                stripped = line.strip()
+                if not stripped.startswith(("import ", "from ")):
+                    continue
+                self.assertNotIn("workers", stripped)
+                self.assertNotIn("yfinance", stripped)
+                self.assertNotIn("moomoo", stripped)
+
+    def test_no_secret_or_token_reaches_the_transport_layer(self) -> None:
+        import pathlib
+
+        for name in ("transports.py", "live.py"):
+            text = pathlib.Path("workers/quant_sources", name).read_text(
+                encoding="utf-8"
+            )
+            for term in ("access_token", "Authorization", "Bearer", "password"):
+                self.assertNotIn(term, text, f"{name} mentions {term}")
+
+
+if __name__ == "__main__":
+    unittest.main()

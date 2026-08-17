@@ -6,10 +6,30 @@ from .providers import (
     MoomooQuantSource,
     YFinanceQuantSource,
 )
+from .transports import (
+    BoundedCaller,
+    HistoricalTransport,
+    HistoryBar,
+    HistoryPayload,
+    RateLimit,
+    RetryPolicy,
+    TransientTransportError,
+    TransportBlockedError,
+    TransportError,
+)
 
 __all__ = [
+    "BoundedCaller",
+    "HistoricalTransport",
+    "HistoryBar",
+    "HistoryPayload",
     "MoomooHistoryBar",
     "MoomooHistoryPayload",
     "MoomooQuantSource",
+    "RateLimit",
+    "RetryPolicy",
+    "TransientTransportError",
+    "TransportBlockedError",
+    "TransportError",
     "YFinanceQuantSource",
 ]
