@@ -10,6 +10,7 @@ from investment_research_os.quant_sources import (
     SourceSnapshot,
     acquire_point_in_time_dataset,
     payload_sha256,
+    revalidate_source_snapshot,
 )
 
 SECURITY_ID = "3f1b0c2e-9d4a-4c7f-b1e2-8a5d6c7f0912"
@@ -67,6 +68,7 @@ def acquire(**overrides: object) -> PointInTimeDataset:
     base: dict[str, object] = {
         "security_id": SECURITY_ID,
         "as_of_cutoff": CUTOFF,
+        "currency": "USD",
         "snapshot": snapshot(),
     }
     base.update(overrides)
@@ -135,7 +137,7 @@ class CutoffEnforcementTests(unittest.TestCase):
     def test_a_split_after_the_cutoff_is_refused(self) -> None:
         rows = split_rows(START + timedelta(days=30))
         with self.assertRaisesRegex(
-            QuantContractError, r"split row 0 effective 2026-02-04 is after the cutoff"
+            QuantContractError, r"split row 0 effective_session 2026-02-04 is after the cutoff"
         ):
             acquire(snapshot=snapshot(split_rows=rows))
 
@@ -373,14 +375,6 @@ class TamperAfterAcquisitionTests(unittest.TestCase):
         object.__setattr__(subject, "source_revision", "2026-01-08T00:00:00Z/rev-9")
         self.assertNotEqual(acquire(snapshot=subject).content_sha256, first)
 
-    def test_a_moving_revision_written_back_reaches_the_receipt(self) -> None:
-        # Documented limitation, asserted so it cannot regress silently: the
-        # moving-revision rule runs at snapshot construction only. Nothing in
-        # this module revalidates the snapshot at acquisition time.
-        subject = snapshot()
-        object.__setattr__(subject, "source_revision", "latest")
-        self.assertEqual(acquire(snapshot=subject).source_revision, "latest")
-
 
 class QuantCoreRoundTripTests(unittest.TestCase):
     def test_an_acquired_receipt_is_accepted_by_the_backtest_boundary(self) -> None:
@@ -424,6 +418,193 @@ class QuantCoreRoundTripTests(unittest.TestCase):
         )
         self.assertEqual(result.dataset_sha256, dataset.content_sha256)
         self.assertTrue(result.trades)
+
+
+class CoveredTransitionTests(unittest.TestCase):
+    def test_a_split_on_the_first_session_is_refused(self) -> None:
+        # The engine transitions into bars[1:] only. A split dated on the first
+        # bar is a session the engine never enters, so it would abort the whole
+        # backtest later for a reason that has nothing to do with the strategy.
+        with self.assertRaisesRegex(QuantContractError, "transition session"):
+            acquire(snapshot=snapshot(split_rows=split_rows(START)))
+
+    def test_a_split_on_an_uncovered_session_is_refused(self) -> None:
+        # 2026-01-10 is a Saturday: inside the cutoff, outside the bars.
+        uncovered = date(2026, 1, 10)
+        with self.assertRaisesRegex(QuantContractError, "transition session"):
+            acquire(
+                as_of_cutoff=uncovered,
+                snapshot=snapshot(split_rows=split_rows(uncovered)),
+            )
+
+    def test_a_split_on_a_covered_transition_session_is_accepted(self) -> None:
+        for offset in (1, 2, 3):
+            with self.subTest(offset=offset):
+                rows = split_rows(START + timedelta(days=offset))
+                dataset = acquire(snapshot=snapshot(split_rows=rows))
+                self.assertEqual(len(dataset.corporate_actions.actions), 1)
+
+    def test_the_covered_rule_matches_the_engine(self) -> None:
+        # Belt and braces: a receipt this adapter accepts must not be one the
+        # engine then refuses for a covered-session reason.
+        from decimal import Decimal as _Decimal
+
+        from investment_research_os.quant import (
+            BacktestConfig,
+            CostModel,
+            ParticipationLimit,
+            run_backtest,
+        )
+
+        class AlwaysLong:
+            def target_exposure(self, window: object) -> _Decimal:
+                return _Decimal(1)
+
+        dataset = acquire(
+            snapshot=snapshot(split_rows=split_rows(START + timedelta(days=1)))
+        )
+        result = run_backtest(
+            dataset=dataset,
+            strategy=AlwaysLong(),
+            costs=CostModel(
+                commission_per_share=_Decimal("0"),
+                commission_bps=_Decimal("0"),
+                commission_minimum=_Decimal("0"),
+                transaction_cost_bps=_Decimal("0"),
+                slippage_bps=_Decimal("0"),
+            ),
+            liquidity=ParticipationLimit(
+                max_participation_bps=_Decimal("10000"),
+                volume_basis="execution_bar",
+                zero_volume_policy="block",
+                unfilled_policy="cancel",
+                min_fill_shares=0,
+            ),
+            config=BacktestConfig(
+                starting_cash=_Decimal("10000"),
+                fractional_share_policy="error",
+            ),
+            strategy_id="covered-transition",
+            strategy_config_sha256="a" * 64,
+        )
+        self.assertEqual(len(result.corporate_action_applications), 1)
+
+
+class SnapshotRevalidationTests(unittest.TestCase):
+    def test_a_valid_snapshot_revalidates_and_is_returned(self) -> None:
+        subject = snapshot()
+        self.assertIs(revalidate_source_snapshot(subject), subject)
+
+    def test_a_non_snapshot_is_refused(self) -> None:
+        for value in (object(), None, {"source_id": "x"}):
+            with self.subTest(value=type(value).__name__):
+                with self.assertRaises(QuantContractError):
+                    revalidate_source_snapshot(value)
+
+    def test_every_mutated_declaration_is_refused(self) -> None:
+        mutations: tuple[tuple[str, str, object], ...] = (
+            ("blank_source_id", "source_id", "   "),
+            ("non_string_source_id", "source_id", 7),
+            ("blank_revision", "source_revision", ""),
+            ("moving_revision", "source_revision", "latest"),
+            ("moving_revision_cased", "source_revision", "Current"),
+            ("short_hash", "content_sha256", "abc"),
+            ("upper_hash", "content_sha256", "B" * 64),
+            ("non_string_hash", "content_sha256", None),
+            ("rows_to_list", "bar_rows", [dict(row) for row in bar_rows()]),
+            ("rows_not_a_sequence", "bar_rows", object()),
+            ("rows_hold_objects", "bar_rows", (object(), object())),
+            ("splits_not_a_sequence", "split_rows", object()),
+        )
+        for label, field, value in mutations:
+            with self.subTest(mutation=label):
+                subject = snapshot()
+                object.__setattr__(subject, field, value)
+                with self.assertRaises(QuantContractError):
+                    revalidate_source_snapshot(subject)
+
+    def test_a_mutated_row_is_caught_by_the_recomputed_hash(self) -> None:
+        subject = snapshot()
+        object.__setattr__(subject, "bar_rows", bar_rows(close="999"))
+        with self.assertRaisesRegex(QuantContractError, "content hash"):
+            revalidate_source_snapshot(subject)
+
+    def test_post_cutoff_rows_are_refused_when_a_cutoff_is_supplied(self) -> None:
+        subject = snapshot()
+        self.assertIs(revalidate_source_snapshot(subject, as_of_cutoff=CUTOFF), subject)
+        with self.assertRaisesRegex(QuantContractError, "cutoff"):
+            revalidate_source_snapshot(subject, as_of_cutoff=START)
+        with_split = snapshot(split_rows=split_rows(START + timedelta(days=2)))
+        with self.assertRaisesRegex(QuantContractError, "cutoff"):
+            revalidate_source_snapshot(with_split, as_of_cutoff=START)
+
+    def test_acquisition_refuses_a_snapshot_mutated_after_construction(self) -> None:
+        # The gap named as a known limitation in the previous response. A
+        # moving revision written back after construction must no longer reach
+        # the receipt.
+        subject = snapshot()
+        object.__setattr__(subject, "source_revision", "latest")
+        with self.assertRaisesRegex(QuantContractError, "revision"):
+            acquire(snapshot=subject)
+
+
+class RowImmutabilityTests(unittest.TestCase):
+    def test_mutating_the_callers_dict_cannot_change_a_stored_row(self) -> None:
+        rows = [dict(row) for row in bar_rows()]
+        subject = SourceSnapshot(
+            source_id="fixture-vendor",
+            source_revision="2026-01-08T00:00:00Z/rev-1",
+            content_sha256=payload_sha256(bar_rows=rows, split_rows=()),
+            bar_rows=rows,
+            split_rows=(),
+        )
+        rows[0]["close"] = "999"
+        rows.append({"session": "2026-02-01"})
+        self.assertEqual(subject.bar_rows[0]["close"], "100")
+        self.assertEqual(len(subject.bar_rows), 4)
+        self.assertIsNotNone(revalidate_source_snapshot(subject))
+
+    def test_a_stored_row_cannot_be_written_to(self) -> None:
+        subject = snapshot()
+        with self.assertRaises(TypeError):
+            subject.bar_rows[0]["close"] = "999"  # type: ignore[index]
+
+    def test_a_stored_row_holding_an_unhashable_value_is_refused(self) -> None:
+        rows = [dict(row) for row in bar_rows()]
+        rows[0]["close"] = ["100"]
+        with self.assertRaises(QuantContractError):
+            SourceSnapshot(
+                source_id="fixture-vendor",
+                source_revision="2026-01-08T00:00:00Z/rev-1",
+                content_sha256="b" * 64,
+                bar_rows=rows,
+                split_rows=(),
+            )
+
+
+class CurrencyTests(unittest.TestCase):
+    def test_currency_must_be_stated_explicitly(self) -> None:
+        with self.assertRaises(TypeError):
+            acquire_point_in_time_dataset(  # type: ignore[call-arg]
+                security_id=SECURITY_ID,
+                as_of_cutoff=CUTOFF,
+                snapshot=snapshot(),
+            )
+
+    def test_a_declared_currency_reaches_the_series(self) -> None:
+        self.assertEqual(acquire(currency="HKD").series.currency, "HKD")
+
+    def test_a_malformed_currency_is_refused(self) -> None:
+        # BarSeries also rejects a lower-case code, so the message is asserted
+        # rather than the type: this has to fail at the adapter, where the
+        # error can say the code was never stated properly, not deep inside a
+        # contract the caller did not call.
+        for value in ("usd", "US", "USDX", "US1", "", "   ", None, 7):
+            with self.subTest(currency=repr(value)):
+                with self.assertRaisesRegex(
+                    QuantContractError, "there is no default"
+                ):
+                    acquire(currency=value)
 
 
 class BoundaryIsolationTests(unittest.TestCase):

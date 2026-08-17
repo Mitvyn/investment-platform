@@ -9,6 +9,7 @@ from investment_research_os.quant_sources.adapter import (
     SourceSnapshot,
     acquire_point_in_time_dataset,
     payload_sha256,
+    revalidate_source_snapshot,
 )
 
 __all__ = [
@@ -16,4 +17,5 @@ __all__ = [
     "SourceSnapshot",
     "acquire_point_in_time_dataset",
     "payload_sha256",
+    "revalidate_source_snapshot",
 ]

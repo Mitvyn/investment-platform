@@ -27,6 +27,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
+from types import MappingProxyType
 from typing import Mapping, Sequence
 
 from investment_research_os.quant.bars import (
@@ -70,6 +71,27 @@ def _text(value: object, *, field: str) -> str:
     return value
 
 
+def _currency(value: object) -> str:
+    """ISO 4217 alphabetic code, stated by the caller.
+
+    There is no default. A source payload carries prices without saying what
+    they are denominated in, and guessing USD would make a Hong Kong or London
+    series silently wrong in a field nothing downstream ever checks.
+    """
+
+    if (
+        not isinstance(value, str)
+        or len(value) != 3
+        or not value.isalpha()
+        or not value.isupper()
+    ):
+        raise QuantContractError(
+            "currency must be an upper-case three-letter ISO 4217 code, "
+            "stated explicitly; there is no default"
+        )
+    return value
+
+
 def _sha256_text(value: object, *, field: str) -> str:
     if (
         not isinstance(value, str)
@@ -83,6 +105,8 @@ def _sha256_text(value: object, *, field: str) -> str:
 
 
 def _rows(value: object, *, field: str) -> tuple[Mapping[str, object], ...]:
+    """Check the shape of a row sequence without copying it."""
+
     if isinstance(value, (str, bytes)) or not isinstance(value, Sequence):
         raise QuantContractError(f"{field} must be a sequence of rows")
     rows = tuple(value)
@@ -92,6 +116,43 @@ def _rows(value: object, *, field: str) -> tuple[Mapping[str, object], ...]:
                 f"{field}[{index}] must be a mapping, got {type(row).__name__}"
             )
     return rows
+
+
+def _frozen_rows(
+    value: object, *, field: str
+) -> tuple[Mapping[str, object], ...]:
+    """Rows copied into read-only mappings the caller cannot reach.
+
+    A snapshot holding the caller's own ``dict`` objects is not immutable in any
+    useful sense: the caller keeps a reference and can rewrite a price after the
+    content hash was declared over it. Copying defeats that, and the read-only
+    view defeats writing through the snapshot itself. Values are checked here
+    too, so a row cannot hold something that has no stable hashable form.
+    """
+
+    rows = _rows(value, field=field)
+    frozen: list[Mapping[str, object]] = []
+    for index, row in enumerate(rows):
+        entry: dict[str, object] = {}
+        for key in row:
+            if not isinstance(key, str):
+                raise QuantContractError(
+                    f"{field}[{index}] keys must be strings, got "
+                    f"{type(key).__name__}"
+                )
+            entry[key] = _hashable_value(row[key], field=f"{field}[{index}].{key}")
+        frozen.append(MappingProxyType(entry))
+    return tuple(frozen)
+
+
+def _hashable_value(value: object, *, field: str) -> object:
+    """One source field, restricted to values with a stable canonical form."""
+
+    if value is None or isinstance(value, (bool, str, int, Decimal, date)):
+        return value
+    raise QuantContractError(
+        f"{field} is not hashable source data: {type(value).__name__}"
+    )
 
 
 def _canonical_rows(
@@ -107,21 +168,14 @@ def _canonical_rows(
     canonical: list[dict[str, object]] = []
     for index, row in enumerate(rows):
         entry: dict[str, object] = {}
-        for key in sorted(row):
-            value = row[key]
-            if isinstance(value, bool) or isinstance(value, (str, int)):
-                entry[str(key)] = value
-            elif isinstance(value, Decimal):
+        for key in sorted(row, key=str):
+            value = _hashable_value(row[key], field=f"row {index} field {key!r}")
+            if isinstance(value, Decimal):
                 entry[str(key)] = str(value)
-            elif isinstance(value, date):
+            elif isinstance(value, date) and not isinstance(value, bool):
                 entry[str(key)] = value.isoformat()
-            elif value is None:
-                entry[str(key)] = None
             else:
-                raise QuantContractError(
-                    f"row {index} field {key!r} is not hashable source data: "
-                    f"{type(value).__name__}"
-                )
+                entry[str(key)] = value
         canonical.append(entry)
     return canonical
 
@@ -166,18 +220,13 @@ class SourceSnapshot:
     split_rows: tuple[Mapping[str, object], ...]
 
     def __post_init__(self) -> None:
-        _text(self.source_id, field="source_id")
-        revision = _text(self.source_revision, field="source_revision")
-        if revision.strip().lower() in _MOVING_REVISIONS:
-            raise QuantContractError(
-                f"source_revision {revision!r} names a moving target, not a "
-                "revision; an implicit latest selection cannot be reproduced"
-            )
-        _sha256_text(self.content_sha256, field="content_sha256")
-        object.__setattr__(self, "bar_rows", _rows(self.bar_rows, field="bar_rows"))
         object.__setattr__(
-            self, "split_rows", _rows(self.split_rows, field="split_rows")
+            self, "bar_rows", _frozen_rows(self.bar_rows, field="bar_rows")
         )
+        object.__setattr__(
+            self, "split_rows", _frozen_rows(self.split_rows, field="split_rows")
+        )
+        _check_declarations(self)
 
     def to_record(self) -> dict[str, object]:
         return {
@@ -188,6 +237,84 @@ class SourceSnapshot:
             "source_revision": self.source_revision,
             "split_row_count": len(self.split_rows),
         }
+
+
+def _check_declarations(snapshot: "SourceSnapshot") -> None:
+    """The declaration rules, shared by construction and revalidation."""
+
+    _text(snapshot.source_id, field="source_id")
+    revision = _text(snapshot.source_revision, field="source_revision")
+    if revision.strip().lower() in _MOVING_REVISIONS:
+        raise QuantContractError(
+            f"source_revision {revision!r} names a moving target, not a "
+            "revision; an implicit latest selection cannot be reproduced"
+        )
+    _sha256_text(snapshot.content_sha256, field="content_sha256")
+
+
+def revalidate_source_snapshot(
+    snapshot: object, *, as_of_cutoff: date | None = None
+) -> "SourceSnapshot":
+    """Re-check a snapshot at the acquisition boundary and return it unchanged.
+
+    A frozen dataclass is only as immutable as ``object.__setattr__`` allows, so
+    a snapshot arriving here may bear none of the guarantees its type implies.
+    Everything is rechecked: the declarations, the row shape and value types,
+    and the payload against its own declared hash. Nothing is repaired.
+
+    ``as_of_cutoff`` is optional because a snapshot has no cutoff of its own —
+    the cutoff belongs to the acquisition request. When one is supplied, rows
+    and splits dated after it are refused here as well, so a caller can check a
+    payload against an intended cutoff without building a receipt.
+
+    Raises ``QuantContractError`` and nothing else.
+    """
+
+    if not isinstance(snapshot, SourceSnapshot):
+        raise QuantContractError(
+            f"expected a SourceSnapshot, got {type(snapshot).__name__}"
+        )
+    _check_declarations(snapshot)
+    bar_rows = _rows(snapshot.bar_rows, field="bar_rows")
+    split_rows = _rows(snapshot.split_rows, field="split_rows")
+    if not isinstance(snapshot.bar_rows, tuple) or not isinstance(
+        snapshot.split_rows, tuple
+    ):
+        raise QuantContractError("rows must be stored as tuples")
+    for label, rows, required in (
+        ("bar", bar_rows, _BAR_FIELDS),
+        ("split", split_rows, _SPLIT_FIELDS),
+    ):
+        for index, row in enumerate(rows):
+            _check_row_keys(row, index=index, required=required, label=label)
+            for key in row:
+                _hashable_value(row[key], field=f"{label} row {index} {key}")
+
+    recomputed = payload_sha256(bar_rows=bar_rows, split_rows=split_rows)
+    if recomputed != snapshot.content_sha256:
+        raise QuantContractError(
+            "source payload does not match its declared content hash; the "
+            f"payload hashes to {recomputed}, the snapshot declares "
+            f"{snapshot.content_sha256}"
+        )
+
+    if as_of_cutoff is not None:
+        if type(as_of_cutoff) is not date:
+            raise QuantContractError("as_of_cutoff must be a date")
+        for label, rows, key in (
+            ("bar", bar_rows, "session"),
+            ("split", split_rows, "effective_session"),
+        ):
+            for index, row in enumerate(rows):
+                session = _session(row[key], field=f"{label} row {index} {key}")
+                if session > as_of_cutoff:
+                    raise QuantContractError(
+                        f"{label} row {index} {key} {session.isoformat()} is after "
+                        f"the cutoff {as_of_cutoff.isoformat()}; the adapter "
+                        "refuses rather than truncating, because it cannot know "
+                        "which window was meant"
+                    )
+    return snapshot
 
 
 def _session(value: object, *, field: str) -> date:
@@ -317,6 +444,7 @@ def _build_actions(
     source_id: str,
     rows: tuple[Mapping[str, object], ...],
     as_of_cutoff: date,
+    covered_sessions: frozenset[date],
 ) -> CorporateActionSet:
     splits: list[StockSplit] = []
     for index, row in enumerate(rows):
@@ -329,6 +457,17 @@ def _build_actions(
             raise QuantContractError(
                 f"split row {index} effective {session.isoformat()} is after the "
                 f"cutoff {as_of_cutoff.isoformat()}"
+            )
+        # The engine transitions into bars[1:] only, and refuses an action
+        # dated anywhere else. Catching it here names the offending source row
+        # instead of aborting a backtest much later for a reason that has
+        # nothing to do with the strategy.
+        if session not in covered_sessions:
+            raise QuantContractError(
+                f"split row {index} effective {session.isoformat()} is not a "
+                "covered transition session; an action must fall on a bar the "
+                "engine trades into, which excludes the first bar and any "
+                "session the series does not contain"
             )
         for field in ("new_shares", "old_shares"):
             value = row[field]
@@ -355,8 +494,8 @@ def acquire_point_in_time_dataset(
     *,
     security_id: str,
     as_of_cutoff: date,
+    currency: str,
     snapshot: SourceSnapshot,
-    currency: str = "USD",
 ) -> PointInTimeDataset:
     """Turn one declared source payload into one validated Quant receipt.
 
@@ -370,26 +509,15 @@ def acquire_point_in_time_dataset(
     security, and an unrecognised column.
     """
 
-    if not isinstance(snapshot, SourceSnapshot):
-        raise QuantContractError(
-            f"snapshot must be a SourceSnapshot, got {type(snapshot).__name__}"
-        )
     canonical_id = canonical_security_id(security_id)
     if type(as_of_cutoff) is not date:
         raise QuantContractError("as_of_cutoff must be a date")
-    _text(currency, field="currency")
+    _currency(currency)
 
-    # Integrity before interpretation. If the payload is not the one whose hash
-    # was declared, nothing downstream is worth computing.
-    recomputed = payload_sha256(
-        bar_rows=snapshot.bar_rows, split_rows=snapshot.split_rows
-    )
-    if recomputed != snapshot.content_sha256:
-        raise QuantContractError(
-            "source payload does not match its declared content hash; the "
-            f"payload hashes to {recomputed}, the snapshot declares "
-            f"{snapshot.content_sha256}"
-        )
+    # Integrity before interpretation. If the snapshot is not the one it claims
+    # to be, or the payload is not the one whose hash was declared, nothing
+    # downstream is worth computing.
+    revalidate_source_snapshot(snapshot, as_of_cutoff=as_of_cutoff)
 
     with quant_decimal_context():
         series = _build_series(
@@ -404,6 +532,7 @@ def acquire_point_in_time_dataset(
             source_id=snapshot.source_id,
             rows=snapshot.split_rows,
             as_of_cutoff=as_of_cutoff,
+            covered_sessions=frozenset(bar.session for bar in series.bars[1:]),
         )
         return PointInTimeDataset(
             series=series,
