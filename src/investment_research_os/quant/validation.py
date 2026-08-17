@@ -175,6 +175,10 @@ def build_walk_forward_windows(
     averaging it in unweighted is a quiet error.
     """
 
+    # Guarded here, not only in validate_walk_forward: this is exported from
+    # quant.__init__, and a mutated zero step makes the loop below compute the
+    # same window forever rather than return a wrong one.
+    revalidate_walk_forward_config(config)
     if isinstance(session_count, bool) or not isinstance(session_count, int):
         raise QuantContractError("session_count must be an integer")
     placeholder = sessions is None

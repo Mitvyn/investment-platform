@@ -1027,6 +1027,60 @@ class AnnualisationPeriodsTests(unittest.TestCase):
         self.assertTrue(report.windows)
 
 
+class WindowBuilderGuardTests(unittest.TestCase):
+    def test_a_zero_step_is_refused_instead_of_looping_forever(self) -> None:
+        # A zero step never advances the offset, so every iteration computes
+        # the same window and the loop appends until memory runs out. The
+        # failure mode is a hang, not a wrong answer, which is why the public
+        # helper cannot leave this to its caller.
+        mutated = schedule()
+        object.__setattr__(mutated, "step_sessions", 0)
+        with self.assertRaises(QuantContractError):
+            build_walk_forward_windows(session_count=120, config=mutated)
+
+    def test_another_mutated_schedule_field_is_refused(self) -> None:
+        for field, value in (
+            ("train_sessions", 0),
+            ("embargo_sessions", -1),
+            ("window_mode", "expanding"),
+            ("test_sessions", True),
+        ):
+            with self.subTest(field=field):
+                mutated = schedule()
+                object.__setattr__(mutated, field, value)
+                with self.assertRaises(QuantContractError):
+                    build_walk_forward_windows(session_count=120, config=mutated)
+
+    def test_a_non_contract_config_is_refused(self) -> None:
+        with self.assertRaises(QuantContractError):
+            build_walk_forward_windows(
+                session_count=120,
+                config=object(),  # type: ignore[arg-type]
+            )
+
+    def test_valid_schedules_still_produce_their_windows(self) -> None:
+        for mode in ("rolling", "anchored"):
+            with self.subTest(window_mode=mode):
+                config = schedule(window_mode=mode, min_windows=1)
+                windows = build_walk_forward_windows(
+                    session_count=120, config=config
+                )
+                self.assertTrue(windows)
+                self.assertEqual(
+                    [window.window_index for window in windows],
+                    list(range(len(windows))),
+                )
+                for earlier, later in zip(windows, windows[1:]):
+                    self.assertLess(
+                        earlier.test_start_index, later.test_start_index
+                    )
+                for window in windows:
+                    self.assertLess(
+                        window.train_end_index, window.test_start_index
+                    )
+                    self.assertLessEqual(window.test_end_index, 119)
+
+
 class LiquidityTests(unittest.TestCase):
     def test_the_liquidity_limit_is_pinned_in_the_record(self) -> None:
         report = validate()
