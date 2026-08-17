@@ -20,6 +20,11 @@ from investment_research_os.quant.bars import (
     QuantContractError,
 )
 from investment_research_os.quant.costs import CostModel, TradeCharges
+from investment_research_os.quant.dataset import (
+    DATASET_VERSION,
+    CoverageScope,
+    PointInTimeDataset,
+)
 from investment_research_os.quant.corporate_actions import (
     CorporateActionSet,
     StockSplit,
@@ -60,6 +65,9 @@ from investment_research_os.quant.engine import (
 
 __all__ = [
     "BacktestConfig",
+    "CoverageScope",
+    "DATASET_VERSION",
+    "PointInTimeDataset",
     "CostScenario",
     "CostSensitivityConfig",
     "MultipleTestingDisclosure",
