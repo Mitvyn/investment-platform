@@ -580,9 +580,10 @@ def validate_walk_forward(
             "factory must expose build(train_window); a pre-built strategy "
             "would carry fitted state across windows"
         )
-    # Fail closed here, before a single window is fitted: a leaked future bar
-    # would otherwise reach a strategy through train windows, which never run
-    # through the engine and so never hit its own guard.
+    # Fail closed here, before a single window is fitted. Train windows never
+    # run through the engine, so a leaked future bar or a forged provenance
+    # field would otherwise reach a factory without ever meeting the engine's
+    # own recheck.
     series, corporate_actions = _enforced_inputs(dataset)
 
     trials_observed = len(cost_sensitivity.scenarios)

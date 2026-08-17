@@ -32,7 +32,7 @@ from investment_research_os.quant.corporate_actions import (
     CorporateActionSet,
     StockSplit,
 )
-from investment_research_os.quant.dataset import PointInTimeDataset
+from investment_research_os.quant.dataset import PointInTimeDataset, revalidate_dataset
 from investment_research_os.quant.liquidity import ParticipationLimit
 
 ENGINE_VERSION = "quant-backtest-4"
@@ -400,38 +400,19 @@ def _affordable_quantity(
 def _enforced_inputs(
     dataset: PointInTimeDataset,
 ) -> tuple[BarSeries, CorporateActionSet]:
-    """Re-check the dataset receipt at the execution boundary.
+    """Re-check the whole dataset receipt at the execution boundary.
 
     ``PointInTimeDataset`` validates itself at construction, but a frozen
-    dataclass is only as immutable as ``object.__setattr__`` allows. The engine
-    is the point where a session later than the cutoff would become a traded
-    bar, so it re-checks rather than trusting a guarantee it cannot observe.
+    dataclass is only as immutable as ``object.__setattr__`` allows, so a
+    receipt reaching execution may bear none of the guarantees its type
+    implies. Every invariant is rechecked through ``revalidate_dataset`` — the
+    single definition in ``dataset.py`` — rather than a subset restated here,
+    because a partial second copy drifts and a drifted guard is worse than an
+    absent one.
     """
 
-    if not isinstance(dataset, PointInTimeDataset):
-        raise QuantContractError(
-            "market data enters the engine only as a PointInTimeDataset"
-        )
-    series = dataset.series
-    corporate_actions = dataset.corporate_actions
-    if corporate_actions.security_id != series.security_id:
-        raise QuantContractError(
-            "corporate actions must match the bar-series security_id"
-        )
-    cutoff = dataset.as_of_cutoff
-    for bar in series.bars:
-        if bar.session > cutoff:
-            raise QuantContractError(
-                f"bar session {bar.session.isoformat()} is after the dataset "
-                f"cutoff {cutoff.isoformat()}"
-            )
-    for action in corporate_actions.actions:
-        if action.effective_session > cutoff:
-            raise QuantContractError(
-                f"corporate action effective {action.effective_session.isoformat()} "
-                f"is after the dataset cutoff {cutoff.isoformat()}"
-            )
-    return series, corporate_actions
+    dataset = revalidate_dataset(dataset)
+    return dataset.series, dataset.corporate_actions
 
 
 def run_backtest(

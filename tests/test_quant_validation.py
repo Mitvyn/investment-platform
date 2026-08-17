@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import unittest
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 
 from investment_research_os.quant import (
@@ -527,6 +527,25 @@ class DatasetBoundaryTests(unittest.TestCase):
         for precision in (5, 60):
             with localcontext(Context(prec=precision)):
                 self.assertEqual(validate(dataset=dataset).content_sha256, baseline)
+
+    def test_a_forged_receipt_field_is_refused_before_any_fitting(self) -> None:
+        mutations: tuple[tuple[str, object], ...] = (
+            ("source_content_sha256", "forged"),
+            ("source_id", "   "),
+            ("source_revision", ""),
+            ("coverage_scope", "universe"),
+            ("as_of_cutoff", datetime(2026, 5, 4, 20, 0)),
+            ("series", object()),
+            ("corporate_actions", object()),
+        )
+        for field, value in mutations:
+            with self.subTest(field=field):
+                dataset = make_dataset(make_series(declining_prices(120)))
+                object.__setattr__(dataset, field, value)
+                factory = FlatFactory()
+                with self.assertRaises(QuantContractError):
+                    validate(dataset=dataset, factory=factory)
+                self.assertEqual(factory.calls, 0)
 
 
 class LiquidityTests(unittest.TestCase):

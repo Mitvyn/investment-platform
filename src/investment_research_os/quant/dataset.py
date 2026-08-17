@@ -69,64 +69,7 @@ class PointInTimeDataset:
     coverage_scope: CoverageScope
 
     def __post_init__(self) -> None:
-        if not isinstance(self.series, BarSeries):
-            raise QuantContractError("series must be a BarSeries")
-        if not isinstance(self.corporate_actions, CorporateActionSet):
-            raise QuantContractError(
-                "corporate_actions must be a CorporateActionSet"
-            )
-
-        # Guarded here as well as in BarSeries. A future widened interval or
-        # price basis must not silently enter a daily unadjusted dataset.
-        if self.series.interval != "1d":
-            raise QuantContractError(
-                f"a point-in-time dataset holds daily bars, got {self.series.interval!r}"
-            )
-        if self.series.price_basis != "unadjusted":
-            raise QuantContractError(
-                "a point-in-time dataset holds unadjusted bars; adjusted prices "
-                "already fold in corporate actions declared separately here"
-            )
-
-        if self.corporate_actions.security_id != self.series.security_id:
-            raise QuantContractError(
-                "corporate actions must carry the bar-series security_id; "
-                "identity is never inferred from one side"
-            )
-
-        # `type(...) is not date` rather than isinstance: a datetime is a date
-        # subclass, and a wall-clock instant is not a session.
-        if type(self.as_of_cutoff) is not date:
-            raise QuantContractError("as_of_cutoff must be a date")
-
-        last_session = self.series.bars[-1].session
-        if self.as_of_cutoff < last_session:
-            raise QuantContractError(
-                f"as_of_cutoff {self.as_of_cutoff.isoformat()} precedes the last "
-                f"included session {last_session.isoformat()}"
-            )
-
-        for action in self.corporate_actions.actions:
-            if action.effective_session > self.as_of_cutoff:
-                raise QuantContractError(
-                    f"corporate action effective {action.effective_session.isoformat()} "
-                    f"is after the cutoff {self.as_of_cutoff.isoformat()}"
-                )
-
-        _required_text(self.source_id, field="source_id")
-        _required_text(self.source_revision, field="source_revision")
-        if not isinstance(self.source_content_sha256, str) or not _SHA256_PATTERN.fullmatch(
-            self.source_content_sha256
-        ):
-            raise QuantContractError(
-                "source_content_sha256 must be a lowercase 64-character SHA-256 digest"
-            )
-
-        if self.coverage_scope != "single_security":
-            raise QuantContractError(
-                "coverage_scope must be single_security; no universe-level "
-                "contract exists yet"
-            )
+        _check_invariants(self)
 
     @property
     def security_id(self) -> str:
@@ -156,3 +99,89 @@ class PointInTimeDataset:
     def content_sha256(self) -> str:
         with quant_decimal_context():
             return canonical_sha256(self.to_record())
+
+
+def _check_invariants(dataset: PointInTimeDataset) -> None:
+    """Every receipt invariant, in one place.
+
+    Called at construction and again at each execution boundary. A frozen
+    dataclass is not a protection boundary — ``object.__setattr__`` walks
+    straight through it — so the rules live in a function both callers share.
+    Two divergent copies would be worse than no second check at all.
+    """
+
+    if not isinstance(dataset.series, BarSeries):
+        raise QuantContractError("series must be a BarSeries")
+    if not isinstance(dataset.corporate_actions, CorporateActionSet):
+        raise QuantContractError(
+            "corporate_actions must be a CorporateActionSet"
+        )
+
+    # Guarded here as well as in BarSeries. A future widened interval or
+    # price basis must not silently enter a daily unadjusted dataset.
+    if dataset.series.interval != "1d":
+        raise QuantContractError(
+            f"a point-in-time dataset holds daily bars, got {dataset.series.interval!r}"
+        )
+    if dataset.series.price_basis != "unadjusted":
+        raise QuantContractError(
+            "a point-in-time dataset holds unadjusted bars; adjusted prices "
+            "already fold in corporate actions declared separately here"
+        )
+
+    if dataset.corporate_actions.security_id != dataset.series.security_id:
+        raise QuantContractError(
+            "corporate actions must carry the bar-series security_id; "
+            "identity is never inferred from one side"
+        )
+
+    # `type(...) is not date` rather than isinstance: a datetime is a date
+    # subclass, and a wall-clock instant is not a session.
+    if type(dataset.as_of_cutoff) is not date:
+        raise QuantContractError("as_of_cutoff must be a date")
+
+    last_session = dataset.series.bars[-1].session
+    if dataset.as_of_cutoff < last_session:
+        raise QuantContractError(
+            f"as_of_cutoff {dataset.as_of_cutoff.isoformat()} precedes the last "
+            f"included session {last_session.isoformat()}"
+        )
+
+    for action in dataset.corporate_actions.actions:
+        if action.effective_session > dataset.as_of_cutoff:
+            raise QuantContractError(
+                f"corporate action effective {action.effective_session.isoformat()} "
+                f"is after the cutoff {dataset.as_of_cutoff.isoformat()}"
+            )
+
+    _required_text(dataset.source_id, field="source_id")
+    _required_text(dataset.source_revision, field="source_revision")
+    if not isinstance(dataset.source_content_sha256, str) or not _SHA256_PATTERN.fullmatch(
+        dataset.source_content_sha256
+    ):
+        raise QuantContractError(
+            "source_content_sha256 must be a lowercase 64-character SHA-256 digest"
+        )
+
+    if dataset.coverage_scope != "single_security":
+        raise QuantContractError(
+            "coverage_scope must be single_security; no universe-level "
+            "contract exists yet"
+        )
+
+
+def revalidate_dataset(dataset: object) -> PointInTimeDataset:
+    """Re-check a receipt at an execution boundary and return it unchanged.
+
+    Raises ``QuantContractError`` for anything that is not a fully valid
+    ``PointInTimeDataset``, a mutated one included. No I/O, no clock, and no
+    claim about whether the declared source really held this data — this
+    checks contract shape and declared provenance, nothing further.
+    """
+
+    if not isinstance(dataset, PointInTimeDataset):
+        raise QuantContractError(
+            "market data enters execution only as a PointInTimeDataset"
+        )
+    _check_invariants(dataset)
+    return dataset

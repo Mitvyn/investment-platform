@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import unittest
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from decimal import Decimal, localcontext
 
 from investment_research_os.quant import (
@@ -984,6 +984,39 @@ class DatasetBoundaryTests(unittest.TestCase):
         )
         self.assertEqual(result.fill_attempts[0].limit_reason, "participation_capped")
         self.assertGreater(result.total_unfilled_shares, 0)
+
+    def test_a_forged_receipt_field_is_refused_before_the_strategy_runs(self) -> None:
+        # Frozen is not sealed. Every mutation below produces a dataset that
+        # could never have been constructed, and each must be refused at the
+        # boundary rather than silently hashed into a result.
+        mutations: tuple[tuple[str, object], ...] = (
+            ("source_content_sha256", "forged"),
+            ("source_id", "   "),
+            ("source_revision", ""),
+            ("coverage_scope", "universe"),
+            ("as_of_cutoff", datetime(2026, 1, 6, 20, 0)),
+            ("series", object()),
+            ("corporate_actions", object()),
+        )
+        for field, value in mutations:
+            with self.subTest(field=field):
+                dataset = make_dataset(flat_series(["100", "101"]))
+                object.__setattr__(dataset, field, value)
+                strategy = RecordingStrategy()
+                with self.assertRaises(QuantContractError):
+                    run(dataset, strategy)
+                self.assertEqual(strategy.cutoffs, [])
+
+    def test_a_valid_receipt_still_runs_after_the_recheck(self) -> None:
+        dataset = make_dataset(flat_series(["100", "104", "99"]))
+        baseline = run(dataset, AlwaysLong())
+        self.assertEqual(baseline.dataset_sha256, dataset.content_sha256)
+        for precision in (5, 60):
+            with localcontext() as ctx:
+                ctx.prec = precision
+                self.assertEqual(
+                    run(dataset, AlwaysLong()).content_sha256, baseline.content_sha256
+                )
 
 
 class IsolationTests(unittest.TestCase):
