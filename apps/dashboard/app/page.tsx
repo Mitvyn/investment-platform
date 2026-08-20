@@ -1332,16 +1332,13 @@ export default async function TickerWorkspace({
                 </p>
               ) : null}
               <div className="mt-4 border-t border-border pt-4 text-xs leading-relaxed text-muted-foreground">
-                Connection keeps any safe read capability Moomoo grants. Market
-                data requires <span className="font-mono">quote:read</span>.
-                Holdings sync and save require <span className="font-mono">trade:read</span>{" "}
-                plus one concrete <span className="font-mono">accid:&lt;account-id&gt;</span>{" "}
-                grant; those functions stay blocked when either is absent.
-                Registration uses <span className="font-mono">accid:*</span>, but
-                wildcard, write, or unknown scopes in the issued token are rejected.
-                Client ID is public app identity, not Moomoo UID or
-                password. Authorization opens in system browser; broker credentials
-                never enter this app.
+                Capability status above comes from safe access Moomoo returned
+                during your last authorization. It never assumes rights from
+                app registration or Moomoo account settings. Change permissions
+                in Moomoo, then reconnect to refresh this status. Trade execution
+                remains unavailable by design. Client ID is public app identity,
+                not Moomoo UID or password. Authorization opens in system browser;
+                broker credentials never enter this app.
                 Disconnect removes local Keychain authorization only. Revoke
                 provider authorization separately in Moomoo when needed.
               </div>
