@@ -71,6 +71,14 @@ class RefreshingOAuthTransport(FakeOAuthTransport):
         return super().post_form(url, form=form)
 
 
+class RotatingRefreshingOAuthTransport(RefreshingOAuthTransport):
+    def post_form(self, url: str, *, form: Mapping[str, str]) -> Mapping[str, object]:
+        payload = dict(super().post_form(url, form=form))
+        if form.get("grant_type") == "refresh_token":
+            payload["refresh_token"] = "rotated-refresh-secret"
+        return payload
+
+
 class DowngradingOAuthTransport(FakeOAuthTransport):
     def post_form(self, url: str, *, form: Mapping[str, str]) -> Mapping[str, object]:
         payload = dict(super().post_form(url, form=form))
@@ -215,6 +223,26 @@ class DesktopMoomooConnectionTests(unittest.TestCase):
         self.assertEqual(opened_urls, [])
         self.assertEqual(transport.calls[-1][1]["grant_type"], "refresh_token")
         self.assertEqual(quote_stream.access.access_token, "refreshed-access-secret")
+
+    def test_resume_persists_rotated_refresh_token(self) -> None:
+        backend = FakeKeychainBackend()
+        operator_id = "11111111-1111-4111-8111-111111111111"
+        client_id = "4a8bcd69-e915-4778-9583-17ad0e9e6a80"
+        keychain = MoomooTokenKeychain(operator_id=operator_id, backend=backend)
+        keychain.store_refresh_token("refresh-secret")
+        service, _ = _service_for_completion(
+            oauth_transport=RotatingRefreshingOAuthTransport(),
+            keychain_backend=backend,
+            portfolio_client_factory=lambda _access_token: FakePortfolioClient(),
+        )
+
+        status = service.resume_connection(
+            client_id=client_id,
+            operator_id=operator_id,
+        )
+
+        self.assertEqual(status.state, "connected")
+        self.assertEqual(keychain.read_refresh_token(), "rotated-refresh-secret")
 
     def test_control_server_resumes_saved_connection_without_browser(self) -> None:
         backend = FakeKeychainBackend()

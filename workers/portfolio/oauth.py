@@ -67,6 +67,7 @@ class MoomooOAuthRefreshedAccess:
     expires_in: int
     read_scopes: tuple[str, ...]
     account_ids: tuple[str, ...]
+    refresh_token: str | None = field(default=None, repr=False)
 
 
 class MoomooOAuthTransport(Protocol):
@@ -288,6 +289,7 @@ def refresh_access_token(
     token_type = payload.get("token_type")
     expires_in = payload.get("expires_in")
     scope = payload.get("scope")
+    rotated_refresh_token = payload.get("refresh_token")
     if (
         not isinstance(access_token, str)
         or not access_token
@@ -296,7 +298,15 @@ def refresh_access_token(
         or not isinstance(expires_in, int)
         or expires_in <= 0
         or not isinstance(scope, str)
-        or "refresh_token" in payload
+        or (
+            rotated_refresh_token is not None
+            and (
+                not isinstance(rotated_refresh_token, str)
+                or not rotated_refresh_token
+                or "\n" in rotated_refresh_token
+                or "\r" in rotated_refresh_token
+            )
+        )
     ):
         raise MoomooOAuthError("Moomoo OAuth token response is invalid")
     grant = validate_granted_scopes(
@@ -308,4 +318,5 @@ def refresh_access_token(
         expires_in=expires_in,
         read_scopes=grant.read_scopes,
         account_ids=grant.account_ids,
+        refresh_token=rotated_refresh_token,
     )

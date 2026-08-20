@@ -60,6 +60,27 @@ class MoomooOAuthTests(unittest.TestCase):
             },
         )
 
+    def test_refresh_accepts_optional_rotated_refresh_token(self) -> None:
+        transport = FakeOAuthTransport(
+            {
+                "access_token": "replacement-access-secret",
+                "refresh_token": "rotated-refresh-secret",
+                "token_type": "Bearer",
+                "expires_in": 7200,
+                "scope": "quote:read trade:read accid:2638",
+            }
+        )
+
+        refreshed = refresh_access_token(
+            client_id="4a8bcd69-e915-4778-9583-17ad0e9e6a80",
+            refresh_token="keychain-refresh-secret",
+            required_read_scopes=("quote:read", "trade:read"),
+            transport=transport,
+        )
+
+        self.assertEqual(refreshed.refresh_token, "rotated-refresh-secret")
+        self.assertNotIn("rotated-refresh-secret", repr(refreshed))
+
     def test_url_transport_posts_bounded_form_without_secret_logging(self) -> None:
         calls: list[object] = []
 

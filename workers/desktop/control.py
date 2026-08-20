@@ -318,15 +318,16 @@ class MoomooConnectionService:
         if self._portfolio_client_factory is None:
             raise DesktopControlError("moomoo_holdings_sync_unavailable")
         try:
-            refresh_token = self._keychain_factory(
-                normalized_operator_id
-            ).read_refresh_token()
+            keychain = self._keychain_factory(normalized_operator_id)
+            refresh_token = keychain.read_refresh_token()
             refreshed = refresh_access_token(
                 client_id=client_id,
                 refresh_token=refresh_token,
                 required_read_scopes=READ_ONLY_SCOPES,
                 transport=self._oauth_transport,
             )
+            if refreshed.refresh_token is not None:
+                keychain.store_refresh_token(refreshed.refresh_token)
             refreshed_capabilities = _granted_capabilities(
                 read_scopes=refreshed.read_scopes,
                 account_ids=refreshed.account_ids,
@@ -458,15 +459,16 @@ class MoomooConnectionService:
 
         quote_stream: DesktopMoomooQuoteStream | None = None
         try:
-            refresh_token = self._keychain_factory(
-                normalized_operator_id
-            ).read_refresh_token()
+            keychain = self._keychain_factory(normalized_operator_id)
+            refresh_token = keychain.read_refresh_token()
             refreshed = refresh_access_token(
                 client_id=normalized_client_id,
                 refresh_token=refresh_token,
                 required_read_scopes=READ_ONLY_SCOPES,
                 transport=self._oauth_transport,
             )
+            if refreshed.refresh_token is not None:
+                keychain.store_refresh_token(refreshed.refresh_token)
             capabilities = _granted_capabilities(
                 read_scopes=refreshed.read_scopes,
                 account_ids=refreshed.account_ids,
@@ -834,18 +836,22 @@ class MoomooConnectionService:
         operator_id: str,
         client_id: str,
     ) -> MoomooQuoteAccess:
-        refresh_token = self._keychain_factory(operator_id).read_refresh_token()
+        keychain = self._keychain_factory(operator_id)
+        refresh_token = keychain.read_refresh_token()
         refreshed = refresh_access_token(
             client_id=client_id,
             refresh_token=refresh_token,
             required_read_scopes=READ_ONLY_SCOPES,
             transport=self._oauth_transport,
         )
+        if refreshed.refresh_token is not None:
+            keychain.store_refresh_token(refreshed.refresh_token)
         if "quote:read" not in refreshed.read_scopes:
             raise MoomooOAuthError("Moomoo quote read scope was removed")
         with self._lock:
             if self._operator_id != operator_id or self._client_id != client_id:
                 raise RuntimeError("Moomoo connection changed")
+            self._access_token = refreshed.access_token
         return MoomooQuoteAccess(
             access_token=refreshed.access_token,
             expires_in=refreshed.expires_in,
