@@ -164,10 +164,6 @@ class MoomooOAuthTests(unittest.TestCase):
     def test_granted_scope_failures_identify_safe_remediation(self) -> None:
         cases = (
             (
-                "quote:read trade:read accid:*",
-                "wildcard_account_scope_not_permitted",
-            ),
-            (
                 "quote:read trade:read trade:write accid:2638",
                 "write_scope_not_permitted",
             ),
@@ -184,6 +180,17 @@ class MoomooOAuthTests(unittest.TestCase):
                         granted,
                         required_read_scopes=("quote:read", "trade:read"),
                     )
+
+    def test_accepts_echoed_account_selector_without_treating_it_as_account_grant(
+        self,
+    ) -> None:
+        grant = validate_granted_scopes(
+            "quote:read trade:read accid:*",
+            required_read_scopes=("quote:read", "trade:read"),
+        )
+
+        self.assertEqual(grant.read_scopes, ("quote:read", "trade:read"))
+        self.assertEqual(grant.account_ids, ())
 
     def test_builds_exact_loopback_authorization_url(self) -> None:
         attempt = create_pkce_attempt(

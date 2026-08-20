@@ -148,18 +148,18 @@ def validate_granted_scopes(
 ) -> MoomooGrantedScopes:
     granted = set(granted_scope.split())
     required = set(required_read_scopes)
-    account_scopes = {scope for scope in granted if scope.startswith("accid:")}
+    account_scopes = {
+        scope
+        for scope in granted
+        if scope.startswith("accid:") and scope != "accid:*"
+    }
     account_ids = tuple(
         sorted(scope.removeprefix("accid:") for scope in account_scopes)
     )
-    allowed = required | account_scopes
+    allowed = required | account_scopes | {"accid:*"}
     if any(not account_id for account_id in account_ids):
         raise MoomooOAuthError(
             "Moomoo OAuth granted scope mismatch:concrete_account_scope_missing"
-        )
-    if "*" in account_ids:
-        raise MoomooOAuthError(
-            "Moomoo OAuth granted scope mismatch:wildcard_account_scope_not_permitted"
         )
     if any(scope.endswith(":write") for scope in granted):
         raise MoomooOAuthError(

@@ -107,6 +107,13 @@ class NoSupportedReadScopeOAuthTransport(FakeOAuthTransport):
         return payload
 
 
+class AccountSelectorEchoOAuthTransport(FakeOAuthTransport):
+    def post_form(self, url: str, *, form: Mapping[str, str]) -> Mapping[str, object]:
+        payload = dict(super().post_form(url, form=form))
+        payload["scope"] = "quote:read trade:read accid:*"
+        return payload
+
+
 class FailingKeychainBackend(FakeKeychainBackend):
     def store(self, *, service: str, account: str, secret: str) -> None:
         del service, account, secret
@@ -564,6 +571,33 @@ class DesktopMoomooConnectionTests(unittest.TestCase):
             {
                 "account_count": 0,
                 "capabilities": [],
+                "error_code": None,
+                "position_count": 0,
+                "state": "connected",
+                "sync_state": "unavailable",
+            },
+        )
+        self.assertEqual(clients, [])
+
+    def test_connects_when_moomoo_echoes_account_selector_without_granting_account(
+        self,
+    ) -> None:
+        clients: list[str] = []
+        service, opened_urls = _service_for_completion(
+            oauth_transport=AccountSelectorEchoOAuthTransport(),
+            portfolio_client_factory=lambda access_token: (
+                clients.append(access_token) or FakePortfolioClient()
+            ),
+        )
+
+        _complete_browser_callback(service, opened_urls)
+
+        self.assertTrue(_wait_until(lambda: service.status().state == "connected"))
+        self.assertEqual(
+            service.status().as_dict(),
+            {
+                "account_count": 0,
+                "capabilities": ["market_data"],
                 "error_code": None,
                 "position_count": 0,
                 "state": "connected",
