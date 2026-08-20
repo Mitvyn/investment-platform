@@ -8,11 +8,30 @@ import {
   loadMoomooDesktopHoldings,
   loadMoomooDesktopQuotes,
   loadMoomooDesktopStatus,
+  presentMoomooConnectionSummary,
   presentMoomooCapabilityStates,
   refreshMoomooDesktopHoldings,
   replaceMoomooDesktopQuoteSubscriptions,
   resumeMoomooDesktopConnection,
 } from "./moomoo-desktop.ts";
+
+test("connection failure detail overrides an older persisted mirror summary", () => {
+  assert.equal(
+    presentMoomooConnectionSummary(
+      {
+        accountCount: 1,
+        canReadMarketData: false,
+        canReadPortfolio: false,
+        detail: "Moomoo returned write access. Reconnect with read-only access.",
+        positionCount: 0,
+        state: "failed",
+        syncState: "failed",
+      },
+      "Persisted read-only mirror · checked 2 minutes ago",
+    ),
+    "Connection needs attention · Moomoo returned write access. Reconnect with read-only access.",
+  );
+});
 
 test("capability matrix keeps partial authorization connected and explains reconnect path", () => {
   assert.deepEqual(
