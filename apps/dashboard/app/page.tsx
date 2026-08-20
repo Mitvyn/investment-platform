@@ -80,6 +80,7 @@ import {
   loadMoomooDesktopQuotes,
   loadMoomooDesktopStatus,
   MOOMOO_DESKTOP_CALLBACK_URL,
+  presentMoomooCapabilityStates,
 } from "@/lib/moomoo-desktop";
 import { summarizeMarketSeries } from "@/lib/market-series";
 import { summarizeHoldings } from "@/lib/holdings-summary";
@@ -117,6 +118,12 @@ import {
 import { registerSecurity } from "./security-actions";
 
 export const dynamic = "force-dynamic";
+
+const moomooCapabilityBadges = {
+  enabled: { label: "Enabled", variant: "verified" },
+  not_supported: { label: "Not supported", variant: "outline" },
+  reconnect_required: { label: "Reconnect needed", variant: "attention" },
+} as const;
 
 function formatDate(value: string) {
   return new Intl.DateTimeFormat("en", {
@@ -1250,6 +1257,25 @@ export default async function TickerWorkspace({
               {visibleMoomooHoldings ? (
                 <MoomooHoldingsTable holdings={visibleMoomooHoldings} />
               ) : null}
+              <div className="mt-5 grid gap-3 border-t border-border pt-4 sm:grid-cols-3">
+                {presentMoomooCapabilityStates(moomooStatus).map((capability) => {
+                  const badge = moomooCapabilityBadges[capability.state];
+                  return (
+                    <div
+                      className="rounded-lg border border-border bg-muted/20 p-3"
+                      key={capability.id}
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <p className="text-xs font-medium">{capability.label}</p>
+                        <Badge variant={badge.variant}>{badge.label}</Badge>
+                      </div>
+                      <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+                        {capability.detail}
+                      </p>
+                    </div>
+                  );
+                })}
+              </div>
               {moomooStatus.state === "connected" ? (
                 <div className="mt-4 flex flex-wrap justify-end gap-2">
                   {moomooStatus.canReadPortfolio ? (

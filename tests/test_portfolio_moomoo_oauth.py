@@ -5,6 +5,7 @@ import hashlib
 import json
 import unittest
 from typing import Mapping
+from urllib.parse import parse_qs, urlsplit
 
 from workers.portfolio.oauth import (
     MoomooOAuthTokenResponse,
@@ -208,7 +209,12 @@ class MoomooOAuthTests(unittest.TestCase):
         )
         self.assertIn("response_type=code", url)
         self.assertIn("state=state-value", url)
-        self.assertNotIn("scope=", url)
+        query = parse_qs(urlsplit(url).query, strict_parsing=True)
+        self.assertEqual(
+            query["scope"], ["quote:read trade:read accid:*"]
+        )
+        self.assertNotIn("quote:write", query["scope"][0])
+        self.assertNotIn("trade:write", query["scope"][0])
 
         with self.assertRaisesRegex(MoomooOAuthError, "loopback redirect"):
             build_authorization_url(

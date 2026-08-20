@@ -8,10 +8,45 @@ import {
   loadMoomooDesktopHoldings,
   loadMoomooDesktopQuotes,
   loadMoomooDesktopStatus,
+  presentMoomooCapabilityStates,
   refreshMoomooDesktopHoldings,
   replaceMoomooDesktopQuoteSubscriptions,
   resumeMoomooDesktopConnection,
 } from "./moomoo-desktop.ts";
+
+test("capability matrix keeps partial authorization connected and explains reconnect path", () => {
+  assert.deepEqual(
+    presentMoomooCapabilityStates({
+      accountCount: 0,
+      canReadMarketData: true,
+      canReadPortfolio: false,
+      detail: "Market data connected; holdings unavailable without Accounts & Orders access",
+      positionCount: 0,
+      state: "connected",
+      syncState: "unavailable",
+    }),
+    [
+      {
+        detail: "Live quotes available for selected security.",
+        id: "market_data",
+        label: "Market data",
+        state: "enabled",
+      },
+      {
+        detail: "Enable Accounts & Orders for one account, then reconnect.",
+        id: "portfolio_holdings",
+        label: "Holdings mirror",
+        state: "reconnect_required",
+      },
+      {
+        detail: "Not supported by this app. No order or trade-execution path exists.",
+        id: "trade_execution",
+        label: "Trade execution",
+        state: "not_supported",
+      },
+    ],
+  );
+});
 
 const desktopEnvironment = {
   IROS_DESKTOP: "1",
