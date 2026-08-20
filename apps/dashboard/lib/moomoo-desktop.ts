@@ -28,6 +28,49 @@ export type MoomooDesktopStatus = {
   syncState: "failed" | "pending" | "ready" | "unavailable";
 };
 
+export type MoomooCapabilityState = {
+  detail: string;
+  id: "market_data" | "portfolio_holdings" | "trade_execution";
+  label: string;
+  state: "enabled" | "not_supported" | "reconnect_required";
+};
+
+export function presentMoomooCapabilityStates(
+  status: MoomooDesktopStatus,
+): MoomooCapabilityState[] {
+  const connected = status.state === "connected";
+  const marketDataDetail = status.canReadMarketData
+    ? "Live quotes available for selected security."
+    : connected
+      ? "Enable Market Data in Moomoo, then reconnect."
+      : "Connect Moomoo, then enable Market Data.";
+  const holdingsDetail = status.canReadPortfolio
+    ? "Read-only holdings refresh and mirror save available."
+    : connected
+      ? "Enable Accounts & Orders for one account, then reconnect."
+      : "Connect Moomoo and grant one account for holdings access.";
+  return [
+    {
+      detail: marketDataDetail,
+      id: "market_data",
+      label: "Market data",
+      state: status.canReadMarketData ? "enabled" : "reconnect_required",
+    },
+    {
+      detail: holdingsDetail,
+      id: "portfolio_holdings",
+      label: "Holdings mirror",
+      state: status.canReadPortfolio ? "enabled" : "reconnect_required",
+    },
+    {
+      detail: "Not supported by this app. No order or trade-execution path exists.",
+      id: "trade_execution",
+      label: "Trade execution",
+      state: "not_supported",
+    },
+  ];
+}
+
 export function describeMoomooError(errorCode: string) {
   if (errorCode === "persist_failed") {
     return "Moomoo holdings could not be saved. Live holdings remain unchanged.";
