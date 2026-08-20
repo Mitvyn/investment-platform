@@ -71,6 +71,16 @@ export function presentMoomooCapabilityStates(
   ];
 }
 
+export function presentMoomooConnectionSummary(
+  status: MoomooDesktopStatus,
+  persistedMirrorDetail: string | null,
+) {
+  if (status.state === "failed") {
+    return `Connection needs attention · ${status.detail}`;
+  }
+  return persistedMirrorDetail ?? status.detail;
+}
+
 export function describeMoomooError(errorCode: string) {
   if (errorCode === "persist_failed") {
     return "Moomoo holdings could not be saved. Live holdings remain unchanged.";

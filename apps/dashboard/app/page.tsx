@@ -81,6 +81,7 @@ import {
   loadMoomooDesktopStatus,
   MOOMOO_DESKTOP_CALLBACK_URL,
   presentMoomooCapabilityStates,
+  presentMoomooConnectionSummary,
 } from "@/lib/moomoo-desktop";
 import { summarizeMarketSeries } from "@/lib/market-series";
 import { summarizeHoldings } from "@/lib/holdings-summary";
@@ -1122,9 +1123,12 @@ export default async function TickerWorkspace({
                 </Badge>
               </div>
               <CardDescription>
-                {portfolioMirrorResult.holdings?.checkedAt
-                  ? `Persisted read-only mirror · checked ${ageLabel(portfolioMirrorResult.holdings.checkedAt)}`
-                  : moomooStatus.detail}
+                {presentMoomooConnectionSummary(
+                  moomooStatus,
+                  portfolioMirrorResult.holdings?.checkedAt
+                    ? `Persisted read-only mirror · checked ${ageLabel(portfolioMirrorResult.holdings.checkedAt)}`
+                    : null,
+                )}
               </CardDescription>
             </CardHeader>
             <CardContent>
