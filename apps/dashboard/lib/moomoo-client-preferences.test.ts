@@ -3,6 +3,9 @@ import test from "node:test";
 
 import {
   addMoomooClientId,
+  isMoomooMcpAutoResumeEnabled,
+  MOOMOO_AUTO_RESUME_COOKIE,
+  MOOMOO_MCP_AUTO_RESUME_COOKIE,
   parseMoomooAutoResumeClientId,
   parseMoomooClientIds,
   serializeMoomooClientIds,
@@ -40,4 +43,11 @@ test("saved Moomoo client ID cookie stays bounded", () => {
     values[2],
     values[3],
   ]);
+});
+
+test("MCP auto-resume preference is independent of the OpenAPI cookie name and defaults closed", () => {
+  assert.notEqual(MOOMOO_MCP_AUTO_RESUME_COOKIE, MOOMOO_AUTO_RESUME_COOKIE);
+  assert.equal(isMoomooMcpAutoResumeEnabled(undefined), false);
+  assert.equal(isMoomooMcpAutoResumeEnabled("disabled"), false);
+  assert.equal(isMoomooMcpAutoResumeEnabled("enabled"), true);
 });

@@ -19,6 +19,10 @@ import {
   discoverMoomooMcpTools,
   fetchMoomooMarketQuoteEvidence,
   loadMoomooMarketQuoteStatus,
+  resumeMoomooMcpConnection,
+  disconnectMoomooMcp,
+  disconnectMoomooAll,
+  loadMoomooDiagnostics,
 } from "./moomoo-desktop.ts";
 
 test("connection failure detail overrides an older persisted mirror summary", () => {
@@ -190,7 +194,7 @@ test("MCP authorization starts through local worker with fixed callback only", a
       return Response.json(
         {
           error_code: null,
-          state: "authorization_pending",
+          state: "authorizing",
           tool_count: 0,
           tools: [],
         },
@@ -199,11 +203,99 @@ test("MCP authorization starts through local worker with fixed callback only", a
     },
   );
 
-  assert.equal(status.state, "authorization_pending");
+  assert.equal(status.state, "authorizing");
   assert.deepEqual(JSON.parse(String(calls[0][1].body)), {
     operator_id: "11111111-1111-4111-8111-111111111111",
     redirect_uri: "http://127.0.0.1:60355/callback",
   });
+});
+
+test("MCP resume sends only operator identity and reaches ready without a browser", async () => {
+  const calls: Array<[string, RequestInit]> = [];
+  const status = await resumeMoomooMcpConnection(
+    { operatorId: "11111111-1111-4111-8111-111111111111" },
+    desktopEnvironment,
+    async (url, init) => {
+      calls.push([String(url), init ?? {}]);
+      return Response.json({ error_code: null, state: "ready", tool_count: 0, tools: [] });
+    },
+  );
+  assert.equal(status.state, "ready");
+  assert.equal(new URL(calls[0][0]).pathname, "/v1/moomoo/mcp/resume");
+  assert.deepEqual(JSON.parse(String(calls[0][1].body)), {
+    operator_id: "11111111-1111-4111-8111-111111111111",
+  });
+});
+
+test("MCP resume fails closed to unavailable without a local desktop runtime", async () => {
+  let called = false;
+  const status = await resumeMoomooMcpConnection(
+    { operatorId: "11111111-1111-4111-8111-111111111111" },
+    {},
+    async () => {
+      called = true;
+      throw new Error("must not fetch");
+    },
+  );
+  assert.equal(called, false);
+  assert.equal(status.state, "unavailable");
+});
+
+test("MCP disconnect clears only the core MCP connection", async () => {
+  const calls: Array<[string, RequestInit]> = [];
+  const status = await disconnectMoomooMcp(
+    { operatorId: "11111111-1111-4111-8111-111111111111" },
+    desktopEnvironment,
+    async (url, init) => {
+      calls.push([String(url), init ?? {}]);
+      return Response.json({ error_code: null, state: "disconnected", tool_count: 0, tools: [] });
+    },
+  );
+  assert.equal(status.state, "disconnected");
+  assert.equal(new URL(calls[0][0]).pathname, "/v1/moomoo/mcp/disconnect");
+});
+
+test("disconnect-all posts an explicit combined action", async () => {
+  const calls: Array<[string, RequestInit]> = [];
+  await disconnectMoomooAll(
+    { operatorId: "11111111-1111-4111-8111-111111111111" },
+    desktopEnvironment,
+    async (url, init) => {
+      calls.push([String(url), init ?? {}]);
+      return new Response(null, { status: 200 });
+    },
+  );
+  assert.equal(new URL(calls[0][0]).pathname, "/v1/moomoo/disconnect-all");
+});
+
+test("diagnostics load only bounded safe fields and stay empty without a runtime", async () => {
+  const unavailable = await loadMoomooDiagnostics({}, async () => {
+    throw new Error("must not fetch");
+  });
+  assert.deepEqual(unavailable, []);
+
+  const entries = await loadMoomooDiagnostics(desktopEnvironment, async () =>
+    Response.json({
+      contract_version: "moomoo_diagnostics.v1",
+      entries: [
+        {
+          timestamp: "2026-08-21T12:00:00",
+          subsystem: "core_mcp",
+          stage: "ready",
+          reason_code: "ok",
+        },
+        { timestamp: "2026-08-21T12:00:01", subsystem: "unexpected", stage: "x" },
+      ],
+    }),
+  );
+  assert.deepEqual(entries, [
+    {
+      timestamp: "2026-08-21T12:00:00",
+      subsystem: "core_mcp",
+      stage: "ready",
+      reasonCode: "ok",
+    },
+  ]);
 });
 
 test("market quote evidence sends canonical identity and ticker to local worker", async () => {

@@ -21,10 +21,12 @@ type WorkerStatus = {
 type WorkerMcpDiscoveryStatus = {
   error_code: string | null;
   state:
-    | "authorization_pending"
+    | "authorizing"
     | "disconnected"
-    | "discovery_required"
+    | "discovering"
     | "failed"
+    | "reconnect_required"
+    | "refreshing"
     | "ready"
     | "unavailable";
   tool_count: number;
@@ -375,12 +377,14 @@ function isWorkerMcpDiscoveryStatus(
   const candidate = value as Partial<WorkerMcpDiscoveryStatus>;
   if (
     ![
+      "authorizing",
       "disconnected",
-      "discovery_required",
+      "discovering",
       "failed",
+      "reconnect_required",
+      "refreshing",
       "ready",
       "unavailable",
-      "authorization_pending",
     ].includes(String(candidate.state)) ||
     !Number.isInteger(candidate.tool_count) ||
     Number(candidate.tool_count) < 0 ||
@@ -855,6 +859,135 @@ export async function beginMoomooMcpAuthorization(
       signal: AbortSignal.timeout(3_000),
     }),
   );
+}
+
+export async function resumeMoomooMcpConnection(
+  input: MoomooOperatorCommandInput,
+  environment: DesktopEnvironment = process.env,
+  fetcher: FetchLike = fetch,
+): Promise<MoomooMcpDiscoveryStatus> {
+  const contract = controlContract(environment);
+  if (!contract || !UUID_PATTERN.test(input.operatorId)) {
+    return unavailableMcpStatus();
+  }
+  try {
+    return await readMcpDiscoveryResponse(
+      await fetcher(`${contract.origin}/v1/moomoo/mcp/resume`, {
+        body: JSON.stringify({ operator_id: input.operatorId }),
+        cache: "no-store",
+        headers: {
+          Authorization: `Bearer ${contract.token}`,
+          "Content-Type": "application/json",
+        },
+        method: "POST",
+        signal: AbortSignal.timeout(15_000),
+      }),
+    );
+  } catch {
+    return unavailableMcpStatus();
+  }
+}
+
+export async function disconnectMoomooMcp(
+  input: MoomooOperatorCommandInput,
+  environment: DesktopEnvironment = process.env,
+  fetcher: FetchLike = fetch,
+): Promise<MoomooMcpDiscoveryStatus> {
+  const contract = controlContract(environment);
+  if (!contract || !UUID_PATTERN.test(input.operatorId)) {
+    throw new Error("Moomoo MCP disconnect request is invalid");
+  }
+  return readMcpDiscoveryResponse(
+    await fetcher(`${contract.origin}/v1/moomoo/mcp/disconnect`, {
+      body: JSON.stringify({ operator_id: input.operatorId }),
+      cache: "no-store",
+      headers: {
+        Authorization: `Bearer ${contract.token}`,
+        "Content-Type": "application/json",
+      },
+      method: "POST",
+      signal: AbortSignal.timeout(3_000),
+    }),
+  );
+}
+
+export async function disconnectMoomooAll(
+  input: MoomooOperatorCommandInput,
+  environment: DesktopEnvironment = process.env,
+  fetcher: FetchLike = fetch,
+): Promise<void> {
+  const contract = controlContract(environment);
+  if (!contract || !UUID_PATTERN.test(input.operatorId)) {
+    throw new Error("Moomoo disconnect-all request is invalid");
+  }
+  const response = await fetcher(`${contract.origin}/v1/moomoo/disconnect-all`, {
+    body: JSON.stringify({ operator_id: input.operatorId }),
+    cache: "no-store",
+    headers: {
+      Authorization: `Bearer ${contract.token}`,
+      "Content-Type": "application/json",
+    },
+    method: "POST",
+    signal: AbortSignal.timeout(3_000),
+  });
+  if (!response.ok) throw new Error("Moomoo disconnect-all failed");
+}
+
+export interface MoomooDiagnosticEntry {
+  timestamp: string;
+  subsystem: "core_mcp" | "optional_stream";
+  stage: string;
+  reasonCode: string;
+}
+
+export async function loadMoomooDiagnostics(
+  environment: DesktopEnvironment = process.env,
+  fetcher: FetchLike = fetch,
+): Promise<MoomooDiagnosticEntry[]> {
+  const contract = controlContract(environment);
+  if (!contract) return [];
+  try {
+    const response = await fetcher(`${contract.origin}/v1/moomoo/diagnostics`, {
+      cache: "no-store",
+      headers: { Authorization: `Bearer ${contract.token}` },
+      signal: AbortSignal.timeout(3_000),
+    });
+    const payload: unknown = await response.json();
+    if (
+      !response.ok ||
+      typeof payload !== "object" ||
+      payload === null ||
+      !("entries" in payload) ||
+      !Array.isArray((payload as { entries: unknown }).entries)
+    ) {
+      return [];
+    }
+    const entries = (payload as { entries: unknown[] }).entries;
+    return entries.flatMap((entry) => {
+      if (
+        typeof entry !== "object" ||
+        entry === null ||
+        typeof (entry as Record<string, unknown>).timestamp !== "string" ||
+        ((entry as Record<string, unknown>).subsystem !== "core_mcp" &&
+          (entry as Record<string, unknown>).subsystem !== "optional_stream") ||
+        typeof (entry as Record<string, unknown>).stage !== "string" ||
+        typeof (entry as Record<string, unknown>).reason_code !== "string"
+      ) {
+        return [];
+      }
+      const record = entry as Record<string, string>;
+      return [
+        {
+          reasonCode: record.reason_code,
+          stage: record.stage,
+          subsystem: record.subsystem as "core_mcp" | "optional_stream",
+          timestamp: record.timestamp,
+        },
+      ];
+    });
+  } catch {
+    return [];
+  }
 }
 
 export async function loadDesktopSecurityRegistry(

@@ -15,8 +15,11 @@ from workers.desktop.research import DesktopResearchCaptureCatalog
 from workers.desktop.research_capture_import import DesktopCaptureImportService
 from workers.desktop.research_notebook import DesktopResearchNotebook
 from workers.desktop.security_registry import DesktopSecurityRegistry
+from workers.moomoo_mcp.client_identity import MoomooMcpClientIdentityStore
+from workers.moomoo_mcp.diagnostics import MoomooDiagnosticsLog
 from workers.moomoo_mcp.http_client import MoomooMcpHttpClient
 from workers.moomoo_mcp.keychain import MoomooMcpTokenKeychain
+from workers.moomoo_mcp.oauth import UrllibMoomooMcpOAuthTransport
 from workers.primary_sources.storage import FilePrimarySourceCaptureRepository
 from workers.portfolio.keychain import MoomooTokenKeychain
 from workers.portfolio.moomoo import (
@@ -98,6 +101,21 @@ def _ticker_notebook_path(
     return Path.cwd() / "data" / "ticker-notebook.sqlite3"
 
 
+def _mcp_client_identity_path(
+    *,
+    packaged: bool = bool(getattr(sys, "frozen", False)),
+) -> Path:
+    if packaged:
+        return (
+            Path.home()
+            / "Library"
+            / "Application Support"
+            / "Investment Research OS"
+            / "moomoo-mcp-client-identity.json"
+        )
+    return Path.cwd() / "data" / "moomoo-mcp-client-identity.json"
+
+
 def run(*, healthcheck: bool = False) -> int:
     if healthcheck:
         print(
@@ -136,9 +154,24 @@ def run(*, healthcheck: bool = False) -> int:
             mcp_client_factory=lambda access_token: MoomooMcpHttpClient(
                 access_token=access_token
             ),
-            mcp_keychain_factory=lambda operator_id: MoomooMcpTokenKeychain(
-                operator_id=operator_id
+            mcp_keychain_factory=lambda operator_id, client_id: MoomooMcpTokenKeychain(
+                operator_id=operator_id,
+                client_id=client_id,
             ),
+            # No env var is required for normal operation: when unset, the
+            # service dynamically registers (RFC 7591) a public MCP OAuth
+            # client on first connect and persists only the public
+            # `client_id` via `mcp_client_identity_store` below. Setting
+            # IROS_MOOMOO_MCP_CLIENT_ID remains available as an advanced
+            # manual override (e.g. an operator-provisioned client ID) and
+            # takes precedence over both dynamic registration and any
+            # previously persisted identity.
+            mcp_oauth_client_id=os.environ.get("IROS_MOOMOO_MCP_CLIENT_ID") or None,
+            mcp_oauth_transport=UrllibMoomooMcpOAuthTransport(),
+            mcp_client_identity_store=MoomooMcpClientIdentityStore(
+                _mcp_client_identity_path()
+            ),
+            diagnostics_log=MoomooDiagnosticsLog(),
             quote_stream_factory=lambda access_supplier: MoomooQuoteStream(
                 access_supplier=access_supplier
             ),

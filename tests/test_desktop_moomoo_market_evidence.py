@@ -128,6 +128,7 @@ class DesktopMoomooMarketEvidenceTests(unittest.TestCase):
         service.resume_connection(client_id=CLIENT_ID, operator_id=OPERATOR_ID)
         if factory is not None:
             service._mcp_access_token = "mcp-access-secret"  # type: ignore[attr-defined]
+            service._mcp_operator_id = OPERATOR_ID  # type: ignore[attr-defined]
         return service
 
     def test_fetch_market_quote_requires_prior_discovery(self) -> None:
@@ -244,8 +245,16 @@ class DesktopMoomooMarketEvidenceTests(unittest.TestCase):
         self.assertTrue(cached.cached)
         self.assertEqual(cached.state, "ready")
 
+        # OpenAPI/WebSocket streaming is optional and independent of the core
+        # MCP connection: disconnecting it must not clear the MCP quote cache.
         service.disconnect(operator_id=OPERATOR_ID)
 
+        still_cached = service.last_market_quote(security_id=SECURITY_ID)
+        self.assertEqual(still_cached.state, "ready")
+        self.assertTrue(still_cached.cached)
+
+        # Disconnecting the core MCP connection is what clears it.
+        service.disconnect_mcp(operator_id=OPERATOR_ID)
         cleared = service.last_market_quote(security_id=SECURITY_ID)
         self.assertEqual(cleared.state, "unavailable")
         self.assertFalse(cleared.cached)
@@ -267,7 +276,10 @@ class DesktopMoomooMarketEvidenceTests(unittest.TestCase):
         self.assertTrue(aged.cached)
         self.assertEqual(aged.evidence["freshness"], "stale")
 
-    def test_resume_connection_clears_stale_market_quote_cache(self) -> None:
+    def test_openapi_resume_never_clears_the_mcp_market_quote_cache(self) -> None:
+        """Optional OpenAPI resume/reconnect must never touch core MCP state
+        (Architecture F): only an MCP-side disconnect/resume clears it."""
+
         backend = KeychainBackend()
         MoomooTokenKeychain(operator_id=OPERATOR_ID, backend=backend).store_refresh_token(
             "refresh-secret"
@@ -283,6 +295,7 @@ class DesktopMoomooMarketEvidenceTests(unittest.TestCase):
         )
         service.resume_connection(client_id=CLIENT_ID, operator_id=OPERATOR_ID)
         service._mcp_access_token = "mcp-access-secret"  # type: ignore[attr-defined]
+        service._mcp_operator_id = OPERATOR_ID  # type: ignore[attr-defined]
         service.discover_mcp_tools(operator_id=OPERATOR_ID)
         service.fetch_market_quote(
             operator_id=OPERATOR_ID, security_id=SECURITY_ID, ticker="US.AAPL"
@@ -298,10 +311,10 @@ class DesktopMoomooMarketEvidenceTests(unittest.TestCase):
         service.resume_connection(client_id=CLIENT_ID, operator_id=OPERATOR_ID)
 
         self.assertEqual(
-            service.last_market_quote(security_id=SECURITY_ID).state, "unavailable"
+            service.last_market_quote(security_id=SECURITY_ID).state, "ready"
         )
 
-    def test_start_connection_clears_stale_market_quote_cache_directly(self) -> None:
+    def test_disconnect_mcp_clears_the_market_quote_cache_directly(self) -> None:
         backend = KeychainBackend()
         MoomooTokenKeychain(operator_id=OPERATOR_ID, backend=backend).store_refresh_token(
             "refresh-secret"
@@ -318,6 +331,7 @@ class DesktopMoomooMarketEvidenceTests(unittest.TestCase):
         )
         service.resume_connection(client_id=CLIENT_ID, operator_id=OPERATOR_ID)
         service._mcp_access_token = "mcp-access-secret"  # type: ignore[attr-defined]
+        service._mcp_operator_id = OPERATOR_ID  # type: ignore[attr-defined]
         service.discover_mcp_tools(operator_id=OPERATOR_ID)
         service.fetch_market_quote(
             operator_id=OPERATOR_ID, security_id=SECURITY_ID, ticker="US.AAPL"
@@ -326,12 +340,7 @@ class DesktopMoomooMarketEvidenceTests(unittest.TestCase):
             service.last_market_quote(security_id=SECURITY_ID).state, "ready"
         )
 
-        callback_port = unused_loopback_port()
-        service.start_connection(
-            client_id=CLIENT_ID,
-            operator_id=OPERATOR_ID,
-            redirect_uri=f"http://127.0.0.1:{callback_port}/callback",
-        )
+        service.disconnect_mcp(operator_id=OPERATOR_ID)
 
         self.assertEqual(
             service.last_market_quote(security_id=SECURITY_ID).state, "unavailable"

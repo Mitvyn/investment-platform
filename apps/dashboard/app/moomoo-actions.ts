@@ -7,18 +7,23 @@ import {
   beginMoomooDesktopConnection,
   composeMoomooDesktopSnapshots,
   disconnectMoomooDesktop,
+  disconnectMoomooAll,
+  disconnectMoomooMcp,
   beginMoomooMcpAuthorization,
   discoverMoomooMcpTools,
   fetchMoomooMarketQuoteEvidence,
   refreshMoomooDesktopHoldings,
   replaceMoomooDesktopQuoteSubscriptions,
   resumeMoomooDesktopConnection,
+  resumeMoomooMcpConnection,
 } from "@/lib/moomoo-desktop";
 import { persistMoomooPortfolioMirror } from "@/lib/portfolio-persistence";
 import {
   addMoomooClientId,
+  isMoomooMcpAutoResumeEnabled,
   MOOMOO_AUTO_RESUME_COOKIE,
   MOOMOO_CLIENT_IDS_COOKIE,
+  MOOMOO_MCP_AUTO_RESUME_COOKIE,
   parseMoomooClientIds,
   serializeMoomooClientIds,
 } from "@/lib/moomoo-client-preferences";
@@ -102,10 +107,87 @@ export async function authorizeMoomooMcp(formData: FormData) {
   const { operatorId, suffix } = await authenticatedOperator(formData);
   try {
     await beginMoomooMcpAuthorization({ operatorId });
+    const cookieStore = await cookies();
+    cookieStore.set(MOOMOO_MCP_AUTO_RESUME_COOKIE, "enabled", {
+      httpOnly: true,
+      maxAge: 60 * 60 * 24 * 365,
+      path: "/",
+      sameSite: "strict",
+    });
   } catch {
     redirect(`/?mcp_error=authorization_failed${suffix}`);
   }
   redirect(`/?mcp=authorizing${suffix}`);
+}
+
+/**
+ * Silent, one-shot startup resume for the core Moomoo (MCP) connection.
+ *
+ * Independent of the optional OpenAPI `resumeMoomooSilently` above: it never
+ * reads or writes the OpenAPI client-ID cookie, and its outcome (including
+ * failure) never affects the OpenAPI connection. Called client-side once per
+ * page load by `MoomooMcpAutoReconnect`; requires no browser redirect and no
+ * manual discovery button on success.
+ */
+export async function resumeMoomooMcpSilently(): Promise<boolean> {
+  const supabase = await createClient();
+  const { data, error } = await supabase.auth.getClaims();
+  const operatorId = data?.claims?.sub;
+  if (error || typeof operatorId !== "string") return false;
+  const cookieStore = await cookies();
+  if (
+    !isMoomooMcpAutoResumeEnabled(
+      cookieStore.get(MOOMOO_MCP_AUTO_RESUME_COOKIE)?.value,
+    )
+  ) {
+    return false;
+  }
+  try {
+    const status = await resumeMoomooMcpConnection({ operatorId });
+    return status.state === "ready";
+  } catch {
+    return false;
+  }
+}
+
+export async function disconnectMoomooMcpAction(formData: FormData) {
+  const { operatorId, suffix } = await authenticatedOperator(formData);
+  try {
+    await disconnectMoomooMcp({ operatorId });
+    const cookieStore = await cookies();
+    cookieStore.set(MOOMOO_MCP_AUTO_RESUME_COOKIE, "disabled", {
+      httpOnly: true,
+      maxAge: 60 * 60 * 24 * 365,
+      path: "/",
+      sameSite: "strict",
+    });
+  } catch {
+    redirect(`/?mcp_error=disconnect_failed${suffix}`);
+  }
+  redirect(`/?mcp=disconnected${suffix}`);
+}
+
+export async function disconnectMoomooAllAction(formData: FormData) {
+  const { operatorId, suffix } = await authenticatedOperator(formData);
+  try {
+    await disconnectMoomooAll({ operatorId });
+    const cookieStore = await cookies();
+    cookieStore.set(MOOMOO_AUTO_RESUME_COOKIE, "disabled", {
+      httpOnly: true,
+      maxAge: 60 * 60 * 24 * 365,
+      path: "/",
+      sameSite: "strict",
+    });
+    cookieStore.set(MOOMOO_MCP_AUTO_RESUME_COOKIE, "disabled", {
+      httpOnly: true,
+      maxAge: 60 * 60 * 24 * 365,
+      path: "/",
+      sameSite: "strict",
+    });
+  } catch {
+    redirect(`/?moomoo_error=disconnect_all_failed${suffix}`);
+  }
+  redirect(`/?moomoo=disconnected&mcp=disconnected${suffix}`);
 }
 
 export async function refreshMarketEvidence(formData: FormData) {

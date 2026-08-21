@@ -25,6 +25,7 @@ import { MarketPriceChart } from "@/components/market-price-chart";
 import { MoomooConnectionPoller } from "@/components/moomoo-connection-poller";
 import { MoomooClientIdPicker } from "@/components/moomoo-client-id-picker";
 import { MoomooAutoReconnect } from "@/components/moomoo-auto-reconnect";
+import { MoomooMcpAutoReconnect } from "@/components/moomoo-mcp-auto-reconnect";
 import { MoomooHoldingsTable } from "@/components/moomoo-holdings-table";
 import { HoldingsTable } from "@/components/holdings-table";
 import { CommitteeMemoPanel } from "@/components/committee-memo-panel";
@@ -66,8 +67,10 @@ import { QuantPanel } from "@/components/quant-panel";
 import { DashboardWatchlist } from "@/components/dashboard-watchlist";
 import { readDesktopRuntimeStatus } from "@/lib/desktop-runtime";
 import {
+  isMoomooMcpAutoResumeEnabled,
   MOOMOO_AUTO_RESUME_COOKIE,
   MOOMOO_CLIENT_IDS_COOKIE,
+  MOOMOO_MCP_AUTO_RESUME_COOKIE,
   parseMoomooAutoResumeClientId,
   parseMoomooClientIds,
 } from "@/lib/moomoo-client-preferences";
@@ -115,6 +118,8 @@ import {
   authorizeMoomooMcp,
   discoverMoomooMcp,
   disconnectMoomoo,
+  disconnectMoomooMcpAction,
+  disconnectMoomooAllAction,
   refreshMarketEvidence,
 } from "./moomoo-actions";
 import { addDesktopSecurity, importMoomooSecurities } from "./security-registry-actions";
@@ -294,6 +299,9 @@ export default async function TickerWorkspace({
   const autoResumePreference = cookieStore.get(MOOMOO_AUTO_RESUME_COOKIE)?.value;
   const autoResumeClientId =
     parseMoomooAutoResumeClientId(autoResumePreference);
+  const mcpAutoResumeEnabled = isMoomooMcpAutoResumeEnabled(
+    cookieStore.get(MOOMOO_MCP_AUTO_RESUME_COOKIE)?.value,
+  );
   const requestedSecurityId = params.security;
   const marketQuoteStatus = requestedSecurityId
     ? await loadMoomooMarketQuoteStatus(requestedSecurityId)
@@ -1380,187 +1388,131 @@ export default async function TickerWorkspace({
                 </div>
                 <Badge
                   variant={
-                    moomooStatus.state === "connected"
+                    moomooMcpStatus.state === "ready"
                       ? "verified"
-                      : moomooStatus.state === "failed"
+                      : moomooMcpStatus.state === "failed" ||
+                          moomooMcpStatus.state === "reconnect_required"
                         ? "destructive"
                         : "attention"
                   }
                 >
-                  {moomooStatus.state}
+                  {moomooMcpStatus.state === "ready"
+                    ? `Connected · ${moomooMcpStatus.toolCount} provider tools discovered`
+                    : moomooMcpStatus.state}
                 </Badge>
               </div>
               <CardDescription>
-                {presentMoomooConnectionSummary(moomooStatus, null)}
+                One connection covers read-only market quotes now, and future
+                approved read capabilities as they are added, through the
+                Moomoo MCP server. Operator controls every permission granted
+                at Moomoo; extra grants never expand what this app can do,
+                and this app exposes no trading or order-execution path.
               </CardDescription>
             </CardHeader>
             <CardContent>
-              {(moomooStatus.state === "disconnected" && !autoResumeClientId) ||
-              moomooStatus.state === "failed" ? (
-                <form
-                  action={connectMoomoo}
-                  className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] lg:items-end"
-                >
+              {["unavailable", "disconnected", "reconnect_required", "failed"].includes(
+                moomooMcpStatus.state,
+              ) ? (
+                <form action={authorizeMoomooMcp}>
                   <input name="view" type="hidden" value="settings" />
                   <input
                     name="securityId"
                     type="hidden"
                     value={selectedSecurity?.securityId ?? ""}
                   />
-                  <div className="grid gap-2">
-                    <label
-                      className="text-xs font-medium text-muted-foreground"
-                      htmlFor="moomooClientId"
-                    >
-                      Moomoo app client ID
-                    </label>
-                    <MoomooClientIdPicker savedClientIds={savedClientIds} />
-                  </div>
-                  <div className="grid gap-2">
-                    <span className="text-xs font-medium text-muted-foreground">
-                      App-owned callback URL
-                    </span>
-                    <div className="flex h-11 items-center rounded-md border border-input bg-muted/35 px-3 font-mono text-xs text-muted-foreground">
-                      {MOOMOO_DESKTOP_CALLBACK_URL}
-                    </div>
-                  </div>
                   <Button type="submit">
                     <KeyRound aria-hidden="true" />
                     Connect Moomoo
                   </Button>
                 </form>
               ) : null}
-              {moomooStatus.state === "disconnected" && autoResumeClientId ? (
+              {moomooMcpStatus.state === "authorizing" ? (
                 <p className="text-sm text-muted-foreground">
-                  Restoring saved Moomoo authorization from macOS Keychain…
+                  MCP OAuth consent started. Finish it in the system browser;
+                  this app will discover the provider's tool inventory
+                  automatically, no additional step needed.
                 </p>
               ) : null}
-              {moomooStatus.state === "unavailable" ? (
+              {moomooMcpStatus.state === "refreshing" ? (
                 <p className="text-sm text-muted-foreground">
-                  Connection setup is desktop-only because refresh tokens stay in
-                  macOS Keychain.
+                  Restoring saved Moomoo authorization…
                 </p>
               ) : null}
-              <div className="mt-5 grid gap-3 border-t border-border pt-4 sm:grid-cols-3">
-                {presentMoomooCapabilityStates(moomooStatus).map((capability) => {
-                  const badge = moomooCapabilityBadges[capability.state];
-                  return (
-                    <div
-                      className="rounded-lg border border-border bg-muted/20 p-3"
-                      key={capability.id}
-                    >
-                      <div className="flex items-center justify-between gap-2">
-                        <p className="text-xs font-medium">{capability.label}</p>
-                        <Badge variant={badge.variant}>{badge.label}</Badge>
-                      </div>
-                      <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
-                        {capability.detail}
-                      </p>
-                    </div>
-                  );
-                })}
-              </div>
-              <div className="mt-5 border-t border-border pt-4">
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  <div>
-                    <SectionLabel>MCP connection detail</SectionLabel>
-                    <p className="mt-2 text-sm font-medium">Moomoo read-tool discovery</p>
-                    <p className="mt-1 text-xs text-muted-foreground">
-                      Discovery checks current connection only. Tool schemas and tokens stay in the desktop worker.
-                    </p>
-                  </div>
-                  <Badge
-                    variant={
-                      moomooMcpStatus.state === "ready"
-                        ? "verified"
-                        : moomooMcpStatus.state === "failed"
-                          ? "destructive"
-                          : "attention"
-                    }
-                  >
-                    {moomooMcpStatus.state === "ready"
-                      ? `${moomooMcpStatus.toolCount} tools found`
-                      : moomooMcpStatus.state}
-                  </Badge>
-                </div>
-                {moomooMcpStatus.state === "ready" ? (
-                  <details className="mt-3 rounded-md border border-border bg-muted/10 px-3 py-2">
-                    <summary className="cursor-pointer text-xs font-medium text-muted-foreground">
-                      View discovered tools ({moomooMcpStatus.toolCount})
-                    </summary>
-                    {moomooMcpStatus.tools.length > 0 ? (
-                      <ul className="mt-2 grid max-h-64 gap-1 overflow-y-auto border-t border-border pt-2 sm:grid-cols-2">
-                        {moomooMcpStatus.tools.map((tool) => (
-                          <li className="truncate font-mono text-[11px] text-muted-foreground" key={tool.name}>
-                            {tool.name}
-                          </li>
-                        ))}
-                      </ul>
-                    ) : (
-                      <p className="mt-2 border-t border-border pt-2 text-xs text-muted-foreground">
-                        No read tools returned.
-                      </p>
-                    )}
-                  </details>
-                ) : (
-                  <p className="mt-3 text-xs text-muted-foreground">
-                    {moomooMcpStatus.state === "authorization_pending"
-                      ? "Finish separate MCP OAuth consent in the system browser."
-                      : moomooMcpStatus.state === "discovery_required"
-                        ? "Run discovery after connecting or changing provider authorization."
-                        : moomooMcpStatus.state === "disconnected"
-                          ? "Connect Moomoo before discovering read tools."
-                          : moomooMcpStatus.errorCode === "moomoo_mcp_authorization_required"
-                            ? "MCP needs separate OAuth authorization; OpenAPI connection does not authorize MCP."
-                            : moomooMcpStatus.errorCode ?? "Desktop MCP discovery unavailable."}
+              {moomooMcpStatus.state === "discovering" ? (
+                <p className="text-sm text-muted-foreground">
+                  Checking the provider's tool inventory…
+                </p>
+              ) : null}
+              {moomooMcpStatus.state === "reconnect_required" ? (
+                <p className="text-sm text-muted-foreground">
+                  Saved authorization is no longer usable
+                  {moomooMcpStatus.errorCode ? ` (${moomooMcpStatus.errorCode})` : ""}.
+                  Connect again above.
+                </p>
+              ) : null}
+              {moomooMcpStatus.state === "ready" ? (
+                <details className="rounded-md border border-border bg-muted/10 px-3 py-2">
+                  <summary className="cursor-pointer text-xs font-medium text-muted-foreground">
+                    View provider tool inventory ({moomooMcpStatus.toolCount})
+                  </summary>
+                  <p className="mt-2 border-t border-border pt-2 text-xs text-muted-foreground">
+                    This is the raw list the provider advertised. Discovery
+                    alone does not make a tool callable; this app only ever
+                    invokes the one reviewed read tool below.
                   </p>
-                )}
-                {moomooStatus.state === "connected" &&
-                ["unavailable", "discovery_required", "ready"].includes(
-                  moomooMcpStatus.state,
-                ) ? (
-                  <form
-                    action={
-                      moomooMcpStatus.state === "unavailable"
-                        ? authorizeMoomooMcp
-                        : discoverMoomooMcp
-                    }
-                    className="mt-3"
-                  >
+                  {moomooMcpStatus.tools.length > 0 ? (
+                    <ul className="mt-2 grid max-h-64 gap-1 overflow-y-auto border-t border-border pt-2 sm:grid-cols-2">
+                      {moomooMcpStatus.tools.map((tool) => (
+                        <li className="truncate font-mono text-[11px] text-muted-foreground" key={tool.name}>
+                          {tool.name}
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className="mt-2 border-t border-border pt-2 text-xs text-muted-foreground">
+                      No provider tools returned.
+                    </p>
+                  )}
+                  <p className="mt-2 border-t border-border pt-2 text-xs text-muted-foreground">
+                    App-approved callable read tool: <code>quote_stock_quote</code>
+                  </p>
+                  <form action={discoverMoomooMcp} className="mt-2 border-t border-border pt-2">
                     <input name="view" type="hidden" value="settings" />
                     <input
                       name="securityId"
                       type="hidden"
                       value={selectedSecurity?.securityId ?? ""}
                     />
-                    <Button type="submit" variant="outline">
-                      {moomooMcpStatus.state === "unavailable"
-                        ? "Authorize MCP separately"
-                        : moomooMcpStatus.state === "ready"
-                        ? "Refresh read-tool discovery"
-                        : "Discover read tools"}
+                    <Button size="sm" type="submit" variant="outline">
+                      Refresh tool inventory
                     </Button>
                   </form>
-                ) : null}
-                {params.mcp_error ? (
-                  <p className="mt-3 text-sm text-challenge">
-                    Moomoo MCP discovery failed. Check connection, then retry.
-                  </p>
-                ) : null}
-                {params.mcp === "discovered" ? (
-                  <p className="mt-3 text-sm text-muted-foreground">
-                    Moomoo MCP read-tool discovery completed.
-                  </p>
-                ) : null}
-                {params.mcp === "authorizing" ? (
-                  <p className="mt-3 text-sm text-muted-foreground">
-                    MCP OAuth started. Finish consent in the system browser.
-                  </p>
-                ) : null}
-              </div>
-              {moomooStatus.state === "connected" ? (
+                </details>
+              ) : null}
+              {params.mcp_error ? (
+                <p className="mt-3 text-sm text-challenge">
+                  Moomoo MCP connection action failed. Check connection, then retry.
+                </p>
+              ) : null}
+              {params.mcp === "discovered" ? (
+                <p className="mt-3 text-sm text-muted-foreground">
+                  Moomoo provider tool inventory refreshed.
+                </p>
+              ) : null}
+              {params.mcp === "authorizing" ? (
+                <p className="mt-3 text-sm text-muted-foreground">
+                  MCP OAuth started. Finish consent in the system browser.
+                </p>
+              ) : null}
+              {params.mcp === "disconnected" ? (
+                <p className="mt-3 text-sm text-muted-foreground">
+                  Local MCP authorization removed. Provider authorization may
+                  still require revocation inside Moomoo.
+                </p>
+              ) : null}
+              {moomooMcpStatus.state === "ready" ? (
                 <div className="mt-4 flex flex-wrap justify-end gap-2">
-                  <form action={disconnectMoomoo}>
+                  <form action={disconnectMoomooMcpAction}>
                     <input name="view" type="hidden" value="settings" />
                     <input
                       name="securityId"
@@ -1569,34 +1521,156 @@ export default async function TickerWorkspace({
                     />
                     <Button type="submit" variant="ghost">
                       <Unplug aria-hidden="true" />
-                      Disconnect locally
+                      Disconnect Moomoo
                     </Button>
                   </form>
                 </div>
               ) : null}
-              <div className="mt-4 border-t border-border pt-4 text-xs leading-relaxed text-muted-foreground">
-                Capability status above comes only from read capabilities Moomoo
+              <details className="mt-5 rounded-md border border-border bg-muted/10 px-3 py-2">
+                <summary className="cursor-pointer text-xs font-medium text-muted-foreground">
+                  Enable streaming quotes (optional)
+                </summary>
+                <p className="mt-2 border-t border-border pt-2 text-xs text-muted-foreground">
+                  Separate, optional WebSocket streaming and portfolio-holdings
+                  mirror. Never required for Moomoo connection, market
+                  evidence, or research; its own failure never affects the
+                  connection above.
+                </p>
+                <div className="mt-3 flex items-center justify-between gap-3">
+                  <Badge
+                    variant={
+                      moomooStatus.state === "connected"
+                        ? "verified"
+                        : moomooStatus.state === "failed"
+                          ? "destructive"
+                          : "attention"
+                    }
+                  >
+                    {moomooStatus.state}
+                  </Badge>
+                  <span className="text-xs text-muted-foreground">
+                    {presentMoomooConnectionSummary(moomooStatus, null)}
+                  </span>
+                </div>
+                {(moomooStatus.state === "disconnected" && !autoResumeClientId) ||
+                moomooStatus.state === "failed" ? (
+                  <form
+                    action={connectMoomoo}
+                    className="mt-3 grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] lg:items-end"
+                  >
+                    <input name="view" type="hidden" value="settings" />
+                    <input
+                      name="securityId"
+                      type="hidden"
+                      value={selectedSecurity?.securityId ?? ""}
+                    />
+                    <div className="grid gap-2">
+                      <label
+                        className="text-xs font-medium text-muted-foreground"
+                        htmlFor="moomooClientId"
+                      >
+                        Moomoo app client ID
+                      </label>
+                      <MoomooClientIdPicker savedClientIds={savedClientIds} />
+                    </div>
+                    <div className="grid gap-2">
+                      <span className="text-xs font-medium text-muted-foreground">
+                        App-owned callback URL
+                      </span>
+                      <div className="flex h-11 items-center rounded-md border border-input bg-muted/35 px-3 font-mono text-xs text-muted-foreground">
+                        {MOOMOO_DESKTOP_CALLBACK_URL}
+                      </div>
+                    </div>
+                    <Button type="submit" variant="outline">
+                      <KeyRound aria-hidden="true" />
+                      Enable streaming quotes
+                    </Button>
+                  </form>
+                ) : null}
+                {moomooStatus.state === "disconnected" && autoResumeClientId ? (
+                  <p className="mt-3 text-sm text-muted-foreground">
+                    Restoring saved streaming authorization from macOS Keychain…
+                  </p>
+                ) : null}
+                {moomooStatus.state === "unavailable" ? (
+                  <p className="mt-3 text-sm text-muted-foreground">
+                    Setup is desktop-only because refresh tokens stay in macOS
+                    Keychain.
+                  </p>
+                ) : null}
+                <div className="mt-4 grid gap-3 sm:grid-cols-3">
+                  {presentMoomooCapabilityStates(moomooStatus).map((capability) => {
+                    const badge = moomooCapabilityBadges[capability.state];
+                    return (
+                      <div
+                        className="rounded-lg border border-border bg-muted/20 p-3"
+                        key={capability.id}
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <p className="text-xs font-medium">{capability.label}</p>
+                          <Badge variant={badge.variant}>{badge.label}</Badge>
+                        </div>
+                        <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+                          {capability.detail}
+                        </p>
+                      </div>
+                    );
+                  })}
+                </div>
+                {moomooStatus.state === "connected" ? (
+                  <div className="mt-4 flex flex-wrap justify-end gap-2">
+                    <form action={disconnectMoomoo}>
+                      <input name="view" type="hidden" value="settings" />
+                      <input
+                        name="securityId"
+                        type="hidden"
+                        value={selectedSecurity?.securityId ?? ""}
+                      />
+                      <Button type="submit" variant="ghost">
+                        <Unplug aria-hidden="true" />
+                        Disable streaming quotes
+                      </Button>
+                    </form>
+                  </div>
+                ) : null}
+                {params.moomoo_error ? (
+                  <p className="mt-3 text-sm text-challenge">
+                    {describeMoomooError(params.moomoo_error)}
+                  </p>
+                ) : null}
+                {params.moomoo === "disconnected" ? (
+                  <p className="mt-3 text-sm text-muted-foreground">
+                    Local streaming token removed. Provider authorization may
+                    still require revocation inside Moomoo.
+                  </p>
+                ) : null}
+              </details>
+              <div className="mt-5 border-t border-border pt-4 text-xs leading-relaxed text-muted-foreground">
+                Capability status comes only from read capabilities Moomoo
                 returned during your last authorization and successful read
                 operations. Extra broker grants never enable new app functions.
                 Change grants in Moomoo whenever you want, then disconnect and
                 reconnect to refresh this status. Trade execution remains
-                unavailable by design. Client ID is public app identity,
-                not Moomoo UID or password. Authorization opens in system browser;
-                broker credentials never enter this app.
-                Disconnect removes local Keychain authorization only. Revoke
-                provider authorization separately in Moomoo when needed.
+                unavailable by design regardless of granted scopes. Client ID
+                is public app identity, not Moomoo UID or password.
+                Authorization opens in the system browser; broker credentials
+                never enter this app or your browser. Disconnect removes
+                local authorization only and does not revoke provider
+                authorization at Moomoo.
               </div>
-              {params.moomoo_error ? (
-                <p className="mt-3 text-sm text-challenge">
-                  {describeMoomooError(params.moomoo_error)}
-                </p>
-              ) : null}
-              {params.moomoo === "disconnected" ? (
-                <p className="mt-3 text-sm text-muted-foreground">
-                  Local Moomoo token removed. Provider authorization may still
-                  require revocation inside Moomoo.
-                </p>
-              ) : null}
+              <div className="mt-4 flex justify-end">
+                <form action={disconnectMoomooAllAction}>
+                  <input name="view" type="hidden" value="settings" />
+                  <input
+                    name="securityId"
+                    type="hidden"
+                    value={selectedSecurity?.securityId ?? ""}
+                  />
+                  <Button size="sm" type="submit" variant="ghost">
+                    Disconnect all local Moomoo access
+                  </Button>
+                </form>
+              </div>
             </CardContent>
           </Card> : null}
           {activeSection === "settings" ? (
@@ -1678,12 +1752,19 @@ export default async function TickerWorkspace({
             <MoomooConnectionPoller
               active={
                 moomooStatus.state === "pending" ||
-                moomooMcpStatus.state === "authorization_pending"
+                ["authorizing", "discovering", "refreshing"].includes(
+                  moomooMcpStatus.state,
+                )
               }
             />
             <MoomooAutoReconnect
               active={moomooStatus.state === "disconnected"}
               clientId={autoResumeClientId}
+            />
+            <MoomooMcpAutoReconnect
+              active={
+                mcpAutoResumeEnabled && moomooMcpStatus.state === "disconnected"
+              }
             />
           </div>
           {activeSection === "research" && activeStage !== "overview" && !hasResearch ? (

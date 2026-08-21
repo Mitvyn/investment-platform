@@ -1,5 +1,12 @@
 export const MOOMOO_CLIENT_IDS_COOKIE = "iros_moomoo_client_ids_v1";
 export const MOOMOO_AUTO_RESUME_COOKIE = "iros_moomoo_auto_resume_v1";
+/**
+ * Independent from `MOOMOO_AUTO_RESUME_COOKIE` (optional OpenAPI streaming).
+ * Governs only the core MCP connection's silent startup resume: enabled by
+ * a successful MCP authorization, disabled by an explicit MCP disconnect or
+ * disconnect-all, and otherwise retained across ordinary relaunches.
+ */
+export const MOOMOO_MCP_AUTO_RESUME_COOKIE = "iros_moomoo_mcp_auto_resume_v1";
 
 const MAX_SAVED_CLIENT_IDS = 5;
 const UUID_PATTERN =
@@ -15,6 +22,17 @@ export function parseMoomooAutoResumeClientId(
 ): string | null {
   if (!value || value === "disabled") return null;
   return parseMoomooClientIds(value)[0] ?? null;
+}
+
+/**
+ * Absent means "never explicitly set" (a security scoped, not yet
+ * authorized, connection) and is treated as disabled, matching every other
+ * preference cookie in this module. Once authorization sets it "enabled",
+ * an ordinary relaunch retains that value because the cookie is never
+ * cleared or re-derived from anything else.
+ */
+export function isMoomooMcpAutoResumeEnabled(value: string | undefined): boolean {
+  return value === "enabled";
 }
 
 export function serializeMoomooClientIds(values: readonly string[]): string {
