@@ -13,6 +13,8 @@ from urllib.parse import urlsplit
 from workers.desktop.__main__ import (
     _build_moomoo_portfolio_client,
     _research_capture_root,
+    _security_registry_path,
+    _ticker_notebook_path,
 )
 from workers.desktop import __main__ as desktop_main
 from workers.portfolio.moomoo import UrllibMoomooTransport
@@ -44,6 +46,40 @@ class DesktopWorkerTests(unittest.TestCase):
             _research_capture_root(
                 {"IROS_PRIMARY_SOURCE_CAPTURE_ROOT": "relative/captures"}
             )
+
+    def test_security_registry_path_is_local_and_contains_no_holdings_data(self) -> None:
+        self.assertEqual(
+            _security_registry_path(packaged=True),
+            Path.home()
+            / "Library"
+            / "Application Support"
+            / "Investment Research OS"
+            / "security-registry.sqlite3",
+        )
+        self.assertEqual(
+            _security_registry_path(packaged=False),
+            Path.cwd() / "data" / "security-registry.sqlite3",
+        )
+
+    def test_ticker_notebook_path_is_local_and_separate_from_security_registry(
+        self,
+    ) -> None:
+        self.assertEqual(
+            _ticker_notebook_path(packaged=True),
+            Path.home()
+            / "Library"
+            / "Application Support"
+            / "Investment Research OS"
+            / "ticker-notebook.sqlite3",
+        )
+        self.assertEqual(
+            _ticker_notebook_path(packaged=False),
+            Path.cwd() / "data" / "ticker-notebook.sqlite3",
+        )
+        self.assertNotEqual(
+            _ticker_notebook_path(packaged=True),
+            _security_registry_path(packaged=True),
+        )
 
     def test_desktop_build_scrubs_service_credentials_before_packaging(self) -> None:
         build_script = Path("scripts/build-desktop-app.sh").read_text()

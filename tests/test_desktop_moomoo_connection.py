@@ -542,19 +542,19 @@ class DesktopMoomooConnectionTests(unittest.TestCase):
             )
         )
 
-    def test_reports_actionable_write_scope_failure_without_scope_values(self) -> None:
+    def test_connects_with_operator_granted_write_scope_but_uses_read_only_surface(
+        self,
+    ) -> None:
         service, opened_urls = _service_for_completion(
             oauth_transport=WriteScopeOAuthTransport(),
+            portfolio_client_factory=lambda _access_token: FakePortfolioClient(),
         )
 
         _complete_browser_callback(service, opened_urls)
 
-        self.assertTrue(
-            _wait_until(
-                lambda: service.status().error_code
-                == "moomoo_write_scope_not_permitted"
-            )
-        )
+        self.assertTrue(_wait_until(lambda: service.status().state == "connected"))
+        self.assertEqual(service.status().error_code, None)
+        self.assertEqual(service.status().capabilities, ("market_data", "portfolio_holdings"))
         self.assertNotIn("trade:write", json.dumps(service.status().as_dict()))
 
     def test_connects_with_market_data_only_and_blocks_holdings_sync(self) -> None:

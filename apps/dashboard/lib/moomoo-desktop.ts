@@ -18,6 +18,22 @@ type WorkerStatus = {
   sync_state: "failed" | "pending" | "ready" | "unavailable";
 };
 
+type WorkerMcpDiscoveryStatus = {
+  error_code: string | null;
+  state:
+    | "authorization_pending"
+    | "disconnected"
+    | "discovery_required"
+    | "failed"
+    | "ready"
+    | "unavailable";
+  tool_count: number;
+  tools: Array<{
+    input_schema_sha256: string;
+    name: string;
+  }>;
+};
+
 export type MoomooDesktopStatus = {
   accountCount: number;
   canReadMarketData: boolean;
@@ -35,20 +51,75 @@ export type MoomooCapabilityState = {
   state: "enabled" | "not_supported" | "reconnect_required";
 };
 
+export type MoomooMcpDiscoveryStatus = {
+  errorCode: string | null;
+  state: WorkerMcpDiscoveryStatus["state"];
+  toolCount: number;
+  tools: Array<{
+    inputSchemaSha256: string;
+    name: string;
+  }>;
+};
+
+type WorkerMarketQuoteEvidence = {
+  failure_reason: string | null;
+  freshness: "fresh" | "stale" | "unknown";
+  is_error: boolean;
+  provider_reported_at: string | null;
+  retrieved_at: string;
+  security_id: string;
+  source: string;
+  summary: Record<string, string>;
+  ticker: string;
+  tool_name: string;
+};
+
+type WorkerMarketQuoteStatus = {
+  cached: boolean;
+  error_code: string | null;
+  evidence: WorkerMarketQuoteEvidence | null;
+  state: "failed" | "malformed" | "ready" | "stale";
+};
+
+export type MoomooMarketQuoteEvidence = {
+  failureReason: string | null;
+  freshness: "fresh" | "stale" | "unknown";
+  isError: boolean;
+  providerReportedAt: string | null;
+  retrievedAt: string;
+  securityId: string;
+  source: string;
+  summary: Record<string, string>;
+  ticker: string;
+  toolName: string;
+};
+
+export type MoomooMarketQuoteStatus = {
+  cached: boolean;
+  errorCode: string | null;
+  evidence: MoomooMarketQuoteEvidence | null;
+  state: "failed" | "malformed" | "ready" | "stale" | "unavailable";
+};
+
+export type FetchMoomooMarketQuoteEvidenceInput = MoomooOperatorCommandInput & {
+  securityId: string;
+  ticker: string;
+};
+
 export function presentMoomooCapabilityStates(
   status: MoomooDesktopStatus,
 ): MoomooCapabilityState[] {
   const connected = status.state === "connected";
   const marketDataDetail = status.canReadMarketData
-    ? "Live quotes available for selected security."
+    ? "Broker returned market-data read capability for this connection."
     : connected
-      ? "Enable Market Data in Moomoo, then reconnect."
-      : "Connect Moomoo, then enable Market Data.";
+      ? "Broker did not return market-data read capability for this connection."
+      : "No broker-returned market-data capability is available while disconnected.";
   const holdingsDetail = status.canReadPortfolio
-    ? "Read-only holdings refresh and mirror save available."
+    ? "Broker returned portfolio-read capability for this connection."
     : connected
-      ? "Enable Accounts & Orders for one account, then reconnect."
-      : "Connect Moomoo and grant one account for holdings access.";
+      ? "Broker did not return portfolio-read capability for this connection."
+      : "No broker-returned portfolio capability is available while disconnected.";
   return [
     {
       detail: marketDataDetail,
@@ -107,10 +178,10 @@ export function describeMoomooError(errorCode: string) {
     return "Moomoo did not bind authorization to a concrete trading account. Select your account under Accounts & Orders, then reconnect.";
   }
   if (errorCode === "moomoo_write_scope_not_permitted") {
-    return "Moomoo returned write access. Turn off Select all, Watchlists, and Trade Execution; keep only required read access, then reconnect.";
+    return "Moomoo connection needs a current desktop worker. Reopen preview app, then reconnect if needed.";
   }
   if (errorCode === "moomoo_unknown_scope_not_permitted") {
-    return "Moomoo returned an unsupported permission. Reconnect with only Market Data and read-only Accounts & Orders access.";
+    return "Moomoo connection needs a current desktop worker. Reopen preview app, then reconnect if needed.";
   }
   return "Moomoo connection could not start. Check client ID, exact registered callback URL, and desktop worker status.";
 }
@@ -139,6 +210,11 @@ export type MoomooDesktopHoldings = {
   positions: MoomooDesktopPosition[];
   source: "desktop_live" | "hosted_snapshot";
   checkedAt?: string;
+};
+
+export type DesktopSecurityRegistryEntry = {
+  sources: Array<"manual" | "moomoo_position">;
+  ticker: string;
 };
 
 type WorkerQuoteStream = {
@@ -206,6 +282,13 @@ type WorkerHoldings = {
   sync_state: "ready" | "unavailable";
 };
 
+type WorkerSecurityRegistry = {
+  entries: Array<{
+    sources: Array<"manual" | "moomoo_position">;
+    ticker: string;
+  }>;
+};
+
 export type BeginMoomooConnectionInput = {
   clientId: string;
   operatorId: string;
@@ -249,6 +332,19 @@ function controlContract(environment: DesktopEnvironment) {
   return { origin, token };
 }
 
+function isWorkerSecurityRegistry(value: unknown): value is WorkerSecurityRegistry {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
+  const entries = (value as Record<string, unknown>).entries;
+  return Array.isArray(entries) && entries.every((entry) => {
+    if (entry === null || typeof entry !== "object" || Array.isArray(entry)) return false;
+    const row = entry as Record<string, unknown>;
+    return typeof row.ticker === "string" &&
+      /^[A-Z][A-Z0-9.-]{0,9}$/.test(row.ticker) &&
+      Array.isArray(row.sources) &&
+      row.sources.every((source) => source === "manual" || source === "moomoo_position");
+  });
+}
+
 function isWorkerStatus(value: unknown): value is WorkerStatus {
   if (!value || typeof value !== "object") return false;
   const candidate = value as Partial<WorkerStatus>;
@@ -270,6 +366,51 @@ function isWorkerStatus(value: unknown): value is WorkerStatus {
     ) &&
     (candidate.error_code === null || typeof candidate.error_code === "string")
   );
+}
+
+function isWorkerMcpDiscoveryStatus(
+  value: unknown,
+): value is WorkerMcpDiscoveryStatus {
+  if (!value || typeof value !== "object") return false;
+  const candidate = value as Partial<WorkerMcpDiscoveryStatus>;
+  if (
+    ![
+      "disconnected",
+      "discovery_required",
+      "failed",
+      "ready",
+      "unavailable",
+      "authorization_pending",
+    ].includes(String(candidate.state)) ||
+    !Number.isInteger(candidate.tool_count) ||
+    Number(candidate.tool_count) < 0 ||
+    !Array.isArray(candidate.tools) ||
+    candidate.tools.length !== candidate.tool_count ||
+    (candidate.error_code !== null && typeof candidate.error_code !== "string")
+  ) return false;
+  return candidate.tools.every((tool) => {
+    if (!tool || typeof tool !== "object") return false;
+    return (
+      typeof tool.name === "string" &&
+      tool.name.trim().length > 0 &&
+      typeof tool.input_schema_sha256 === "string" &&
+      /^[a-f0-9]{64}$/.test(tool.input_schema_sha256)
+    );
+  });
+}
+
+function presentMcpDiscoveryStatus(
+  status: WorkerMcpDiscoveryStatus,
+): MoomooMcpDiscoveryStatus {
+  return {
+    errorCode: status.error_code,
+    state: status.state,
+    toolCount: status.tool_count,
+    tools: status.tools.map((tool) => ({
+      inputSchemaSha256: tool.input_schema_sha256,
+      name: tool.name,
+    })),
+  };
 }
 
 function presentStatus(status: WorkerStatus): MoomooDesktopStatus {
@@ -457,6 +598,161 @@ async function readResponse(response: Response): Promise<WorkerStatus> {
   return payload;
 }
 
+function isWorkerMarketQuoteStatus(
+  value: unknown,
+): value is WorkerMarketQuoteStatus {
+  if (!value || typeof value !== "object") return false;
+  const candidate = value as Partial<WorkerMarketQuoteStatus>;
+  if (
+    !["failed", "malformed", "ready", "stale"].includes(String(candidate.state)) ||
+    typeof candidate.cached !== "boolean" ||
+    (candidate.error_code !== null && typeof candidate.error_code !== "string")
+  ) return false;
+  if (candidate.evidence === null) return true;
+  const evidence = candidate.evidence as Partial<WorkerMarketQuoteEvidence> | undefined;
+  if (!evidence || typeof evidence !== "object") return false;
+  if (
+    !["fresh", "stale", "unknown"].includes(String(evidence.freshness)) ||
+    typeof evidence.is_error !== "boolean" ||
+    typeof evidence.retrieved_at !== "string" ||
+    (evidence.provider_reported_at !== null &&
+      typeof evidence.provider_reported_at !== "string") ||
+    (evidence.failure_reason !== null && typeof evidence.failure_reason !== "string") ||
+    typeof evidence.security_id !== "string" ||
+    typeof evidence.source !== "string" ||
+    typeof evidence.ticker !== "string" ||
+    typeof evidence.tool_name !== "string" ||
+    !evidence.summary ||
+    typeof evidence.summary !== "object"
+  ) return false;
+  return Object.values(evidence.summary).every((entry) => typeof entry === "string");
+}
+
+function presentMarketQuoteStatus(
+  status: WorkerMarketQuoteStatus,
+): MoomooMarketQuoteStatus {
+  return {
+    cached: status.cached,
+    errorCode: status.error_code,
+    evidence: status.evidence
+      ? {
+          failureReason: status.evidence.failure_reason,
+          freshness: status.evidence.freshness,
+          isError: status.evidence.is_error,
+          providerReportedAt: status.evidence.provider_reported_at,
+          retrievedAt: status.evidence.retrieved_at,
+          securityId: status.evidence.security_id,
+          source: status.evidence.source,
+          summary: status.evidence.summary,
+          ticker: status.evidence.ticker,
+          toolName: status.evidence.tool_name,
+        }
+      : null,
+    state: status.state,
+  };
+}
+
+function unavailableMarketQuoteStatus(errorCode: string): MoomooMarketQuoteStatus {
+  return { cached: false, errorCode, evidence: null, state: "unavailable" };
+}
+
+export async function loadMoomooMarketQuoteStatus(
+  securityId: string,
+  environment: DesktopEnvironment = process.env,
+  fetcher: FetchLike = fetch,
+): Promise<MoomooMarketQuoteStatus> {
+  if (!UUID_PATTERN.test(securityId)) {
+    return unavailableMarketQuoteStatus("market_evidence_identity_invalid");
+  }
+  const contract = controlContract(environment);
+  if (!contract) return unavailableMarketQuoteStatus("desktop_runtime_unavailable");
+  try {
+    const response = await fetcher(
+      `${contract.origin}/v1/research/market-evidence/quote?security_id=${securityId}`,
+      {
+        cache: "no-store",
+        headers: { Authorization: `Bearer ${contract.token}` },
+        signal: AbortSignal.timeout(3_000),
+      },
+    );
+    const payload: unknown = await response.json();
+    if (!response.ok || !isWorkerMarketQuoteStatus(payload)) {
+      return unavailableMarketQuoteStatus("market_evidence_response_invalid");
+    }
+    return presentMarketQuoteStatus(payload);
+  } catch {
+    return unavailableMarketQuoteStatus("market_evidence_request_failed");
+  }
+}
+
+export async function fetchMoomooMarketQuoteEvidence(
+  input: FetchMoomooMarketQuoteEvidenceInput,
+  environment: DesktopEnvironment = process.env,
+  fetcher: FetchLike = fetch,
+): Promise<MoomooMarketQuoteStatus> {
+  if (
+    !UUID_PATTERN.test(input.operatorId) ||
+    !UUID_PATTERN.test(input.securityId) ||
+    !MOOMOO_SYMBOL_PATTERN.test(input.ticker)
+  ) {
+    throw new Error("Market quote evidence request is invalid");
+  }
+  const contract = controlContract(environment);
+  if (!contract) return unavailableMarketQuoteStatus("desktop_runtime_unavailable");
+  try {
+    const response = await fetcher(
+      `${contract.origin}/v1/research/market-evidence/quote`,
+      {
+        body: JSON.stringify({
+          operator_id: input.operatorId,
+          security_id: input.securityId,
+          ticker: input.ticker,
+        }),
+        cache: "no-store",
+        headers: {
+          Authorization: `Bearer ${contract.token}`,
+          "Content-Type": "application/json",
+        },
+        method: "POST",
+        signal: AbortSignal.timeout(15_000),
+      },
+    );
+    const payload: unknown = await response.json();
+    if (!response.ok) {
+      const errorCode =
+        payload && typeof payload === "object" && typeof (payload as { error?: unknown }).error === "string"
+          ? (payload as { error: string }).error
+          : "market_evidence_request_failed";
+      return unavailableMarketQuoteStatus(errorCode);
+    }
+    if (!isWorkerMarketQuoteStatus(payload)) {
+      return unavailableMarketQuoteStatus("market_evidence_response_invalid");
+    }
+    return presentMarketQuoteStatus(payload);
+  } catch {
+    return unavailableMarketQuoteStatus("market_evidence_request_failed");
+  }
+}
+
+function unavailableMcpStatus(): MoomooMcpDiscoveryStatus {
+  return {
+    errorCode: "desktop_runtime_unavailable",
+    state: "unavailable",
+    toolCount: 0,
+    tools: [],
+  };
+}
+
+async function readMcpDiscoveryResponse(
+  response: Response,
+): Promise<MoomooMcpDiscoveryStatus> {
+  const payload: unknown = await response.json();
+  if (!response.ok || !isWorkerMcpDiscoveryStatus(payload)) {
+    throw new Error("Desktop Moomoo MCP worker returned an invalid response");
+  }
+  return presentMcpDiscoveryStatus(payload);
+}
+
 export async function loadMoomooDesktopStatus(
   environment: DesktopEnvironment = process.env,
   fetcher: FetchLike = fetch,
@@ -491,6 +787,147 @@ export async function loadMoomooDesktopStatus(
       syncState: "failed",
     };
   }
+}
+
+export async function loadMoomooMcpDiscoveryStatus(
+  environment: DesktopEnvironment = process.env,
+  fetcher: FetchLike = fetch,
+): Promise<MoomooMcpDiscoveryStatus> {
+  const contract = controlContract(environment);
+  if (!contract) return unavailableMcpStatus();
+  try {
+    return await readMcpDiscoveryResponse(
+      await fetcher(`${contract.origin}/v1/moomoo/mcp/status`, {
+        cache: "no-store",
+        headers: { Authorization: `Bearer ${contract.token}` },
+        signal: AbortSignal.timeout(3_000),
+      }),
+    );
+  } catch {
+    return unavailableMcpStatus();
+  }
+}
+
+export async function discoverMoomooMcpTools(
+  input: MoomooOperatorCommandInput,
+  environment: DesktopEnvironment = process.env,
+  fetcher: FetchLike = fetch,
+): Promise<MoomooMcpDiscoveryStatus> {
+  const contract = controlContract(environment);
+  if (!contract || !UUID_PATTERN.test(input.operatorId)) {
+    throw new Error("Moomoo MCP discovery request is invalid");
+  }
+  return readMcpDiscoveryResponse(
+    await fetcher(`${contract.origin}/v1/moomoo/mcp/discover`, {
+      body: JSON.stringify({ operator_id: input.operatorId }),
+      cache: "no-store",
+      headers: {
+        Authorization: `Bearer ${contract.token}`,
+        "Content-Type": "application/json",
+      },
+      method: "POST",
+      signal: AbortSignal.timeout(30_000),
+    }),
+  );
+}
+
+export async function beginMoomooMcpAuthorization(
+  input: MoomooOperatorCommandInput,
+  environment: DesktopEnvironment = process.env,
+  fetcher: FetchLike = fetch,
+): Promise<MoomooMcpDiscoveryStatus> {
+  const contract = controlContract(environment);
+  if (!contract || !UUID_PATTERN.test(input.operatorId)) {
+    throw new Error("Moomoo MCP authorization request is invalid");
+  }
+  return readMcpDiscoveryResponse(
+    await fetcher(`${contract.origin}/v1/moomoo/mcp/connect`, {
+      body: JSON.stringify({
+        operator_id: input.operatorId,
+        redirect_uri: MOOMOO_DESKTOP_CALLBACK_URL,
+      }),
+      cache: "no-store",
+      headers: {
+        Authorization: `Bearer ${contract.token}`,
+        "Content-Type": "application/json",
+      },
+      method: "POST",
+      signal: AbortSignal.timeout(3_000),
+    }),
+  );
+}
+
+export async function loadDesktopSecurityRegistry(
+  environment: DesktopEnvironment = process.env,
+  fetcher: FetchLike = fetch,
+): Promise<DesktopSecurityRegistryEntry[]> {
+  const contract = controlContract(environment);
+  if (!contract) return [];
+  try {
+    const response = await fetcher(`${contract.origin}/v1/security-registry`, {
+      cache: "no-store",
+      headers: { Authorization: `Bearer ${contract.token}` },
+      signal: AbortSignal.timeout(3_000),
+    });
+    const payload: unknown = await response.json();
+    if (!response.ok || !isWorkerSecurityRegistry(payload)) return [];
+    return payload.entries.map((entry) => ({
+      sources: entry.sources,
+      ticker: entry.ticker,
+    }));
+  } catch {
+    return [];
+  }
+}
+
+async function updateDesktopSecurityRegistry(
+  path: "/v1/security-registry" | "/v1/security-registry/import-moomoo",
+  body: Record<string, string>,
+  environment: DesktopEnvironment = process.env,
+  fetcher: FetchLike = fetch,
+): Promise<DesktopSecurityRegistryEntry[]> {
+  const contract = controlContract(environment);
+  if (!contract) throw new Error("Desktop security registry unavailable");
+  const response = await fetcher(`${contract.origin}${path}`, {
+    body: JSON.stringify(body),
+    cache: "no-store",
+    headers: {
+      Authorization: `Bearer ${contract.token}`,
+      "Content-Type": "application/json",
+    },
+    method: "POST",
+    signal: AbortSignal.timeout(3_000),
+  });
+  const payload: unknown = await response.json();
+  if (!response.ok || !isWorkerSecurityRegistry(payload)) {
+    throw new Error("Desktop security registry request failed");
+  }
+  return payload.entries.map((entry) => ({ sources: entry.sources, ticker: entry.ticker }));
+}
+
+export function addDesktopSecurityTicker(
+  ticker: string,
+  environment: DesktopEnvironment = process.env,
+  fetcher: FetchLike = fetch,
+) {
+  return updateDesktopSecurityRegistry(
+    "/v1/security-registry",
+    { ticker: ticker.trim().toUpperCase() },
+    environment,
+    fetcher,
+  );
+}
+
+export function importMoomooSecurityTickers(
+  environment: DesktopEnvironment = process.env,
+  fetcher: FetchLike = fetch,
+) {
+  return updateDesktopSecurityRegistry(
+    "/v1/security-registry/import-moomoo",
+    {},
+    environment,
+    fetcher,
+  );
 }
 
 export async function loadMoomooDesktopHoldings(

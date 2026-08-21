@@ -1,13 +1,15 @@
 from __future__ import annotations
 
+import hashlib
 import hmac
 import json
 import threading
 import uuid
 import webbrowser
-from dataclasses import dataclass
-from datetime import datetime
+from dataclasses import dataclass, replace
+from datetime import UTC, datetime
 from http.server import BaseHTTPRequestHandler, HTTPServer, ThreadingHTTPServer
+from pathlib import Path
 from typing import Callable, Mapping, Protocol
 from urllib.parse import parse_qs, urlsplit
 
@@ -37,7 +39,28 @@ from workers.portfolio.quote_limits import (
 )
 from workers.portfolio.snapshot import PortfolioSnapshot, build_portfolio_snapshot
 from workers.portfolio.symbols import CanonicalSecurityCandidate
-from workers.desktop.research import DesktopResearchCaptureCatalog
+from workers.desktop.research import AcceptedCaptureCatalogEntry, DesktopResearchCaptureCatalog
+from workers.desktop.research_capture_import import (
+    DesktopCaptureImportError,
+    DesktopCaptureImportRequest,
+    DesktopCaptureImportService,
+)
+from workers.desktop.research_notebook import (
+    DesktopResearchNotebook,
+    TickerNotebookError,
+)
+from workers.desktop.security_registry import DesktopSecurityRegistry
+from workers.moomoo_mcp.http_client import MoomooMcpError, MoomooMcpHttpClient
+from workers.moomoo_mcp.keychain import MoomooMcpTokenKeychain
+from workers.moomoo_mcp.market_evidence import (
+    MARKET_QUOTE_TOOL_NAME,
+    TICKER_PATTERN,
+    MarketEvidenceError,
+    build_market_quote_evidence,
+    classify_freshness,
+)
+
+READ_ONLY_MARKET_EVIDENCE_TOOLS = frozenset({MARKET_QUOTE_TOOL_NAME})
 
 
 MAX_CONTROL_BODY_BYTES = 8_192
@@ -71,10 +94,50 @@ class MoomooConnectionStatus:
         }
 
 
+@dataclass(frozen=True, slots=True)
+class MoomooMcpDiscoveryStatus:
+    state: str
+    tool_count: int
+    tools: tuple[Mapping[str, str], ...] = ()
+    error_code: str | None = None
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "error_code": self.error_code,
+            "state": self.state,
+            "tool_count": self.tool_count,
+            "tools": [dict(tool) for tool in self.tools],
+        }
+
+
 class MoomooPortfolioClient(Protocol):
     def list_accounts(self) -> tuple[MoomooAccount, ...]: ...
 
     def list_positions(self, account_id: str) -> tuple[MoomooPosition, ...]: ...
+
+
+class MoomooMcpDiscoveryClient(Protocol):
+    def list_tools(self) -> list[Mapping[str, object]]: ...
+
+    def call_tool(
+        self, name: str, arguments: Mapping[str, object]
+    ) -> Mapping[str, object]: ...
+
+
+@dataclass(frozen=True, slots=True)
+class MoomooMarketQuoteStatus:
+    state: str
+    error_code: str | None = None
+    evidence: Mapping[str, object] | None = None
+    cached: bool = False
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "cached": self.cached,
+            "error_code": self.error_code,
+            "evidence": dict(self.evidence) if self.evidence is not None else None,
+            "state": self.state,
+        }
 
 
 class DesktopMoomooQuoteStream(Protocol):
@@ -169,17 +232,25 @@ class MoomooConnectionService:
             [Callable[[], MoomooQuoteAccess]], DesktopMoomooQuoteStream
         ]
         | None = None,
+        mcp_client_factory: Callable[[str], MoomooMcpDiscoveryClient]
+        | None = None,
+        mcp_keychain_factory: Callable[[str], MoomooMcpTokenKeychain]
+        | None = None,
         browser_opener: Callable[[str], bool] = webbrowser.open,
         callback_timeout_seconds: float = 180,
+        clock: Callable[[], datetime] | None = None,
     ) -> None:
         if callback_timeout_seconds <= 0:
             raise ValueError("Moomoo callback timeout must be positive")
         self._browser_opener = browser_opener
         self._callback_timeout_seconds = callback_timeout_seconds
+        self._clock = clock or (lambda: datetime.now(UTC))
         self._keychain_factory = keychain_factory
         self._oauth_transport = oauth_transport
         self._portfolio_client_factory = portfolio_client_factory
         self._quote_stream_factory = quote_stream_factory
+        self._mcp_client_factory = mcp_client_factory
+        self._mcp_keychain_factory = mcp_keychain_factory
         self._lock = threading.Lock()
         self._mirror = MoomooHoldingsMirror(
             accounts=(),
@@ -199,10 +270,179 @@ class MoomooConnectionService:
         self._authorized_account_ids: tuple[str, ...] = ()
         self._capabilities: tuple[str, ...] = ()
         self._quote_stream: DesktopMoomooQuoteStream | None = None
+        self._access_token: str | None = None
+        self._mcp_access_token: str | None = None
+        self._mcp_status = MoomooMcpDiscoveryStatus(
+            state="disconnected",
+            tool_count=0,
+        )
+        self._last_market_quotes: dict[str, MoomooMarketQuoteStatus] = {}
 
     def status(self) -> MoomooConnectionStatus:
         with self._lock:
             return self._status
+
+    def last_market_quote(self, *, security_id: str) -> MoomooMarketQuoteStatus:
+        try:
+            normalized_security_id = str(uuid.UUID(security_id))
+        except ValueError as error:
+            raise DesktopControlError(
+                "moomoo_market_evidence_identity_invalid"
+            ) from error
+        with self._lock:
+            entry = self._last_market_quotes.get(normalized_security_id)
+        if entry is None:
+            return MoomooMarketQuoteStatus(state="unavailable")
+        return self._reclassify_cached_quote(entry)
+
+    def _reclassify_cached_quote(
+        self, entry: MoomooMarketQuoteStatus
+    ) -> MoomooMarketQuoteStatus:
+        if entry.evidence is None or entry.state not in {"ready", "stale"}:
+            return replace(entry, cached=True)
+        provider_reported_at_raw = entry.evidence.get("provider_reported_at")
+        provider_reported_at = None
+        if isinstance(provider_reported_at_raw, str):
+            try:
+                provider_reported_at = datetime.fromisoformat(provider_reported_at_raw)
+            except ValueError:
+                provider_reported_at = None
+        freshness = classify_freshness(provider_reported_at, self._clock())
+        state = "stale" if freshness == "stale" else entry.state
+        evidence = dict(entry.evidence)
+        evidence["freshness"] = freshness
+        return replace(
+            entry,
+            state=state,
+            error_code=(
+                "moomoo_market_evidence_stale" if state == "stale" else entry.error_code
+            ),
+            evidence=evidence,
+            cached=True,
+        )
+
+    def mcp_discovery_status(self) -> MoomooMcpDiscoveryStatus:
+        with self._lock:
+            return self._mcp_status
+
+    def discover_mcp_tools(self, *, operator_id: str) -> MoomooMcpDiscoveryStatus:
+        try:
+            normalized_operator_id = str(uuid.UUID(operator_id))
+        except ValueError as error:
+            raise DesktopControlError("moomoo_operator_id_invalid") from error
+        with self._lock:
+            connected_operator_id = self._operator_id
+            mcp_access_token = self._mcp_access_token
+            factory = self._mcp_client_factory
+        if connected_operator_id != normalized_operator_id:
+            raise DesktopControlError("moomoo_mcp_discovery_requires_connection")
+        if not mcp_access_token:
+            self._set_mcp_status(self._mcp_authorization_required_status())
+            raise DesktopControlError("moomoo_mcp_authorization_required")
+        if factory is None:
+            self._set_mcp_status(
+                MoomooMcpDiscoveryStatus(
+                    state="unavailable",
+                    tool_count=0,
+                    error_code="moomoo_mcp_discovery_unavailable",
+                )
+            )
+            raise DesktopControlError("moomoo_mcp_discovery_unavailable")
+        try:
+            advertised = factory(mcp_access_token).list_tools()
+            summaries = _summarize_mcp_tools(advertised)
+        except (MoomooMcpError, OSError, RuntimeError, TypeError, ValueError) as error:
+            self._set_mcp_status(
+                MoomooMcpDiscoveryStatus(
+                    state="failed",
+                    tool_count=0,
+                    error_code="moomoo_mcp_discovery_failed",
+                )
+            )
+            raise DesktopControlError("moomoo_mcp_discovery_failed") from error
+        status = MoomooMcpDiscoveryStatus(
+            state="ready",
+            tool_count=len(summaries),
+            tools=summaries,
+        )
+        self._set_mcp_status(status)
+        return status
+
+    def fetch_market_quote(
+        self,
+        *,
+        operator_id: str,
+        security_id: str,
+        ticker: str,
+        tool_name: str = MARKET_QUOTE_TOOL_NAME,
+    ) -> MoomooMarketQuoteStatus:
+        try:
+            normalized_operator_id = str(uuid.UUID(operator_id))
+            normalized_security_id = str(uuid.UUID(security_id))
+        except ValueError as error:
+            raise DesktopControlError("moomoo_market_evidence_identity_invalid") from error
+        if tool_name not in READ_ONLY_MARKET_EVIDENCE_TOOLS:
+            raise DesktopControlError("moomoo_market_evidence_tool_not_allowlisted")
+        if not isinstance(ticker, str) or not TICKER_PATTERN.match(ticker):
+            raise DesktopControlError("moomoo_market_evidence_ticker_invalid")
+        with self._lock:
+            connected_operator_id = self._operator_id
+            mcp_access_token = self._mcp_access_token
+            factory = self._mcp_client_factory
+            discovered_tool_names = {tool["name"] for tool in self._mcp_status.tools}
+            discovery_ready = self._mcp_status.state == "ready"
+        if connected_operator_id != normalized_operator_id:
+            raise DesktopControlError("moomoo_mcp_discovery_requires_connection")
+        if not mcp_access_token or factory is None:
+            raise DesktopControlError("moomoo_mcp_authorization_required")
+        if not discovery_ready or tool_name not in discovered_tool_names:
+            raise DesktopControlError("moomoo_mcp_discovery_required")
+        try:
+            raw_result = factory(mcp_access_token).call_tool(
+                tool_name, {"code_list": [ticker]}
+            )
+        except MoomooMcpError:
+            status = MoomooMarketQuoteStatus(
+                state="failed",
+                error_code="moomoo_market_evidence_request_failed",
+            )
+            self._store_last_market_quote(normalized_security_id, status)
+            return status
+        try:
+            evidence = build_market_quote_evidence(
+                raw_result,
+                ticker=ticker,
+                security_id=normalized_security_id,
+                retrieved_at=self._clock(),
+            )
+        except MarketEvidenceError:
+            status = MoomooMarketQuoteStatus(
+                state="malformed",
+                error_code="moomoo_market_evidence_malformed",
+            )
+            self._store_last_market_quote(normalized_security_id, status)
+            return status
+        if evidence.is_error:
+            status = MoomooMarketQuoteStatus(
+                state="failed",
+                error_code=evidence.failure_reason,
+                evidence=evidence.as_dict(),
+            )
+            self._store_last_market_quote(normalized_security_id, status)
+            return status
+        status = MoomooMarketQuoteStatus(
+            state="stale" if evidence.freshness == "stale" else "ready",
+            error_code="moomoo_market_evidence_stale" if evidence.freshness == "stale" else None,
+            evidence=evidence.as_dict(),
+        )
+        self._store_last_market_quote(normalized_security_id, status)
+        return status
+
+    def _store_last_market_quote(
+        self, security_id: str, status: MoomooMarketQuoteStatus
+    ) -> None:
+        with self._lock:
+            self._last_market_quotes[security_id] = status
 
     def holdings(self) -> MoomooHoldingsMirror:
         with self._lock:
@@ -269,6 +509,8 @@ class MoomooConnectionService:
             )
         try:
             self._keychain_factory(normalized_operator_id).delete_refresh_token()
+            if self._mcp_keychain_factory is not None:
+                self._mcp_keychain_factory(normalized_operator_id).delete_refresh_token()
             if quote_stream is not None:
                 quote_stream.stop()
         except (MoomooKeychainError, OSError, RuntimeError, ValueError) as error:
@@ -290,9 +532,16 @@ class MoomooConnectionService:
             self._operator_id = None
             self._pending_operator_id = None
             self._client_id = None
+            self._access_token = None
+            self._mcp_access_token = None
             self._authorized_account_ids = ()
             self._capabilities = ()
             self._quote_stream = None
+            self._mcp_status = MoomooMcpDiscoveryStatus(
+                state="disconnected",
+                tool_count=0,
+            )
+            self._last_market_quotes = {}
             self._status = status
         return status
 
@@ -355,6 +604,7 @@ class MoomooConnectionService:
                     )
                     self._authorized_account_ids = refreshed.account_ids
                     self._capabilities = refreshed_capabilities
+                    self._access_token = refreshed.access_token
                     self._status = status
                 return status
             if tuple(sorted(refreshed.account_ids)) != tuple(
@@ -404,6 +654,7 @@ class MoomooConnectionService:
                 sync_state="ready",
             )
             self._capabilities = refreshed_capabilities
+            self._access_token = refreshed.access_token
             self._status = status
         return status
 
@@ -435,8 +686,15 @@ class MoomooConnectionService:
             self._operator_id = None
             self._pending_operator_id = normalized_operator_id
             self._client_id = None
+            self._access_token = None
+            self._mcp_access_token = None
             self._authorized_account_ids = ()
             self._capabilities = ()
+            self._mcp_status = MoomooMcpDiscoveryStatus(
+                state="disconnected",
+                tool_count=0,
+            )
+            self._last_market_quotes = {}
             self._status = MoomooConnectionStatus(
                 state="pending",
                 account_count=0,
@@ -546,15 +804,168 @@ class MoomooConnectionService:
                 self._operator_id = normalized_operator_id
                 self._pending_operator_id = None
                 self._client_id = normalized_client_id
+                self._access_token = refreshed.access_token
                 self._authorized_account_ids = refreshed.account_ids
                 self._capabilities = capabilities
+                self._mcp_status = self._initial_mcp_status()
                 self._quote_stream = quote_stream
                 self._status = status
         if connection_changed:
             if quote_stream is not None:
                 quote_stream.stop()
             raise DesktopControlError("moomoo_connection_changed")
+        self._resume_mcp_authorization(
+            operator_id=normalized_operator_id,
+            client_id=normalized_client_id,
+        )
         return status
+
+    def start_mcp_authorization(
+        self,
+        *,
+        operator_id: str,
+        redirect_uri: str,
+    ) -> MoomooMcpDiscoveryStatus:
+        try:
+            normalized_operator_id = str(uuid.UUID(operator_id))
+        except ValueError as error:
+            raise DesktopControlError("moomoo_operator_id_invalid") from error
+        attempt = create_pkce_attempt()
+        with self._lock:
+            if self._operator_id != normalized_operator_id or self._client_id is None:
+                raise DesktopControlError("moomoo_mcp_discovery_requires_connection")
+            if self._mcp_keychain_factory is None or self._mcp_client_factory is None:
+                raise DesktopControlError("moomoo_mcp_authorization_unavailable")
+            if self._mcp_status.state == "authorization_pending":
+                raise DesktopControlError("moomoo_mcp_authorization_already_pending")
+            client_id = self._client_id
+            self._mcp_access_token = None
+            self._mcp_status = MoomooMcpDiscoveryStatus(
+                state="authorization_pending",
+                tool_count=0,
+            )
+        try:
+            authorization_url = build_authorization_url(
+                client_id=client_id,
+                redirect_uri=redirect_uri,
+                attempt=attempt,
+            )
+            parsed_redirect = urlsplit(redirect_uri)
+            if parsed_redirect.port is None:
+                raise ValueError
+            callback_server = HTTPServer(
+                ("127.0.0.1", parsed_redirect.port),
+                _OAuthCallbackHandler,
+            )
+        except (MoomooOAuthError, OSError, ValueError) as error:
+            self._set_mcp_failed("moomoo_mcp_authorization_request_invalid")
+            raise DesktopControlError(
+                "moomoo_mcp_authorization_request_invalid"
+            ) from error
+        try:
+            browser_opened = self._browser_opener(authorization_url)
+        except OSError:
+            browser_opened = False
+        if not browser_opened:
+            callback_server.server_close()
+            self._set_mcp_failed("moomoo_system_browser_unavailable")
+            raise DesktopControlError("moomoo_system_browser_unavailable")
+        thread = threading.Thread(
+            target=self._complete_mcp_connection,
+            args=(
+                callback_server,
+                attempt,
+                client_id,
+                normalized_operator_id,
+                redirect_uri,
+            ),
+            daemon=True,
+            name="iros-moomoo-mcp-oauth-callback",
+        )
+        thread.start()
+        return self.mcp_discovery_status()
+
+    def _complete_mcp_connection(
+        self,
+        callback_server: HTTPServer,
+        attempt: PkceAuthorizationAttempt,
+        client_id: str,
+        operator_id: str,
+        redirect_uri: str,
+    ) -> None:
+        callback_server.timeout = self._callback_timeout_seconds
+        callback_server.handle_request()
+        callback = getattr(callback_server, "oauth_callback", None)
+        callback_server.server_close()
+        if not isinstance(callback, Mapping):
+            self._consume_failed_attempt(attempt)
+            self._set_mcp_failed("moomoo_mcp_oauth_callback_timeout")
+            return
+        code = callback.get("code")
+        state = callback.get("state")
+        if not isinstance(code, str) or not isinstance(state, str):
+            self._consume_failed_attempt(attempt)
+            self._set_mcp_failed("moomoo_mcp_oauth_callback_invalid")
+            return
+        try:
+            tokens = exchange_authorization_code(
+                client_id=client_id,
+                redirect_uri=redirect_uri,
+                authorization_code=code,
+                callback_state=state,
+                attempt=attempt,
+                required_read_scopes=(),
+                transport=self._oauth_transport,
+            )
+            self._mcp_keychain_factory(operator_id).store_refresh_token(
+                tokens.refresh_token
+            )
+        except MoomooOAuthError:
+            self._set_mcp_failed("moomoo_mcp_authorization_failed")
+            return
+        except (MoomooKeychainError, OSError, RuntimeError, ValueError):
+            self._set_mcp_failed("moomoo_mcp_keychain_store_failed")
+            return
+        with self._lock:
+            if (
+                self._operator_id != operator_id
+                or self._client_id != client_id
+                or self._mcp_status.state != "authorization_pending"
+            ):
+                self._consume_failed_attempt(attempt)
+                return
+            self._mcp_access_token = tokens.access_token
+            self._mcp_status = MoomooMcpDiscoveryStatus(
+                state="discovery_required",
+                tool_count=0,
+            )
+
+    def _resume_mcp_authorization(self, *, operator_id: str, client_id: str) -> None:
+        if self._mcp_keychain_factory is None or self._mcp_client_factory is None:
+            self._set_mcp_status(self._mcp_authorization_required_status())
+            return
+        try:
+            keychain = self._mcp_keychain_factory(operator_id)
+            refresh_token = keychain.read_refresh_token()
+            refreshed = refresh_access_token(
+                client_id=client_id,
+                refresh_token=refresh_token,
+                required_read_scopes=(),
+                transport=self._oauth_transport,
+            )
+            if refreshed.refresh_token is not None:
+                keychain.store_refresh_token(refreshed.refresh_token)
+        except (MoomooKeychainError, MoomooOAuthError, OSError, RuntimeError, ValueError):
+            self._set_mcp_status(self._mcp_authorization_required_status())
+            return
+        with self._lock:
+            if self._operator_id != operator_id or self._client_id != client_id:
+                return
+            self._mcp_access_token = refreshed.access_token
+            self._mcp_status = MoomooMcpDiscoveryStatus(
+                state="discovery_required",
+                tool_count=0,
+            )
 
     def compose_holdings(
         self,
@@ -639,9 +1050,13 @@ class MoomooConnectionService:
             self._operator_id = None
             self._pending_operator_id = normalized_operator_id
             self._client_id = None
+            self._access_token = None
+            self._mcp_access_token = None
             self._authorized_account_ids = ()
             self._capabilities = ()
             self._quote_stream = None
+            self._mcp_status = self._initial_mcp_status()
+            self._last_market_quotes = {}
             self._status = MoomooConnectionStatus(
                 state="pending",
                 account_count=0,
@@ -746,12 +1161,14 @@ class MoomooConnectionService:
             self._operator_id = operator_id
             self._pending_operator_id = None
             self._client_id = client_id
+            self._access_token = tokens.access_token
             self._authorized_account_ids = tokens.account_ids
             self._capabilities = _granted_capabilities(
                 read_scopes=tokens.read_scopes,
                 account_ids=tokens.account_ids,
             )
             capabilities = self._capabilities
+            self._mcp_status = self._initial_mcp_status()
         if "market_data" in capabilities and self._quote_stream_factory is not None:
             quote_stream = self._quote_stream_factory(
                 lambda: self._refresh_quote_access(
@@ -885,6 +1302,11 @@ class MoomooConnectionService:
     def _set_failed(self, error_code: str) -> None:
         with self._lock:
             self._pending_operator_id = None
+            self._access_token = None
+            self._mcp_status = MoomooMcpDiscoveryStatus(
+                state="disconnected",
+                tool_count=0,
+            )
             self._status = MoomooConnectionStatus(
                 state="failed",
                 account_count=0,
@@ -901,6 +1323,11 @@ class MoomooConnectionService:
             ):
                 return
             self._pending_operator_id = None
+            self._access_token = None
+            self._mcp_status = MoomooMcpDiscoveryStatus(
+                state="disconnected",
+                tool_count=0,
+            )
             self._status = MoomooConnectionStatus(
                 state="failed",
                 account_count=0,
@@ -912,6 +1339,30 @@ class MoomooConnectionService:
     def _set_status(self, status: MoomooConnectionStatus) -> None:
         with self._lock:
             self._status = status
+
+    def _set_mcp_status(self, status: MoomooMcpDiscoveryStatus) -> None:
+        with self._lock:
+            self._mcp_status = status
+
+    def _set_mcp_failed(self, error_code: str) -> None:
+        with self._lock:
+            self._mcp_access_token = None
+            self._mcp_status = MoomooMcpDiscoveryStatus(
+                state="failed",
+                tool_count=0,
+                error_code=error_code,
+            )
+
+    def _initial_mcp_status(self) -> MoomooMcpDiscoveryStatus:
+        return self._mcp_authorization_required_status()
+
+    @staticmethod
+    def _mcp_authorization_required_status() -> MoomooMcpDiscoveryStatus:
+        return MoomooMcpDiscoveryStatus(
+            state="unavailable",
+            tool_count=0,
+            error_code="moomoo_mcp_authorization_required",
+        )
 
 
 def _granted_capabilities(
@@ -925,6 +1376,39 @@ def _granted_capabilities(
     if "trade:read" in read_scopes and account_ids:
         capabilities.append("portfolio_holdings")
     return tuple(capabilities)
+
+
+def _summarize_mcp_tools(
+    advertised: object,
+) -> tuple[Mapping[str, str], ...]:
+    if not isinstance(advertised, list):
+        raise ValueError("Moomoo MCP tool manifest is invalid")
+    summaries: list[Mapping[str, str]] = []
+    names: set[str] = set()
+    for tool in advertised:
+        if not isinstance(tool, Mapping):
+            raise ValueError("Moomoo MCP tool entry is invalid")
+        name = tool.get("name")
+        schema = tool.get("inputSchema", tool.get("input_schema", {}))
+        if not isinstance(name, str) or not name.strip() or not isinstance(schema, Mapping):
+            raise ValueError("Moomoo MCP tool metadata is invalid")
+        normalized_name = name.strip()
+        if normalized_name in names:
+            raise ValueError("Moomoo MCP tool manifest contains duplicates")
+        names.add(normalized_name)
+        schema_bytes = json.dumps(
+            schema,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        ).encode("utf-8")
+        summaries.append(
+            {
+                "name": normalized_name,
+                "input_schema_sha256": hashlib.sha256(schema_bytes).hexdigest(),
+            }
+        )
+    return tuple(sorted(summaries, key=lambda item: item["name"]))
 
 
 def _oauth_failure_code(error: MoomooOAuthError) -> str:
@@ -996,11 +1480,17 @@ class DesktopControlServer:
         service: MoomooConnectionService,
         control_token: str,
         research_capture_catalog: DesktopResearchCaptureCatalog | None = None,
+        security_registry: DesktopSecurityRegistry | None = None,
+        research_notebook: DesktopResearchNotebook | None = None,
+        research_capture_import_service: DesktopCaptureImportService | None = None,
     ) -> None:
         if not control_token:
             raise ValueError("Desktop control token is required")
         self._service = service
         self._research_capture_catalog = research_capture_catalog
+        self._security_registry = security_registry
+        self._research_notebook = research_notebook
+        self._research_capture_import_service = research_capture_import_service
         self._control_token = control_token
         self._server = ThreadingHTTPServer(("127.0.0.1", 0), self._handler_type())
         self._thread: threading.Thread | None = None
@@ -1032,6 +1522,9 @@ class DesktopControlServer:
     def _handler_type(self) -> type[BaseHTTPRequestHandler]:
         service = self._service
         research_capture_catalog = self._research_capture_catalog
+        security_registry = self._security_registry
+        research_notebook = self._research_notebook
+        research_capture_import_service = self._research_capture_import_service
         expected_token = self._control_token
 
         class Handler(BaseHTTPRequestHandler):
@@ -1123,8 +1616,85 @@ class DesktopControlServer:
                         return
                     self._send_json(200, catalog.as_dict())
                     return
+                if parsed.path == "/v1/security-registry":
+                    if security_registry is None:
+                        self._send_json(
+                            503,
+                            {"error": "security_registry_unavailable"},
+                        )
+                        return
+                    self._send_json(
+                        200,
+                        {"entries": list(security_registry.list_entries())},
+                    )
+                    return
+                if parsed.path == "/v1/research/notebook":
+                    if research_notebook is None:
+                        self._send_json(
+                            503,
+                            {"error": "ticker_notebook_unavailable"},
+                        )
+                        return
+                    try:
+                        query = parse_qs(parsed.query, keep_blank_values=True)
+                        required = {"security_id"}
+                        optional = {"order"}
+                        if (
+                            not required <= set(query)
+                            or not set(query) <= required | optional
+                            or any(
+                                len(query[field]) != 1 or not query[field][0]
+                                for field in query
+                            )
+                        ):
+                            raise TickerNotebookError("ticker notebook request is invalid")
+                        security_id = query["security_id"][0]
+                        order = query.get("order", ["newest"])[0]
+                        notes = research_notebook.list_notes(
+                            security_id, order=order
+                        )
+                    except TickerNotebookError:
+                        self._send_json(
+                            400,
+                            {"error": "ticker_notebook_request_invalid"},
+                        )
+                        return
+                    self._send_json(
+                        200,
+                        {
+                            "contract_version": "ticker_notebook_list.v1",
+                            "notes": list(notes),
+                            "order": order,
+                        },
+                    )
+                    return
+                if parsed.path == "/v1/research/market-evidence/quote":
+                    try:
+                        query = parse_qs(parsed.query, keep_blank_values=True)
+                        if set(query) != {"security_id"} or len(query["security_id"]) != 1:
+                            raise ValueError
+                        status = service.last_market_quote(
+                            security_id=query["security_id"][0]
+                        )
+                    except (DesktopControlError, ValueError):
+                        self._send_json(
+                            400,
+                            {"error": "moomoo_market_evidence_request_invalid"},
+                        )
+                        return
+                    self._send_json(
+                        200,
+                        {
+                            "contract_version": "market_quote_evidence.v1",
+                            **status.as_dict(),
+                        },
+                    )
+                    return
                 if self.path == "/v1/moomoo/status":
                     self._send_json(200, service.status().as_dict())
+                    return
+                if self.path == "/v1/moomoo/mcp/status":
+                    self._send_json(200, service.mcp_discovery_status().as_dict())
                     return
                 if self.path == "/v1/moomoo/holdings":
                     self._send_json(200, service.holdings().as_dict())
@@ -1141,9 +1711,16 @@ class DesktopControlServer:
                     "/v1/moomoo/compose",
                     "/v1/moomoo/connect",
                     "/v1/moomoo/disconnect",
+                    "/v1/moomoo/mcp/connect",
+                    "/v1/moomoo/mcp/discover",
                     "/v1/moomoo/refresh",
                     "/v1/moomoo/resume",
                     "/v1/moomoo/quotes/subscriptions",
+                    "/v1/security-registry",
+                    "/v1/security-registry/import-moomoo",
+                    "/v1/research/notebook",
+                    "/v1/research/captures/import",
+                    "/v1/research/market-evidence/quote",
                 }:
                     self._send_json(404, {"error": "desktop_control_not_found"})
                     return
@@ -1164,6 +1741,194 @@ class DesktopControlServer:
                 if not isinstance(body, Mapping):
                     self._send_json(400, {"error": "desktop_control_body_invalid"})
                     return
+                if self.path == "/v1/security-registry":
+                    if security_registry is None:
+                        self._send_json(
+                            503,
+                            {"error": "security_registry_unavailable"},
+                        )
+                        return
+                    try:
+                        if set(body) != {"ticker"}:
+                            raise ValueError
+                        security_registry.add_manual_ticker(str(body["ticker"]))
+                    except ValueError:
+                        self._send_json(
+                            400,
+                            {"error": "security_registry_request_invalid"},
+                        )
+                        return
+                    self._send_json(200, {"entries": list(security_registry.list_entries())})
+                    return
+                if self.path == "/v1/security-registry/import-moomoo":
+                    if security_registry is None:
+                        self._send_json(
+                            503,
+                            {"error": "security_registry_unavailable"},
+                        )
+                        return
+                    try:
+                        if body:
+                            raise ValueError
+                        mirror = service.holdings().as_dict()
+                        positions = mirror.get("positions")
+                        if not isinstance(positions, list):
+                            raise ValueError
+                        symbols = tuple(
+                            position["code"]
+                            for position in positions
+                            if isinstance(position, Mapping)
+                            and isinstance(position.get("code"), str)
+                        )
+                        security_registry.import_moomoo_symbols(symbols)
+                    except (AttributeError, ValueError):
+                        self._send_json(
+                            400,
+                            {"error": "security_registry_import_invalid"},
+                        )
+                        return
+                    self._send_json(200, {"entries": list(security_registry.list_entries())})
+                    return
+                if self.path == "/v1/research/notebook":
+                    if research_notebook is None:
+                        self._send_json(
+                            503,
+                            {"error": "ticker_notebook_unavailable"},
+                        )
+                        return
+                    try:
+                        if set(body) != {"security_id", "body"}:
+                            raise TickerNotebookError("ticker notebook request is invalid")
+                        note = research_notebook.add_note(
+                            str(body["security_id"]), str(body["body"])
+                        )
+                    except TickerNotebookError:
+                        self._send_json(
+                            400,
+                            {"error": "ticker_notebook_request_invalid"},
+                        )
+                        return
+                    self._send_json(
+                        200,
+                        {"contract_version": "ticker_notebook_note.v1", **note},
+                    )
+                    return
+                if self.path == "/v1/research/captures/import":
+                    if research_capture_import_service is None:
+                        self._send_json(
+                            503,
+                            {"error": "primary_source_capture_import_unavailable"},
+                        )
+                        return
+                    try:
+                        required_fields = {
+                            "operator_id",
+                            "security_id",
+                            "cik",
+                            "issuer_name",
+                            "primary_listing_exchange",
+                            "as_of_cutoff",
+                            "archive_path",
+                            "trusted_issuer_hosts",
+                        }
+                        if set(body) != required_fields:
+                            raise DesktopCaptureImportError(
+                                "capture import request is invalid"
+                            )
+                        cutoff = datetime.fromisoformat(
+                            str(body["as_of_cutoff"]).replace("Z", "+00:00")
+                        )
+                        if cutoff.tzinfo is None or cutoff.utcoffset() is None:
+                            raise DesktopCaptureImportError(
+                                "capture import cutoff is invalid"
+                            )
+                        hosts = body["trusted_issuer_hosts"]
+                        if not isinstance(hosts, list) or not all(
+                            isinstance(host, str) for host in hosts
+                        ):
+                            raise DesktopCaptureImportError(
+                                "capture import trusted issuer hosts are invalid"
+                            )
+                        persisted = research_capture_import_service.import_capture(
+                            DesktopCaptureImportRequest(
+                                operator_id=str(body["operator_id"]),
+                                security_id=str(body["security_id"]),
+                                cik=str(body["cik"]),
+                                issuer_name=str(body["issuer_name"]),
+                                primary_listing_exchange=str(
+                                    body["primary_listing_exchange"]
+                                ),
+                                as_of_cutoff=cutoff,
+                                archive_path=Path(str(body["archive_path"])),
+                                trusted_issuer_hosts=tuple(hosts),
+                            )
+                        )
+                    except (
+                        DesktopCaptureImportError,
+                        ValueError,
+                        TypeError,
+                    ) as error:
+                        self._send_json(
+                            400,
+                            {
+                                "error": "primary_source_capture_import_invalid",
+                                "reason": str(error),
+                            },
+                        )
+                        return
+                    entry = AcceptedCaptureCatalogEntry(
+                        capture_id=persisted.capture_id,
+                        capture_revision=persisted.capture_revision,
+                        capture_content_hash=persisted.capture_content_hash,
+                        as_of_cutoff=persisted.as_of_cutoff,
+                        question_type=persisted.question_type,
+                        question_type_version=persisted.question_type_version,
+                        workflow_config_version=persisted.workflow_config_version,
+                        accepted_at=persisted.accepted_at,
+                    )
+                    self._send_json(
+                        200,
+                        {
+                            "contract_version": "primary_source_capture_import_receipt.v1",
+                            **entry.as_dict(),
+                        },
+                    )
+                    return
+                if self.path == "/v1/research/market-evidence/quote":
+                    try:
+                        if set(body) != {"operator_id", "security_id", "ticker"}:
+                            raise ValueError
+                        status = service.fetch_market_quote(
+                            operator_id=str(body["operator_id"]),
+                            security_id=str(body["security_id"]),
+                            ticker=str(body["ticker"]),
+                        )
+                    except ValueError:
+                        self._send_json(
+                            400,
+                            {"error": "moomoo_market_evidence_request_invalid"},
+                        )
+                        return
+                    except DesktopControlError as error:
+                        http_status = (
+                            409
+                            if error.code
+                            in {
+                                "moomoo_mcp_discovery_requires_connection",
+                                "moomoo_mcp_discovery_required",
+                            }
+                            else 400
+                        )
+                        self._send_json(http_status, {"error": error.code})
+                        return
+                    self._send_json(
+                        200,
+                        {
+                            "contract_version": "market_quote_evidence.v1",
+                            **status.as_dict(),
+                        },
+                    )
+                    return
                 if self.path == "/v1/moomoo/connect":
                     try:
                         status = service.start_connection(
@@ -1175,6 +1940,46 @@ class DesktopControlServer:
                         http_status = (
                             409
                             if error.code == "moomoo_connection_already_pending"
+                            else 400
+                        )
+                        self._send_json(http_status, {"error": error.code})
+                        return
+                    self._send_json(202, status.as_dict())
+                    return
+                if self.path == "/v1/moomoo/mcp/discover":
+                    if set(body) != {"operator_id"}:
+                        self._send_json(400, {"error": "moomoo_mcp_discovery_request_invalid"})
+                        return
+                    try:
+                        status = service.discover_mcp_tools(
+                            operator_id=str(body["operator_id"]),
+                        )
+                    except DesktopControlError as error:
+                        http_status = (
+                            409
+                            if error.code == "moomoo_mcp_discovery_requires_connection"
+                            else 400
+                        )
+                        self._send_json(http_status, {"error": error.code})
+                        return
+                    self._send_json(200, status.as_dict())
+                    return
+                if self.path == "/v1/moomoo/mcp/connect":
+                    if set(body) != {"operator_id", "redirect_uri"}:
+                        self._send_json(
+                            400,
+                            {"error": "moomoo_mcp_authorization_request_invalid"},
+                        )
+                        return
+                    try:
+                        status = service.start_mcp_authorization(
+                            operator_id=str(body["operator_id"]),
+                            redirect_uri=str(body["redirect_uri"]),
+                        )
+                    except DesktopControlError as error:
+                        http_status = (
+                            409
+                            if error.code == "moomoo_mcp_authorization_already_pending"
                             else 400
                         )
                         self._send_json(http_status, {"error": error.code})

@@ -6,11 +6,17 @@ import secrets
 import signal
 import sys
 import threading
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Mapping
 
 from workers.desktop.control import DesktopControlServer, MoomooConnectionService
 from workers.desktop.research import DesktopResearchCaptureCatalog
+from workers.desktop.research_capture_import import DesktopCaptureImportService
+from workers.desktop.research_notebook import DesktopResearchNotebook
+from workers.desktop.security_registry import DesktopSecurityRegistry
+from workers.moomoo_mcp.http_client import MoomooMcpHttpClient
+from workers.moomoo_mcp.keychain import MoomooMcpTokenKeychain
 from workers.primary_sources.storage import FilePrimarySourceCaptureRepository
 from workers.portfolio.keychain import MoomooTokenKeychain
 from workers.portfolio.moomoo import (
@@ -62,6 +68,36 @@ def _research_capture_root(
     return Path.cwd() / "data" / "primary-source-captures"
 
 
+def _security_registry_path(
+    *,
+    packaged: bool = bool(getattr(sys, "frozen", False)),
+) -> Path:
+    if packaged:
+        return (
+            Path.home()
+            / "Library"
+            / "Application Support"
+            / "Investment Research OS"
+            / "security-registry.sqlite3"
+        )
+    return Path.cwd() / "data" / "security-registry.sqlite3"
+
+
+def _ticker_notebook_path(
+    *,
+    packaged: bool = bool(getattr(sys, "frozen", False)),
+) -> Path:
+    if packaged:
+        return (
+            Path.home()
+            / "Library"
+            / "Application Support"
+            / "Investment Research OS"
+            / "ticker-notebook.sqlite3"
+        )
+    return Path.cwd() / "data" / "ticker-notebook.sqlite3"
+
+
 def run(*, healthcheck: bool = False) -> int:
     if healthcheck:
         print(
@@ -97,12 +133,24 @@ def run(*, healthcheck: bool = False) -> int:
             ),
             oauth_transport=UrllibMoomooOAuthTransport(),
             portfolio_client_factory=_build_moomoo_portfolio_client,
+            mcp_client_factory=lambda access_token: MoomooMcpHttpClient(
+                access_token=access_token
+            ),
+            mcp_keychain_factory=lambda operator_id: MoomooMcpTokenKeychain(
+                operator_id=operator_id
+            ),
             quote_stream_factory=lambda access_supplier: MoomooQuoteStream(
                 access_supplier=access_supplier
             ),
         ),
         research_capture_catalog=DesktopResearchCaptureCatalog(
             FilePrimarySourceCaptureRepository(_research_capture_root(os.environ))
+        ),
+        security_registry=DesktopSecurityRegistry(_security_registry_path()),
+        research_notebook=DesktopResearchNotebook(_ticker_notebook_path()),
+        research_capture_import_service=DesktopCaptureImportService(
+            FilePrimarySourceCaptureRepository(_research_capture_root(os.environ)),
+            clock=lambda: datetime.now(UTC),
         ),
     )
     control_server.start()

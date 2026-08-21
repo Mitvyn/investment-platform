@@ -168,6 +168,13 @@ class MoomooOAuthTests(unittest.TestCase):
         self.assertEqual(grant.read_scopes, ("quote:read", "trade:read"))
         self.assertEqual(grant.account_ids, ("2638",))
 
+        no_safe_capability = validate_granted_scopes(
+            "trade:write watchlist:write unknown:read",
+            required_read_scopes=("quote:read", "trade:read"),
+        )
+        self.assertEqual(no_safe_capability.read_scopes, ())
+        self.assertEqual(no_safe_capability.account_ids, ())
+
         market_only = validate_granted_scopes(
             "quote:read",
             required_read_scopes=("quote:read", "trade:read"),
@@ -182,25 +189,16 @@ class MoomooOAuthTests(unittest.TestCase):
         self.assertEqual(holdings_only.read_scopes, ("trade:read",))
         self.assertEqual(holdings_only.account_ids, ("2638",))
 
-    def test_granted_scope_failures_identify_safe_remediation(self) -> None:
-        cases = (
-            (
-                "quote:read trade:read trade:write accid:2638",
-                "write_scope_not_permitted",
-            ),
-            (
-                "quote:read trade:read unknown:read accid:2638",
-                "unknown_scope_not_permitted",
-            ),
+    def test_granted_scopes_ignore_operator_granted_capabilities_outside_app_surface(
+        self,
+    ) -> None:
+        grant = validate_granted_scopes(
+            "quote:read trade:read trade:write watchlist:write unknown:read accid:2638",
+            required_read_scopes=("quote:read", "trade:read"),
         )
 
-        for granted, reason_code in cases:
-            with self.subTest(granted=granted):
-                with self.assertRaisesRegex(MoomooOAuthError, reason_code):
-                    validate_granted_scopes(
-                        granted,
-                        required_read_scopes=("quote:read", "trade:read"),
-                    )
+        self.assertEqual(grant.read_scopes, ("quote:read", "trade:read"))
+        self.assertEqual(grant.account_ids, ("2638",))
 
     def test_accepts_echoed_account_selector_without_treating_it_as_account_grant(
         self,
@@ -213,7 +211,9 @@ class MoomooOAuthTests(unittest.TestCase):
         self.assertEqual(grant.read_scopes, ("quote:read", "trade:read"))
         self.assertEqual(grant.account_ids, ())
 
-    def test_builds_exact_loopback_authorization_url(self) -> None:
+    def test_builds_exact_loopback_authorization_url_without_prescribing_grants(
+        self,
+    ) -> None:
         attempt = create_pkce_attempt(
             token_factory=lambda byte_count: (
                 "verifier-value" if byte_count == 64 else "state-value"
@@ -238,11 +238,7 @@ class MoomooOAuthTests(unittest.TestCase):
         self.assertIn("response_type=code", url)
         self.assertIn("state=state-value", url)
         query = parse_qs(urlsplit(url).query, strict_parsing=True)
-        self.assertEqual(
-            query["scope"], ["quote:read trade:read accid:*"]
-        )
-        self.assertNotIn("quote:write", query["scope"][0])
-        self.assertNotIn("trade:write", query["scope"][0])
+        self.assertNotIn("scope", query)
 
         with self.assertRaisesRegex(MoomooOAuthError, "loopback redirect"):
             build_authorization_url(

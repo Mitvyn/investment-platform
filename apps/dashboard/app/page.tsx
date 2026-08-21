@@ -10,8 +10,6 @@ import {
   KeyRound,
   LogOut,
   Radar,
-  RefreshCw,
-  Save,
   Settings,
   ShieldCheck,
   TriangleAlert,
@@ -25,7 +23,6 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { MarketPriceChart } from "@/components/market-price-chart";
 import { MoomooConnectionPoller } from "@/components/moomoo-connection-poller";
-import { MoomooQuotePoller } from "@/components/moomoo-quote-poller";
 import { MoomooClientIdPicker } from "@/components/moomoo-client-id-picker";
 import { MoomooAutoReconnect } from "@/components/moomoo-auto-reconnect";
 import { MoomooHoldingsTable } from "@/components/moomoo-holdings-table";
@@ -76,9 +73,11 @@ import {
 } from "@/lib/moomoo-client-preferences";
 import {
   describeMoomooError,
+  loadDesktopSecurityRegistry,
+  loadMoomooMcpDiscoveryStatus,
   loadMoomooDesktopHoldings,
-  loadMoomooDesktopQuotes,
   loadMoomooDesktopStatus,
+  loadMoomooMarketQuoteStatus,
   MOOMOO_DESKTOP_CALLBACK_URL,
   presentMoomooCapabilityStates,
   presentMoomooConnectionSummary,
@@ -102,20 +101,23 @@ import { loadResearchRunFlow } from "../lib/research-run-flow";
 import { loadResearchRunHistory } from "../lib/research-run-history";
 import { presentResearchRunHistory } from "../lib/research-run-history-workspace";
 import { loadAcceptedResearchCaptures } from "../lib/research-desktop";
+import { loadTickerNotebook } from "../lib/research-notebook";
 import { loadSecurityDirectory } from "../lib/securities";
 import { loadSecurityJob } from "../lib/security-jobs";
 import { createClient } from "../lib/supabase/server";
 import { loadWatchlist } from "../lib/watchlist";
 import { signOut, toggleWatchlist } from "./actions";
 import { launchResearchRun } from "./research-actions";
+import { addResearchNotebookNote } from "./research-notebook-actions";
+import { importResearchCaptureAction } from "./research-capture-import-actions";
 import {
   connectMoomoo,
+  authorizeMoomooMcp,
+  discoverMoomooMcp,
   disconnectMoomoo,
-  refreshMoomoo,
-  saveMoomooMirror,
-  startMoomooLiveQuote,
-  stopMoomooLiveQuote,
+  refreshMarketEvidence,
 } from "./moomoo-actions";
+import { addDesktopSecurity, importMoomooSecurities } from "./security-registry-actions";
 import { registerSecurity } from "./security-actions";
 
 export const dynamic = "force-dynamic";
@@ -264,6 +266,14 @@ export default async function TickerWorkspace({
     research_error?: string;
     moomoo?: string;
     moomoo_error?: string;
+    mcp?: string;
+    mcp_error?: string;
+    security_registry_error?: string;
+    notebook_error?: string;
+    capture_import?: string;
+    capture_import_error?: string;
+    market_evidence?: string;
+    market_evidence_error?: string;
     security?: string;
     fund?: string;
     stage?: string;
@@ -285,6 +295,9 @@ export default async function TickerWorkspace({
   const autoResumeClientId =
     parseMoomooAutoResumeClientId(autoResumePreference);
   const requestedSecurityId = params.security;
+  const marketQuoteStatus = requestedSecurityId
+    ? await loadMoomooMarketQuoteStatus(requestedSecurityId)
+    : null;
   const operatorId = String(data.claims.sub ?? "");
   const registrationJob = params.registration
     ? await loadSecurityJob(operatorId, params.registration)
@@ -294,17 +307,19 @@ export default async function TickerWorkspace({
     watchlist,
     fundPortfolio,
     moomooStatus,
+    moomooMcpStatus,
     moomooHoldings,
-    moomooQuotes,
     portfolioMirrorResult,
+    desktopSecurityRegistry,
   ] = await Promise.all([
       loadSecurityDirectory(),
       loadWatchlist(),
       loadFundPortfolio(),
       loadMoomooDesktopStatus(),
+      loadMoomooMcpDiscoveryStatus(),
       loadMoomooDesktopHoldings(),
-      loadMoomooDesktopQuotes(),
       loadLatestPortfolioMirror(),
+      loadDesktopSecurityRegistry(),
     ]);
   const requestedFund = params.fund?.trim().toLowerCase();
   const viewingAllFunds = requestedFund === "all" || requestedFund === undefined;
@@ -315,7 +330,20 @@ export default async function TickerWorkspace({
     ? await loadLatestHoldings(activeFundKey)
     : { snapshot: null, unavailableReason: fundPortfolio.unavailableReason };
   const visibleMoomooHoldings =
-    portfolioMirrorResult.holdings ?? moomooHoldings;
+    moomooHoldings ?? portfolioMirrorResult.holdings;
+  const securityByTicker = new Map(
+    securities.map((security) => [security.ticker.toUpperCase(), security]),
+  );
+  const securityRegistry = Array.from(
+    new Set([
+      ...securities.map((security) => security.ticker.toUpperCase()),
+      ...desktopSecurityRegistry.map((entry) => entry.ticker),
+    ]),
+  ).sort().map((ticker) => ({
+    sources: desktopSecurityRegistry.find((entry) => entry.ticker === ticker)?.sources ?? [],
+    ticker,
+    security: securityByTicker.get(ticker) ?? null,
+  }));
   const selectedSecurity =
     securities.find((security) => security.securityId === requestedSecurityId) ??
     securities[0] ??
@@ -356,23 +384,13 @@ export default async function TickerWorkspace({
     : null;
   const ticker = selectedSecurity?.ticker ?? "";
   const displayTicker = ticker || "SELECT";
-  const selectedMoomooSymbol = ticker ? `US.${ticker}` : null;
-  const liveMoomooQuote = selectedMoomooSymbol
-    ? moomooQuotes?.quotes.find((quote) => quote.symbol === selectedMoomooSymbol) ?? null
-    : null;
-  const selectedQuoteActive = selectedMoomooSymbol
-    ? moomooQuotes?.symbols.includes(selectedMoomooSymbol) ?? false
-    : false;
-  const selectedQuotePolling =
-    selectedQuoteActive &&
-    moomooQuotes?.state !== "blocked" &&
-    moomooQuotes?.state !== "quota_blocked";
   const [
     { trace },
     context,
     marketSeriesResult,
     researchHistory,
     acceptedCaptureList,
+    tickerNotebook,
   ] =
     await Promise.all([
     selectedSecurity
@@ -404,6 +422,13 @@ export default async function TickerWorkspace({
       : Promise.resolve({
           captures: [],
           detail: "Select a security before choosing accepted evidence",
+          state: "unavailable" as const,
+        }),
+    selectedSecurity
+      ? loadTickerNotebook(selectedSecurity.securityId)
+      : Promise.resolve({
+          detail: "Select a security before opening its Research Notebook",
+          notes: [],
           state: "unavailable" as const,
         }),
     ]);
@@ -598,10 +623,10 @@ export default async function TickerWorkspace({
                       id="security"
                       name="security"
                     >
-                      {securities.length ? (
-                        securities.map((security) => (
-                          <option key={security.securityId} value={security.securityId}>
-                            {security.ticker} · {security.companyName}
+                      {securityRegistry.some((entry) => entry.security) ? (
+                        securityRegistry.filter((entry) => entry.security).map((entry) => (
+                          <option key={entry.security!.securityId} value={entry.security!.securityId}>
+                            {entry.security!.ticker} · {entry.security!.companyName}
                           </option>
                         ))
                       ) : (
@@ -613,7 +638,7 @@ export default async function TickerWorkspace({
                       className="pointer-events-none absolute right-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
                     />
                   </div>
-                  <Button className="shrink-0" disabled={!securities.length} type="submit" variant="outline">
+                  <Button className="shrink-0" disabled={!securityRegistry.some((entry) => entry.security)} type="submit" variant="outline">
                     Open
                   </Button>
                 </div>
@@ -828,6 +853,176 @@ export default async function TickerWorkspace({
           {selectedSecurity && activeSection === "research" && activeStage === "overview" ? (
             <Card className="mt-5">
               <CardHeader>
+                <SectionLabel>Market evidence</SectionLabel>
+                <CardTitle className="mt-2">
+                  Refresh market evidence
+                </CardTitle>
+                <CardDescription>
+                  Read-only current quote via the authenticated Moomoo MCP
+                  read bridge for this canonical security. This is not an
+                  official close, valuation, or trading signal, and never
+                  places, modifies, or cancels an order.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                {moomooMcpStatus.state !== "ready" ? (
+                  <p
+                    aria-live="polite"
+                    className="rounded-md border border-border bg-muted/35 px-3 py-2 text-xs"
+                  >
+                    Market evidence needs authorized MCP discovery first.
+                    Connect and discover MCP tools in Moomoo Settings, then
+                    return here.
+                  </p>
+                ) : (
+                  <form action={refreshMarketEvidence}>
+                    <input
+                      name="securityId"
+                      type="hidden"
+                      value={selectedSecurity.securityId}
+                    />
+                    <input name="view" type="hidden" value={activeSection} />
+                    <Button type="submit">Refresh market evidence</Button>
+                  </form>
+                )}
+                {(params.market_evidence === "ready" ||
+                  params.market_evidence === "stale") &&
+                marketQuoteStatus?.evidence ? (
+                  <p
+                    aria-live="polite"
+                    className="mt-3 rounded-md border border-border bg-muted/35 px-3 py-2 text-xs"
+                  >
+                    {params.market_evidence === "stale"
+                      ? "Market evidence is stale (older than the freshness window). "
+                      : "Market evidence retrieved. "}
+                    Ticker: {marketQuoteStatus.evidence.ticker}. Source:{" "}
+                    {marketQuoteStatus.evidence.source}. Retrieved{" "}
+                    {marketQuoteStatus.evidence.retrievedAt} · freshness:{" "}
+                    {marketQuoteStatus.evidence.freshness}
+                    {marketQuoteStatus.cached ? " · cached" : ""}. This is a
+                    point-in-time read, not investment advice or a trade
+                    signal.
+                  </p>
+                ) : null}
+                {params.market_evidence_error ? (
+                  <p
+                    aria-live="polite"
+                    className="mt-3 rounded-md border border-challenge/35 bg-challenge-muted px-3 py-2 text-xs text-challenge-muted-foreground"
+                  >
+                    {params.market_evidence_error === "security_unauthorized"
+                      ? "This security could not be verified against the authenticated security directory."
+                      : params.market_evidence_error === "malformed"
+                        ? "Market evidence result was malformed and was rejected."
+                        : params.market_evidence_error === "moomoo_market_evidence_malformed"
+                          ? "Market evidence result was malformed and was rejected."
+                          : "Market evidence refresh failed or the connection is unavailable. Reconnect or retry."}
+                  </p>
+                ) : null}
+              </CardContent>
+            </Card>
+          ) : null}
+          {selectedSecurity && activeSection === "research" && activeStage === "overview" ? (
+            <Card className="mt-5">
+              <CardHeader>
+                <SectionLabel>Accepted evidence capture</SectionLabel>
+                <CardTitle className="mt-2">
+                  Import a collected capture archive
+                </CardTitle>
+                <CardDescription>
+                  Import an already collected, bounded evidence archive from
+                  local disk. This does not acquire sources, browse the web,
+                  or call a provider or model; it validates the archive
+                  against its embedded plan and this security, then persists
+                  an immutable accepted receipt selectable below.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <form
+                  action={importResearchCaptureAction}
+                  className="grid gap-3 sm:grid-cols-2"
+                >
+                  <input
+                    name="securityId"
+                    type="hidden"
+                    value={selectedSecurity.securityId}
+                  />
+                  <input name="view" type="hidden" value={activeSection} />
+                  <div className="flex flex-col gap-1">
+                    <label
+                      className="text-xs font-medium text-muted-foreground"
+                      htmlFor="archivePath"
+                    >
+                      Local capture archive path
+                    </label>
+                    <input
+                      className="h-11 w-full rounded-md border border-input bg-background px-3 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/40"
+                      id="archivePath"
+                      name="archivePath"
+                      placeholder="/Users/operator/captures/rxrx-v3.zip"
+                      required
+                      type="text"
+                    />
+                  </div>
+                  <div className="flex flex-col gap-1">
+                    <label
+                      className="text-xs font-medium text-muted-foreground"
+                      htmlFor="captureAsOfCutoff"
+                    >
+                      UTC as-of cutoff
+                    </label>
+                    <input
+                      className="h-11 w-full rounded-md border border-input bg-background px-3 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/40"
+                      id="captureAsOfCutoff"
+                      name="captureAsOfCutoff"
+                      placeholder="2026-05-06T23:59:59Z"
+                      required
+                      type="text"
+                    />
+                  </div>
+                  <div className="flex flex-col gap-1 sm:col-span-2">
+                    <label
+                      className="text-xs font-medium text-muted-foreground"
+                      htmlFor="trustedIssuerHosts"
+                    >
+                      Trusted issuer hosts (comma separated)
+                    </label>
+                    <input
+                      className="h-11 w-full rounded-md border border-input bg-background px-3 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/40"
+                      id="trustedIssuerHosts"
+                      name="trustedIssuerHosts"
+                      placeholder="ir.example.com"
+                      required
+                      type="text"
+                    />
+                  </div>
+                  <Button className="justify-self-start sm:col-span-2" type="submit">
+                    Import capture
+                  </Button>
+                </form>
+                {params.capture_import === "accepted" ? (
+                  <p
+                    aria-live="polite"
+                    className="mt-3 rounded-md border border-border bg-muted/35 px-3 py-2 text-xs"
+                  >
+                    Capture accepted. Select it below to run preflight.
+                  </p>
+                ) : null}
+                {params.capture_import_error ? (
+                  <p
+                    aria-live="polite"
+                    className="mt-3 rounded-md border border-challenge/35 bg-challenge-muted px-3 py-2 text-xs text-challenge-muted-foreground"
+                  >
+                    {params.capture_import_error === "security_unauthorized"
+                      ? "This security could not be verified against the authenticated security directory."
+                      : "Capture import failed. Check the archive path, cutoff, and trusted issuer hosts."}
+                  </p>
+                ) : null}
+              </CardContent>
+            </Card>
+          ) : null}
+          {selectedSecurity && activeSection === "research" && activeStage === "overview" ? (
+            <Card className="mt-5">
+              <CardHeader>
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <div>
                     <SectionLabel>Research Run preflight</SectionLabel>
@@ -1019,6 +1214,79 @@ export default async function TickerWorkspace({
               />
             </div>
           ) : null}
+          {selectedSecurity && activeSection === "research" && activeStage === "overview" ? (
+            <Card className="mt-5">
+              <CardHeader>
+                <SectionLabel>Ticker notebook</SectionLabel>
+                <CardTitle className="mt-2">Research Notebook</CardTitle>
+                <CardDescription>
+                  Durable local operator notes for {displayTicker} only. Not AI
+                  research, agent output, or a trade signal.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <p className="text-xs text-muted-foreground">
+                  Automated ticker agent is not active. Notes stay scoped to
+                  this security.
+                </p>
+                {params.notebook_error ? (
+                  <p
+                    aria-live="polite"
+                    className="mt-3 rounded-md border border-challenge/35 bg-challenge-muted px-3 py-2 text-xs text-challenge-muted-foreground"
+                  >
+                    Note could not be saved. Retry after checking the desktop app.
+                  </p>
+                ) : null}
+                {tickerNotebook.state === "ready" && tickerNotebook.notes.length > 0 ? (
+                  <ul className="mt-4 grid gap-3">
+                    {tickerNotebook.notes.map((note) => (
+                      <li
+                        className="rounded-md border border-border bg-muted/35 px-3 py-2 text-sm"
+                        key={note.noteId}
+                      >
+                        <p className="whitespace-pre-wrap">{note.body}</p>
+                        <p className="mt-1 text-[10px] text-muted-foreground">
+                          operator · {note.createdAt}
+                        </p>
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p className="mt-4 text-xs text-muted-foreground">
+                    {tickerNotebook.detail}
+                  </p>
+                )}
+                <form
+                  action={addResearchNotebookNote}
+                  className="mt-5 grid gap-3"
+                >
+                  <input
+                    name="securityId"
+                    type="hidden"
+                    value={selectedSecurity.securityId}
+                  />
+                  <input name="view" type="hidden" value={activeSection} />
+                  <label
+                    className="text-xs font-medium text-muted-foreground"
+                    htmlFor="notebookBody"
+                  >
+                    Add a note
+                  </label>
+                  <textarea
+                    className="min-h-20 w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-xs outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/40"
+                    id="notebookBody"
+                    maxLength={4000}
+                    name="body"
+                    placeholder="Record a research observation for this security."
+                    required
+                  />
+                  <Button className="justify-self-start" type="submit">
+                    Save note
+                  </Button>
+                </form>
+              </CardContent>
+            </Card>
+          ) : null}
           {activeSection === "dashboard" ? (
             <div className="mt-5">
               <StatusStrip
@@ -1107,28 +1375,23 @@ export default async function TickerWorkspace({
             <CardHeader>
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div>
-                  <SectionLabel>Portfolio connection</SectionLabel>
-                  <CardTitle className="mt-2">Moomoo holdings mirror</CardTitle>
+                  <SectionLabel>Connection</SectionLabel>
+                  <CardTitle className="mt-2">Moomoo</CardTitle>
                 </div>
                 <Badge
                   variant={
-                    portfolioMirrorResult.holdings || moomooStatus.state === "connected"
+                    moomooStatus.state === "connected"
                       ? "verified"
                       : moomooStatus.state === "failed"
                         ? "destructive"
                         : "attention"
                   }
                 >
-                  {portfolioMirrorResult.holdings ? "stored" : moomooStatus.state}
+                  {moomooStatus.state}
                 </Badge>
               </div>
               <CardDescription>
-                {presentMoomooConnectionSummary(
-                  moomooStatus,
-                  portfolioMirrorResult.holdings?.checkedAt
-                    ? `Persisted read-only mirror · checked ${ageLabel(portfolioMirrorResult.holdings.checkedAt)}`
-                    : null,
-                )}
+                {presentMoomooConnectionSummary(moomooStatus, null)}
               </CardDescription>
             </CardHeader>
             <CardContent>
@@ -1178,89 +1441,6 @@ export default async function TickerWorkspace({
                   macOS Keychain.
                 </p>
               ) : null}
-              {moomooStatus.state === "connected" &&
-              moomooStatus.canReadMarketData &&
-              selectedSecurity ? (
-                <div className="mt-5 rounded-lg border border-primary/30 bg-primary/[0.035] p-4">
-                  <div className="flex flex-wrap items-start justify-between gap-3">
-                    <div>
-                      <p className="text-xs font-medium text-muted-foreground">
-                        Live Moomoo quote · {selectedMoomooSymbol}
-                      </p>
-                      <p
-                        aria-live="polite"
-                        className="mt-2 font-mono text-3xl font-medium tabular-nums"
-                      >
-                        {liveMoomooQuote?.lastPrice ?? "Waiting"}
-                      </p>
-                      <p className="mt-1 text-xs text-muted-foreground">
-                        {liveMoomooQuote
-                          ? `Provider timestamp ${new Date(liveMoomooQuote.dataTimeMs).toLocaleString("en-SG")}`
-                          : moomooQuotes?.state === "quota_blocked"
-                            ? "Moomoo account quota rejected this subscription. Stop it or free quota in another Moomoo session."
-                            : moomooQuotes?.state === "blocked"
-                              ? "Moomoo rejected this subscription. Check market-data permission before retrying."
-                          : selectedQuoteActive
-                            ? `Stream ${moomooQuotes?.state ?? "connecting"}`
-                            : "Start only when needed; one selected symbol replaces prior subscription."}
-                      </p>
-                    </div>
-                    {selectedQuoteActive ? (
-                      <form action={stopMoomooLiveQuote}>
-                        <input name="view" type="hidden" value="settings" />
-                        <input
-                          name="securityId"
-                          type="hidden"
-                          value={selectedSecurity.securityId}
-                        />
-                        <Button type="submit" variant="outline">
-                          Stop live quote
-                        </Button>
-                      </form>
-                    ) : (
-                      <form action={startMoomooLiveQuote}>
-                        <input name="view" type="hidden" value="settings" />
-                        <input
-                          name="securityId"
-                          type="hidden"
-                          value={selectedSecurity.securityId}
-                        />
-                        <Button type="submit" variant="outline">
-                          <Activity aria-hidden="true" />
-                          Start live quote
-                        </Button>
-                      </form>
-                    )}
-                  </div>
-                  {liveMoomooQuote ? (
-                    <div className="mt-4 grid gap-3 border-t border-border pt-4 sm:grid-cols-4">
-                      {[
-                        ["Open", liveMoomooQuote.openPrice],
-                        ["High", liveMoomooQuote.highPrice],
-                        ["Low", liveMoomooQuote.lowPrice],
-                        ["Volume", liveMoomooQuote.volume],
-                      ].map(([label, value]) => (
-                        <div key={label}>
-                          <p className="text-[10px] tracking-wide text-muted-foreground uppercase">
-                            {label}
-                          </p>
-                          <p className="mt-1 font-mono text-sm tabular-nums">
-                            {value ?? "Unavailable"}
-                          </p>
-                        </div>
-                      ))}
-                    </div>
-                  ) : null}
-                  <p className="mt-3 text-[10px] leading-relaxed text-muted-foreground">
-                    Quote-only WebSocket. Local cache polling creates no extra Moomoo
-                    request. Current workspace requests one symbol; account quota is
-                    determined by Moomoo permissions and active sessions.
-                  </p>
-                </div>
-              ) : null}
-              {visibleMoomooHoldings ? (
-                <MoomooHoldingsTable holdings={visibleMoomooHoldings} />
-              ) : null}
               <div className="mt-5 grid gap-3 border-t border-border pt-4 sm:grid-cols-3">
                 {presentMoomooCapabilityStates(moomooStatus).map((capability) => {
                   const badge = moomooCapabilityBadges[capability.state];
@@ -1280,36 +1460,106 @@ export default async function TickerWorkspace({
                   );
                 })}
               </div>
+              <div className="mt-5 border-t border-border pt-4">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <SectionLabel>MCP connection detail</SectionLabel>
+                    <p className="mt-2 text-sm font-medium">Moomoo read-tool discovery</p>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      Discovery checks current connection only. Tool schemas and tokens stay in the desktop worker.
+                    </p>
+                  </div>
+                  <Badge
+                    variant={
+                      moomooMcpStatus.state === "ready"
+                        ? "verified"
+                        : moomooMcpStatus.state === "failed"
+                          ? "destructive"
+                          : "attention"
+                    }
+                  >
+                    {moomooMcpStatus.state === "ready"
+                      ? `${moomooMcpStatus.toolCount} tools found`
+                      : moomooMcpStatus.state}
+                  </Badge>
+                </div>
+                {moomooMcpStatus.state === "ready" ? (
+                  <details className="mt-3 rounded-md border border-border bg-muted/10 px-3 py-2">
+                    <summary className="cursor-pointer text-xs font-medium text-muted-foreground">
+                      View discovered tools ({moomooMcpStatus.toolCount})
+                    </summary>
+                    {moomooMcpStatus.tools.length > 0 ? (
+                      <ul className="mt-2 grid max-h-64 gap-1 overflow-y-auto border-t border-border pt-2 sm:grid-cols-2">
+                        {moomooMcpStatus.tools.map((tool) => (
+                          <li className="truncate font-mono text-[11px] text-muted-foreground" key={tool.name}>
+                            {tool.name}
+                          </li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <p className="mt-2 border-t border-border pt-2 text-xs text-muted-foreground">
+                        No read tools returned.
+                      </p>
+                    )}
+                  </details>
+                ) : (
+                  <p className="mt-3 text-xs text-muted-foreground">
+                    {moomooMcpStatus.state === "authorization_pending"
+                      ? "Finish separate MCP OAuth consent in the system browser."
+                      : moomooMcpStatus.state === "discovery_required"
+                        ? "Run discovery after connecting or changing provider authorization."
+                        : moomooMcpStatus.state === "disconnected"
+                          ? "Connect Moomoo before discovering read tools."
+                          : moomooMcpStatus.errorCode === "moomoo_mcp_authorization_required"
+                            ? "MCP needs separate OAuth authorization; OpenAPI connection does not authorize MCP."
+                            : moomooMcpStatus.errorCode ?? "Desktop MCP discovery unavailable."}
+                  </p>
+                )}
+                {moomooStatus.state === "connected" &&
+                ["unavailable", "discovery_required", "ready"].includes(
+                  moomooMcpStatus.state,
+                ) ? (
+                  <form
+                    action={
+                      moomooMcpStatus.state === "unavailable"
+                        ? authorizeMoomooMcp
+                        : discoverMoomooMcp
+                    }
+                    className="mt-3"
+                  >
+                    <input name="view" type="hidden" value="settings" />
+                    <input
+                      name="securityId"
+                      type="hidden"
+                      value={selectedSecurity?.securityId ?? ""}
+                    />
+                    <Button type="submit" variant="outline">
+                      {moomooMcpStatus.state === "unavailable"
+                        ? "Authorize MCP separately"
+                        : moomooMcpStatus.state === "ready"
+                        ? "Refresh read-tool discovery"
+                        : "Discover read tools"}
+                    </Button>
+                  </form>
+                ) : null}
+                {params.mcp_error ? (
+                  <p className="mt-3 text-sm text-challenge">
+                    Moomoo MCP discovery failed. Check connection, then retry.
+                  </p>
+                ) : null}
+                {params.mcp === "discovered" ? (
+                  <p className="mt-3 text-sm text-muted-foreground">
+                    Moomoo MCP read-tool discovery completed.
+                  </p>
+                ) : null}
+                {params.mcp === "authorizing" ? (
+                  <p className="mt-3 text-sm text-muted-foreground">
+                    MCP OAuth started. Finish consent in the system browser.
+                  </p>
+                ) : null}
+              </div>
               {moomooStatus.state === "connected" ? (
                 <div className="mt-4 flex flex-wrap justify-end gap-2">
-                  {moomooStatus.canReadPortfolio ? (
-                    <>
-                      <form action={saveMoomooMirror}>
-                        <input name="view" type="hidden" value="settings" />
-                        <input
-                          name="securityId"
-                          type="hidden"
-                          value={selectedSecurity?.securityId ?? ""}
-                        />
-                        <Button type="submit">
-                          <Save aria-hidden="true" />
-                          Save hosted mirror
-                        </Button>
-                      </form>
-                      <form action={refreshMoomoo}>
-                        <input name="view" type="hidden" value="settings" />
-                        <input
-                          name="securityId"
-                          type="hidden"
-                          value={selectedSecurity?.securityId ?? ""}
-                        />
-                        <Button type="submit" variant="outline">
-                          <RefreshCw aria-hidden="true" />
-                          Refresh holdings
-                        </Button>
-                      </form>
-                    </>
-                  ) : null}
                   <form action={disconnectMoomoo}>
                     <input name="view" type="hidden" value="settings" />
                     <input
@@ -1324,23 +1574,13 @@ export default async function TickerWorkspace({
                   </form>
                 </div>
               ) : null}
-              {!visibleMoomooHoldings && portfolioMirrorResult.unavailableReason ? (
-                <p className="mt-4 text-xs text-muted-foreground">
-                  {portfolioMirrorResult.unavailableReason}
-                </p>
-              ) : null}
-              {moomooHoldings?.source === "desktop_live" ? (
-                <p className="mt-4 text-xs text-muted-foreground">
-                  Save uses your authenticated session and one atomic account RPC.
-                  Desktop worker holds no Supabase credential.
-                </p>
-              ) : null}
               <div className="mt-4 border-t border-border pt-4 text-xs leading-relaxed text-muted-foreground">
-                Capability status above comes from safe access Moomoo returned
-                during your last authorization. It never assumes rights from
-                app registration or Moomoo account settings. Change permissions
-                in Moomoo, then reconnect to refresh this status. Trade execution
-                remains unavailable by design. Client ID is public app identity,
+                Capability status above comes only from read capabilities Moomoo
+                returned during your last authorization and successful read
+                operations. Extra broker grants never enable new app functions.
+                Change grants in Moomoo whenever you want, then disconnect and
+                reconnect to refresh this status. Trade execution remains
+                unavailable by design. Client ID is public app identity,
                 not Moomoo UID or password. Authorization opens in system browser;
                 broker credentials never enter this app.
                 Disconnect removes local Keychain authorization only. Revoke
@@ -1351,26 +1591,6 @@ export default async function TickerWorkspace({
                   {describeMoomooError(params.moomoo_error)}
                 </p>
               ) : null}
-              {params.moomoo === "refreshed" ? (
-                <p className="mt-3 text-sm text-evidence">
-                  Live Moomoo holdings refreshed.
-                </p>
-              ) : null}
-              {params.moomoo === "quote_started" ? (
-                <p className="mt-3 text-sm text-evidence">
-                  Live quote subscription started.
-                </p>
-              ) : null}
-              {params.moomoo === "quote_stopped" ? (
-                <p className="mt-3 text-sm text-muted-foreground">
-                  Live quote subscription stopped and quota released.
-                </p>
-              ) : null}
-              {params.moomoo === "saved" ? (
-                <p className="mt-3 text-sm text-evidence">
-                  Hosted Moomoo mirror saved.
-                </p>
-              ) : null}
               {params.moomoo === "disconnected" ? (
                 <p className="mt-3 text-sm text-muted-foreground">
                   Local Moomoo token removed. Provider authorization may still
@@ -1379,13 +1599,92 @@ export default async function TickerWorkspace({
               ) : null}
             </CardContent>
           </Card> : null}
+          {activeSection === "settings" ? (
+            <Card className="mt-5">
+              <CardHeader>
+                <SectionLabel>Security registry</SectionLabel>
+                <CardTitle className="mt-2">Research tickers</CardTitle>
+                <CardDescription>
+                  Desktop-local ticker index. Holdings values and account details stay out of this table.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="flex flex-wrap gap-2">
+                  <form action={importMoomooSecurities}>
+                    <input name="securityId" type="hidden" value={selectedSecurity?.securityId ?? ""} />
+                    <Button type="submit" variant="outline">Import Moomoo tickers</Button>
+                  </form>
+                  <form action={addDesktopSecurity} className="flex gap-2">
+                    <input name="securityId" type="hidden" value={selectedSecurity?.securityId ?? ""} />
+                    <Input autoCapitalize="characters" className="font-mono uppercase" maxLength={10} name="ticker" placeholder="RXRX" required />
+                    <Button type="submit">Add ticker</Button>
+                  </form>
+                </div>
+                {params.security_registry_error ? (
+                  <p aria-live="polite" className="mt-3 text-sm text-challenge">
+                    Could not update desktop Security Registry. Check desktop runtime,
+                    then retry.
+                  </p>
+                ) : null}
+                <div className="mt-4 overflow-x-auto rounded-lg border border-border">
+                  <table className="w-full text-sm">
+                    <thead className="bg-muted/35 text-left text-[10px] tracking-[0.1em] text-muted-foreground uppercase">
+                      <tr>
+                        <th className="px-4 py-3">Ticker</th>
+                        <th className="px-4 py-3">Source</th>
+                        <th className="px-4 py-3">Research</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-border">
+                      {securityRegistry.length ? securityRegistry.map((entry) => (
+                        <tr key={entry.ticker}>
+                          <td className="px-4 py-3 font-mono font-medium">{entry.ticker}</td>
+                          <td className="px-4 py-3 text-xs text-muted-foreground">
+                            {entry.sources.length ? entry.sources.join(", ") : "registered"}
+                          </td>
+                          <td className="px-4 py-3">
+                            {entry.security ? (
+                              <a
+                                className="text-sm text-primary underline-offset-4 hover:underline"
+                                href={`/?view=research&stage=overview&security=${encodeURIComponent(entry.security.securityId)}`}
+                              >
+                                Open Research
+                              </a>
+                            ) : (
+                              <form action={registerSecurity}>
+                                <input name="view" type="hidden" value="settings" />
+                                <input name="ticker" type="hidden" value={entry.ticker} />
+                                <Button size="sm" type="submit" variant="outline">
+                                  Register for Research
+                                </Button>
+                              </form>
+                            )}
+                          </td>
+                        </tr>
+                      )) : (
+                        <tr>
+                          <td className="px-4 py-5 text-sm text-muted-foreground" colSpan={3}>
+                            No research tickers registered locally yet.
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </CardContent>
+            </Card>
+          ) : null}
           <div className="sr-only">
-            <MoomooConnectionPoller active={moomooStatus.state === "pending"} />
+            <MoomooConnectionPoller
+              active={
+                moomooStatus.state === "pending" ||
+                moomooMcpStatus.state === "authorization_pending"
+              }
+            />
             <MoomooAutoReconnect
               active={moomooStatus.state === "disconnected"}
               clientId={autoResumeClientId}
             />
-            <MoomooQuotePoller active={selectedQuotePolling} />
           </div>
           {activeSection === "research" && activeStage !== "overview" && !hasResearch ? (
             <Card className="mt-12">

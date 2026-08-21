@@ -7,6 +7,9 @@ import {
   beginMoomooDesktopConnection,
   composeMoomooDesktopSnapshots,
   disconnectMoomooDesktop,
+  beginMoomooMcpAuthorization,
+  discoverMoomooMcpTools,
+  fetchMoomooMarketQuoteEvidence,
   refreshMoomooDesktopHoldings,
   replaceMoomooDesktopQuoteSubscriptions,
   resumeMoomooDesktopConnection,
@@ -83,6 +86,71 @@ export async function disconnectMoomoo(formData: FormData) {
     redirect(`/?moomoo_error=disconnect_failed${suffix}`);
   }
   redirect(`/?moomoo=disconnected${suffix}`);
+}
+
+export async function discoverMoomooMcp(formData: FormData) {
+  const { operatorId, suffix } = await authenticatedOperator(formData);
+  try {
+    await discoverMoomooMcpTools({ operatorId });
+  } catch {
+    redirect(`/?mcp_error=discovery_failed${suffix}`);
+  }
+  redirect(`/?mcp=discovered${suffix}`);
+}
+
+export async function authorizeMoomooMcp(formData: FormData) {
+  const { operatorId, suffix } = await authenticatedOperator(formData);
+  try {
+    await beginMoomooMcpAuthorization({ operatorId });
+  } catch {
+    redirect(`/?mcp_error=authorization_failed${suffix}`);
+  }
+  redirect(`/?mcp=authorizing${suffix}`);
+}
+
+export async function refreshMarketEvidence(formData: FormData) {
+  const supabase = await createClient();
+  const { data, error } = await supabase.auth.getClaims();
+  const operatorId = data?.claims?.sub;
+  if (error || typeof operatorId !== "string") redirect("/login");
+
+  const securityId = String(formData.get("securityId") ?? "").trim();
+  const suffix = dashboardSuffix(formData);
+  let failureReason: string | null = null;
+  let resultState: "ready" | "stale" | null = null;
+  try {
+    const { data: security, error: securityError } = await supabase
+      .from("iros_securities")
+      .select("id,symbol")
+      .eq("id", securityId)
+      .maybeSingle();
+    if (
+      securityError ||
+      !security ||
+      !/^[A-Z][A-Z0-9.\-]{0,15}$/.test(security.symbol)
+    ) {
+      throw new Error("security_unauthorized");
+    }
+    const status = await fetchMoomooMarketQuoteEvidence({
+      operatorId,
+      securityId: String(security.id),
+      ticker: `US.${security.symbol}`,
+    });
+    if (status.state === "ready" || status.state === "stale") {
+      resultState = status.state;
+    } else {
+      failureReason = status.errorCode ?? status.state;
+    }
+  } catch (thrown) {
+    failureReason =
+      thrown instanceof Error && thrown.message === "security_unauthorized"
+        ? "security_unauthorized"
+        : "request_failed";
+  }
+  if (failureReason) {
+    redirect(`/?market_evidence_error=${failureReason}${suffix}`);
+  }
+  redirect(`/?market_evidence=${resultState}${suffix}`);
 }
 
 export async function resumeMoomooSilently(clientId: string): Promise<boolean> {

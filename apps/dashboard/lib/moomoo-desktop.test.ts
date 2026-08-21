@@ -2,10 +2,13 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  beginMoomooMcpAuthorization,
   beginMoomooDesktopConnection,
   composeMoomooDesktopSnapshots,
   disconnectMoomooDesktop,
   loadMoomooDesktopHoldings,
+  loadDesktopSecurityRegistry,
+  loadMoomooMcpDiscoveryStatus,
   loadMoomooDesktopQuotes,
   loadMoomooDesktopStatus,
   presentMoomooConnectionSummary,
@@ -13,6 +16,9 @@ import {
   refreshMoomooDesktopHoldings,
   replaceMoomooDesktopQuoteSubscriptions,
   resumeMoomooDesktopConnection,
+  discoverMoomooMcpTools,
+  fetchMoomooMarketQuoteEvidence,
+  loadMoomooMarketQuoteStatus,
 } from "./moomoo-desktop.ts";
 
 test("connection failure detail overrides an older persisted mirror summary", () => {
@@ -33,7 +39,7 @@ test("connection failure detail overrides an older persisted mirror summary", ()
   );
 });
 
-test("capability matrix keeps partial authorization connected and explains reconnect path", () => {
+test("capability matrix reports broker-returned connection capabilities without prescribing grants", () => {
   assert.deepEqual(
     presentMoomooCapabilityStates({
       accountCount: 0,
@@ -46,13 +52,13 @@ test("capability matrix keeps partial authorization connected and explains recon
     }),
     [
       {
-        detail: "Live quotes available for selected security.",
+        detail: "Broker returned market-data read capability for this connection.",
         id: "market_data",
         label: "Market data",
         state: "enabled",
       },
       {
-        detail: "Enable Accounts & Orders for one account, then reconnect.",
+        detail: "Broker did not return portfolio-read capability for this connection.",
         id: "portfolio_holdings",
         label: "Holdings mirror",
         state: "reconnect_required",
@@ -97,6 +103,230 @@ test("desktop status stays unavailable without local runtime and makes no reques
   });
 });
 
+test("desktop security registry loads local tickers without portfolio values", async () => {
+  const entries = await loadDesktopSecurityRegistry(
+    desktopEnvironment,
+    async () =>
+      Response.json({
+        entries: [
+          { sources: ["manual", "moomoo_position"], ticker: "RXRX" },
+        ],
+      }),
+  );
+
+  assert.deepEqual(entries, [
+    { sources: ["manual", "moomoo_position"], ticker: "RXRX" },
+  ]);
+});
+
+test("MCP discovery status stays server-owned and exposes metadata only", async () => {
+  const calls: Array<[string, RequestInit]> = [];
+  const status = await loadMoomooMcpDiscoveryStatus(
+    desktopEnvironment,
+    async (url, init) => {
+      calls.push([String(url), init ?? {}]);
+      return Response.json({
+        error_code: null,
+        state: "ready",
+        tool_count: 1,
+        tools: [
+          {
+            input_schema_sha256: "a".repeat(64),
+            name: "quote_stock_quote",
+          },
+        ],
+      });
+    },
+  );
+
+  assert.deepEqual(status, {
+    errorCode: null,
+    state: "ready",
+    toolCount: 1,
+    tools: [
+      {
+        inputSchemaSha256: "a".repeat(64),
+        name: "quote_stock_quote",
+      },
+    ],
+  });
+  assert.equal(calls[0][0], "http://127.0.0.1:61555/v1/moomoo/mcp/status");
+  assert.equal(
+    (calls[0][1].headers as Record<string, string>).Authorization,
+    `Bearer ${"x".repeat(43)}`,
+  );
+});
+
+test("MCP discovery sends only operator identity to local worker", async () => {
+  const calls: Array<[string, RequestInit]> = [];
+  const status = await discoverMoomooMcpTools(
+    { operatorId: "11111111-1111-4111-8111-111111111111" },
+    desktopEnvironment,
+    async (url, init) => {
+      calls.push([String(url), init ?? {}]);
+      return Response.json({
+        error_code: null,
+        state: "ready",
+        tool_count: 0,
+        tools: [],
+      });
+    },
+  );
+
+  assert.equal(status.state, "ready");
+  assert.equal(calls[0][0], "http://127.0.0.1:61555/v1/moomoo/mcp/discover");
+  assert.deepEqual(JSON.parse(String(calls[0][1].body)), {
+    operator_id: "11111111-1111-4111-8111-111111111111",
+  });
+});
+
+test("MCP authorization starts through local worker with fixed callback only", async () => {
+  const calls: Array<[string, RequestInit]> = [];
+  const status = await beginMoomooMcpAuthorization(
+    { operatorId: "11111111-1111-4111-8111-111111111111" },
+    desktopEnvironment,
+    async (url, init) => {
+      calls.push([String(url), init ?? {}]);
+      return Response.json(
+        {
+          error_code: null,
+          state: "authorization_pending",
+          tool_count: 0,
+          tools: [],
+        },
+        { status: 202 },
+      );
+    },
+  );
+
+  assert.equal(status.state, "authorization_pending");
+  assert.deepEqual(JSON.parse(String(calls[0][1].body)), {
+    operator_id: "11111111-1111-4111-8111-111111111111",
+    redirect_uri: "http://127.0.0.1:60355/callback",
+  });
+});
+
+test("market quote evidence sends canonical identity and ticker to local worker", async () => {
+  const calls: Array<[string, RequestInit]> = [];
+  const status = await fetchMoomooMarketQuoteEvidence(
+    {
+      operatorId: "11111111-1111-4111-8111-111111111111",
+      securityId: "22222222-2222-4222-8222-222222222222",
+      ticker: "US.AAPL",
+    },
+    desktopEnvironment,
+    async (url, init) => {
+      calls.push([String(url), init ?? {}]);
+      return Response.json({
+        cached: false,
+        contract_version: "market_quote_evidence.v1",
+        error_code: null,
+        evidence: {
+          failure_reason: null,
+          freshness: "fresh",
+          is_error: false,
+          provider_reported_at: "2026-08-20T12:00:00+00:00",
+          retrieved_at: "2026-08-20T12:00:00+00:00",
+          security_id: "22222222-2222-4222-8222-222222222222",
+          source: "moomoo_mcp",
+          summary: { code: "US.AAPL" },
+          ticker: "US.AAPL",
+          tool_name: "quote_stock_quote",
+        },
+        state: "ready",
+      });
+    },
+  );
+
+  assert.equal(status.state, "ready");
+  assert.equal(status.evidence?.ticker, "US.AAPL");
+  assert.equal(calls[0][0], "http://127.0.0.1:61555/v1/research/market-evidence/quote");
+  assert.deepEqual(JSON.parse(String(calls[0][1].body)), {
+    operator_id: "11111111-1111-4111-8111-111111111111",
+    security_id: "22222222-2222-4222-8222-222222222222",
+    ticker: "US.AAPL",
+  });
+});
+
+test("market quote evidence rejects invalid identity before any request", async () => {
+  await assert.rejects(
+    fetchMoomooMarketQuoteEvidence(
+      { operatorId: "not-a-uuid", securityId: "22222222-2222-4222-8222-222222222222", ticker: "US.AAPL" },
+      desktopEnvironment,
+      async () => {
+        throw new Error("must not fetch");
+      },
+    ),
+  );
+});
+
+test("market quote evidence stays unavailable without local desktop runtime", async () => {
+  const status = await fetchMoomooMarketQuoteEvidence(
+    {
+      operatorId: "11111111-1111-4111-8111-111111111111",
+      securityId: "22222222-2222-4222-8222-222222222222",
+      ticker: "US.AAPL",
+    },
+    {},
+    async () => {
+      throw new Error("must not fetch");
+    },
+  );
+  assert.equal(status.state, "unavailable");
+});
+
+test("last market quote status loads via GET with only the security id", async () => {
+  const calls: string[] = [];
+  const status = await loadMoomooMarketQuoteStatus(
+    "22222222-2222-4222-8222-222222222222",
+    desktopEnvironment,
+    async (url) => {
+      calls.push(String(url));
+      return Response.json({
+        cached: true,
+        contract_version: "market_quote_evidence.v1",
+        error_code: null,
+        evidence: null,
+        state: "ready",
+      });
+    },
+  );
+  assert.equal(status.state, "ready");
+  assert.equal(status.cached, true);
+  assert.equal(
+    calls[0],
+    "http://127.0.0.1:61555/v1/research/market-evidence/quote?security_id=22222222-2222-4222-8222-222222222222",
+  );
+});
+
+test("stale market quote status is surfaced distinctly, not as ready", async () => {
+  const status = await loadMoomooMarketQuoteStatus(
+    "22222222-2222-4222-8222-222222222222",
+    desktopEnvironment,
+    async () =>
+      Response.json({
+        cached: true,
+        contract_version: "market_quote_evidence.v1",
+        error_code: "moomoo_market_evidence_stale",
+        evidence: null,
+        state: "stale",
+      }),
+  );
+  assert.equal(status.state, "stale");
+  assert.notEqual(status.state, "ready");
+});
+
+test("last market quote status stays unavailable for an invalid security id without a request", async () => {
+  const status = await loadMoomooMarketQuoteStatus(
+    "not-a-uuid",
+    desktopEnvironment,
+    async () => {
+      throw new Error("must not fetch");
+    },
+  );
+  assert.equal(status.state, "unavailable");
+});
+
 test("desktop status maps capability-authenticated worker response", async () => {
   const calls: Array<[string, RequestInit]> = [];
 
@@ -132,7 +362,7 @@ test("desktop status maps capability-authenticated worker response", async () =>
   assert.equal(calls[0][1].cache, "no-store");
 });
 
-test("desktop status explains rejected write scope without exposing returned scopes", async () => {
+test("desktop status retains generic detail if an older worker reports rejected write scope", async () => {
   const status = await loadMoomooDesktopStatus(
     desktopEnvironment,
     async () =>
@@ -148,7 +378,7 @@ test("desktop status explains rejected write scope without exposing returned sco
 
   assert.equal(
     status.detail,
-    "Moomoo returned write access. Turn off Select all, Watchlists, and Trade Execution; keep only required read access, then reconnect.",
+    "Moomoo connection needs a current desktop worker. Reopen preview app, then reconnect if needed.",
   );
   assert.doesNotMatch(status.detail, /trade:write/);
 });

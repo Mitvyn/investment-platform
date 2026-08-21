@@ -17,12 +17,6 @@ AUTHORIZATION_ENDPOINT = "https://webapi.moomoo.com/oauth2/authorize/confirm"
 TOKEN_ENDPOINT = "https://webapi.moomoo.com/oauth2/token"
 MAX_TOKEN_RESPONSE_BYTES = 1_048_576
 
-#: Consent must request only capabilities this app can use. ``accid:*`` is an
-#: OAuth request-time selector; the token response must still return one or more
-#: concrete ``accid:<account-id>`` grants before holdings sync is enabled.
-REQUESTED_AUTHORIZATION_SCOPES = ("quote:read", "trade:read", "accid:*")
-
-
 class MoomooOAuthError(RuntimeError):
     """Raised when a Moomoo authorization attempt violates its contract."""
 
@@ -157,18 +151,9 @@ def validate_granted_scopes(
     account_ids = tuple(
         sorted(scope.removeprefix("accid:") for scope in account_scopes)
     )
-    allowed = required | account_scopes | {"accid:*"}
     if any(not account_id for account_id in account_ids):
         raise MoomooOAuthError(
             "Moomoo OAuth granted scope mismatch:concrete_account_scope_missing"
-        )
-    if any(scope.endswith(":write") for scope in granted):
-        raise MoomooOAuthError(
-            "Moomoo OAuth granted scope mismatch:write_scope_not_permitted"
-        )
-    if not granted.issubset(allowed):
-        raise MoomooOAuthError(
-            "Moomoo OAuth granted scope mismatch:unknown_scope_not_permitted"
         )
     return MoomooGrantedScopes(
         read_scopes=tuple(sorted(granted & required)),
@@ -204,7 +189,6 @@ def build_authorization_url(
                 'code_challenge_method': attempt.code_challenge_method,
                 'redirect_uri': redirect_uri,
                 'response_type': 'code',
-                'scope': ' '.join(REQUESTED_AUTHORIZATION_SCOPES),
                 'state': attempt.state,
             }
         )

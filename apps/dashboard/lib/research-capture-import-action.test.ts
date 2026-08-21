@@ -1,0 +1,29 @@
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import test from "node:test";
+
+test("importResearchCaptureAction verifies securityId against the server-owned security directory before any import", () => {
+  const actions = readFileSync(
+    new URL("../app/research-capture-import-actions.ts", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(actions, /auth\.getClaims\(\)/);
+  assert.match(actions, /loadSecurityDirectory/);
+  assert.match(actions, /isCanonicalSecurityKnown/);
+  assert.match(actions, /security_unauthorized/);
+  assert.doesNotMatch(actions, /formData\.get\("cik"\)|formData\.get\("issuerName"\)|formData\.get\("primaryListingExchange"\)/);
+
+  const directoryCallIndex = actions.indexOf("loadSecurityDirectory(");
+  const ownershipCheckIndex = actions.indexOf("isCanonicalSecurityKnown(");
+  const importCallIndex = actions.indexOf("importResearchCapture(");
+  assert.ok(directoryCallIndex >= 0 && ownershipCheckIndex >= 0 && importCallIndex >= 0);
+  assert.ok(
+    directoryCallIndex < ownershipCheckIndex,
+    "security directory must be loaded before the ownership check",
+  );
+  assert.ok(
+    ownershipCheckIndex < importCallIndex,
+    "ownership must be verified before any capture import",
+  );
+});

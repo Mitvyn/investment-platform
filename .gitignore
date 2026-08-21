@@ -20,6 +20,8 @@ build/
 dist/
 apps/dashboard/desktop/worker/
 data/*.json
+data/security-registry.sqlite3
+data/ticker-notebook.sqlite3
 data/primary-source-captures/
 !data/.gitkeep
 
