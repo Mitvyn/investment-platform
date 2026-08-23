@@ -145,6 +145,24 @@ test("server exact-resolves selected triple and never substitutes another revisi
   );
 });
 
+test("resolving a capture for a security with no accepted captures rejects before launch", async () => {
+  const fetcher = async () =>
+    Response.json({
+      contract_version: "accepted_research_capture_list.v1",
+      capture_count: 0,
+      captures: [],
+    });
+
+  await assert.rejects(
+    resolveAcceptedResearchCapture(
+      { ...request, selectedCapture: captures[0] },
+      environment,
+      fetcher,
+    ),
+    /selected accepted capture is unavailable/,
+  );
+});
+
 test("capture select value carries one exact non-editable identity", () => {
   const selection = `${captures[0].capture_id}:${captures[0].capture_revision}:${captures[0].capture_content_hash}`;
   assert.deepEqual(parseAcceptedResearchCaptureSelection(selection), {
