@@ -67,7 +67,9 @@ class LocalResearchRunCommandStoreTests(unittest.TestCase):
 
             command = self._enqueue(store)
 
-        self.assertEqual(command.contract_version, "research_run_command_receipt.v2")
+        self.assertEqual(
+            command.contract_version, "research_run_local_command_receipt.v1"
+        )
         self.assertEqual(command.command_state, "queued")
         self.assertEqual(
             command.operator_focus_normalized,
@@ -382,7 +384,7 @@ class LocalResearchRunCommandStoreTests(unittest.TestCase):
 
         self.assertEqual(
             progress["contract_version"],
-            "research_run_command_progress.v1",
+            "research_run_local_command_progress.v1",
         )
         self.assertEqual(progress["operator_id"], OPERATOR)
         self.assertEqual(progress["command_id"], command.command_id)

@@ -1,10 +1,18 @@
 """Desktop-local durable Research Run command control plane.
 
-This mirrors the operator-owned hosted command contract
-(`research_run_command_receipt.v2`) and its claim, lease, checkpoint, and
-bounded-failure semantics without any hosted call. It exists so one already
-accepted capture-bound command can be executed and audited locally while the
-hosted runtime migrations remain unapplied.
+This mirrors the operator-owned hosted command contract's claim, lease,
+checkpoint, and bounded-failure semantics without any hosted call, under its
+own distinct local contract versions (`research_run_local_command_receipt.v1`,
+`research_run_local_command_progress.v1`). It is NOT wire-compatible with the
+hosted `research_run_command_receipt.v2` receipt or the dashboard's
+`research_run_command_progress.v1` contract: the local receipt is keyed
+`command_state` (not `state`) and always carries `research_run_id`/
+`started_at`, and local progress may retain checkpoints/attempt fields while
+`command_state` is `blocked`, which the dashboard parser rejects. It exists so
+one already accepted capture-bound command can be executed and audited
+locally while the hosted runtime migrations remain unapplied. Any dashboard
+consumption of this local state needs a separate, explicitly local-aware
+projection, not a direct decode against the hosted/dashboard contracts.
 
 Nothing here stores secrets, provider payloads, archive paths, or evidence
 content. Lease tokens stay inside claims and never reach a receipt or progress
@@ -38,8 +46,8 @@ from .storage import STAGES, SUPPORTED_WORKFLOW_IDENTITIES
 from .worker import CommitteeCommandClaim
 
 
-COMMAND_CONTRACT_VERSION = "research_run_command_receipt.v2"
-PROGRESS_CONTRACT_VERSION = "research_run_command_progress.v1"
+COMMAND_CONTRACT_VERSION = "research_run_local_command_receipt.v1"
+PROGRESS_CONTRACT_VERSION = "research_run_local_command_progress.v1"
 COMMAND_RECORD_TYPE = "research-run-command-v2"
 MAXIMUM_ATTEMPTS = 2
 LEASE_SECONDS = 300
@@ -67,6 +75,27 @@ _WORKFLOW_CONFIG_VERSIONS = frozenset(
 
 class LocalCommandStoreError(ValueError):
     """Raised when durable local command state violates its contract."""
+
+
+def _record_content_hash(record: Mapping[str, Any]) -> str:
+    payload = {key: value for key, value in record.items() if key != "content_sha256"}
+    return hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+
+
+def _validate_command_record_shape(record: Mapping[str, Any]) -> None:
+    attempts = record.get("attempts")
+    checkpoints = record.get("checkpoints")
+    if not isinstance(attempts, list) or not all(
+        isinstance(attempt, dict) for attempt in attempts
+    ):
+        raise LocalCommandStoreError("local command record is invalid")
+    if not isinstance(checkpoints, list) or not all(
+        isinstance(checkpoint, dict) and isinstance(checkpoint.get("stage"), str)
+        for checkpoint in checkpoints
+    ):
+        raise LocalCommandStoreError("local command record is invalid")
 
 
 @dataclass(frozen=True, slots=True)
@@ -196,6 +225,10 @@ class FileResearchRunCommandStore:
         self._clock = clock
         self._root = root
         self._operator_root = root / self._operator_id
+        if self._operator_root.is_symlink():
+            raise LocalCommandStoreError(
+                "command operator directory must not be a symlink"
+            )
         self._operator_root.mkdir(parents=True, exist_ok=True, mode=0o700)
         os.chmod(root, 0o700)
         os.chmod(self._operator_root, 0o700)
@@ -517,7 +550,7 @@ class FileResearchRunCommandStore:
 
     def _read(self, command_id: str) -> dict[str, Any] | None:
         path = self._command_path(command_id)
-        if path.is_symlink() or not path.is_file():
+        if self._operator_root.is_symlink() or path.is_symlink() or not path.is_file():
             return None
         try:
             record = json.loads(path.read_text())
@@ -530,6 +563,10 @@ class FileResearchRunCommandStore:
             or record.get("operator_id") != self._operator_id
         ):
             raise LocalCommandStoreError("local command record is invalid")
+        content_sha256 = record.pop("content_sha256", None)
+        if content_sha256 != _record_content_hash(record):
+            raise LocalCommandStoreError("local command record is invalid")
+        _validate_command_record_shape(record)
         return record
 
     def _require(self, command_id: str) -> dict[str, Any]:
@@ -540,7 +577,9 @@ class FileResearchRunCommandStore:
 
     def _write(self, record: Mapping[str, Any]) -> None:
         path = self._command_path(str(record["command_id"]))
-        body = json.dumps(record, sort_keys=True, separators=(",", ":")).encode()
+        stamped = dict(record)
+        stamped["content_sha256"] = _record_content_hash(stamped)
+        body = json.dumps(stamped, sort_keys=True, separators=(",", ":")).encode()
         with NamedTemporaryFile(dir=path.parent, delete=False) as temporary:
             temporary.write(body)
             temporary.flush()

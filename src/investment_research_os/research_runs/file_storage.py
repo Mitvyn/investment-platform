@@ -192,6 +192,10 @@ class FileResearchRunRepository:
             "research_run": payload,
         }
         path = self._run_path(run.operator_id, run.id)
+        if path.parent.is_symlink():
+            raise LocalResearchRunStorageError(
+                "research run operator directory must not be a symlink"
+            )
         path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         os.chmod(path.parent, 0o700)
         body = json.dumps(record, sort_keys=True, separators=(",", ":")).encode()
@@ -217,7 +221,7 @@ class FileResearchRunRepository:
 
     def get(self, operator_id: str, run_id: str) -> ResearchRun | None:
         path = self._run_path(operator_id, run_id)
-        if path.is_symlink() or not path.is_file():
+        if path.parent.is_symlink() or path.is_symlink() or not path.is_file():
             return None
         try:
             record = json.loads(path.read_text())
