@@ -10,6 +10,7 @@ import {
   disconnectMoomooAll,
   disconnectMoomooMcp,
   beginMoomooMcpAuthorization,
+  MoomooMcpCommandError,
   discoverMoomooMcpTools,
   fetchMoomooMarketQuoteEvidence,
   refreshMoomooDesktopHoldings,
@@ -114,8 +115,12 @@ export async function authorizeMoomooMcp(formData: FormData) {
       path: "/",
       sameSite: "strict",
     });
-  } catch {
-    redirect(`/?mcp_error=authorization_failed${suffix}`);
+  } catch (error) {
+    const errorCode =
+      error instanceof MoomooMcpCommandError
+        ? error.code
+        : "authorization_failed";
+    redirect(`/?mcp_error=${encodeURIComponent(errorCode)}${suffix}`);
   }
   redirect(`/?mcp=authorizing${suffix}`);
 }
@@ -172,20 +177,11 @@ export async function disconnectMoomooAllAction(formData: FormData) {
   try {
     await disconnectMoomooAll({ operatorId });
     const cookieStore = await cookies();
-    cookieStore.set(MOOMOO_AUTO_RESUME_COOKIE, "disabled", {
-      httpOnly: true,
-      maxAge: 60 * 60 * 24 * 365,
-      path: "/",
-      sameSite: "strict",
-    });
-    cookieStore.set(MOOMOO_MCP_AUTO_RESUME_COOKIE, "disabled", {
-      httpOnly: true,
-      maxAge: 60 * 60 * 24 * 365,
-      path: "/",
-      sameSite: "strict",
-    });
+    cookieStore.delete(MOOMOO_AUTO_RESUME_COOKIE);
+    cookieStore.delete(MOOMOO_MCP_AUTO_RESUME_COOKIE);
+    cookieStore.delete(MOOMOO_CLIENT_IDS_COOKIE);
   } catch {
-    redirect(`/?moomoo_error=disconnect_all_failed${suffix}`);
+    redirect(`/?moomoo_error=clear_all_failed${suffix}`);
   }
   redirect(`/?moomoo=disconnected&mcp=disconnected${suffix}`);
 }

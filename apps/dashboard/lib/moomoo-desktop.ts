@@ -8,6 +8,8 @@ type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
 
 export const MOOMOO_DESKTOP_CALLBACK_URL =
   "http://127.0.0.1:60355/callback";
+export const MOOMOO_MCP_CALLBACK_URL =
+  "http://localhost:60355/callback";
 
 type WorkerStatus = {
   account_count: number;
@@ -62,6 +64,28 @@ export type MoomooMcpDiscoveryStatus = {
     name: string;
   }>;
 };
+
+const REVIEWED_MCP_COMMAND_ERROR_CODES = new Set([
+  "authorization_metadata_invalid",
+  "authorization_metadata_unavailable",
+  "client_registration_invalid",
+  "client_registration_unavailable",
+  "keychain_write_failed",
+  "moomoo_mcp_authorization_already_pending",
+  "moomoo_mcp_authorization_request_invalid",
+  "moomoo_mcp_authorization_unavailable",
+  "moomoo_system_browser_unavailable",
+]);
+
+export class MoomooMcpCommandError extends Error {
+  readonly code: string;
+
+  constructor(code: string) {
+    super(code);
+    this.code = code;
+    this.name = "MoomooMcpCommandError";
+  }
+}
 
 type WorkerMarketQuoteEvidence = {
   failure_reason: string | null;
@@ -751,8 +775,20 @@ async function readMcpDiscoveryResponse(
   response: Response,
 ): Promise<MoomooMcpDiscoveryStatus> {
   const payload: unknown = await response.json();
-  if (!response.ok || !isWorkerMcpDiscoveryStatus(payload)) {
-    throw new Error("Desktop Moomoo MCP worker returned an invalid response");
+  if (!response.ok) {
+    const candidate =
+      payload && typeof payload === "object" &&
+      typeof (payload as { error?: unknown }).error === "string"
+        ? (payload as { error: string }).error
+        : "";
+    throw new MoomooMcpCommandError(
+      REVIEWED_MCP_COMMAND_ERROR_CODES.has(candidate)
+        ? candidate
+        : "authorization_failed",
+    );
+  }
+  if (!isWorkerMcpDiscoveryStatus(payload)) {
+    throw new MoomooMcpCommandError("authorization_failed");
   }
   return presentMcpDiscoveryStatus(payload);
 }
@@ -848,7 +884,7 @@ export async function beginMoomooMcpAuthorization(
     await fetcher(`${contract.origin}/v1/moomoo/mcp/connect`, {
       body: JSON.stringify({
         operator_id: input.operatorId,
-        redirect_uri: MOOMOO_DESKTOP_CALLBACK_URL,
+        redirect_uri: MOOMOO_MCP_CALLBACK_URL,
       }),
       cache: "no-store",
       headers: {

@@ -97,6 +97,9 @@ class MoomooDiagnosticsLog:
             return ()
         return entries[-limit:]
 
+    def clear(self) -> None:
+        self._entries.clear()
+
 
 __all__ = [
     "MAX_DIAGNOSTIC_ENTRIES",

@@ -19,14 +19,13 @@ from workers.moomoo_mcp.oauth import (
     register_mcp_client,
 )
 
-# The only host this offline implementation trusts is the MCP resource host
-# itself (no primary source confirms a distinct authorization-server host).
 ISSUER = "https://mcp.moomoo.com"
-AUTHZ_ENDPOINT = "https://mcp.moomoo.com/authorize"
-TOKEN_ENDPOINT = "https://mcp.moomoo.com/token"
-REGISTRATION_ENDPOINT = "https://mcp.moomoo.com/register"
+AUTHZ_ENDPOINT = "https://webapi.moomoo.com/oauth2/authorize/confirm"
+TOKEN_ENDPOINT = "https://webapi.moomoo.com/oauth2/token"
+REGISTRATION_ENDPOINT = "https://webapi.moomoo.com/oauth2/register"
 CLIENT_ID = "dynamic-client-1"
 REDIRECT_URI = "http://127.0.0.1:60355/callback"
+DOCUMENTED_REDIRECT_URI = "http://localhost:60355/callback"
 SIBLING_HOST_ISSUER = "https://auth.moomoo.com"
 
 
@@ -142,6 +141,16 @@ class ProtectedResourceMetadataTests(unittest.TestCase):
         )
         self.assertEqual(fetch_protected_resource_metadata(transport), (ISSUER,))
 
+    def test_live_metadata_resource_binding_uses_advertised_oauth_resource(self) -> None:
+        transport = FakeTransport(
+            probe_status=401,
+            resource_metadata={
+                "resource": "https://mcp.moomoo.com",
+                "authorization_servers": [ISSUER],
+            },
+        )
+        self.assertEqual(fetch_protected_resource_metadata(transport), (ISSUER,))
+
     def test_unexpected_sibling_host_authorization_server_is_rejected(self) -> None:
         transport = FakeTransport(
             probe_status=401,
@@ -233,11 +242,30 @@ class AuthorizationServerMetadataTests(unittest.TestCase):
             )
         self.assertEqual(context.exception.code, "authorization_metadata_invalid")
 
+    def test_oauth_endpoint_host_cannot_be_used_as_issuer(self) -> None:
+        with self.assertRaises(MoomooMcpOAuthError) as context:
+            fetch_authorization_server_metadata(
+                FakeTransport(as_metadata={}), issuer="https://webapi.moomoo.com"
+            )
+        self.assertEqual(context.exception.code, "authorization_metadata_invalid")
+
     def test_http_endpoint_is_rejected(self) -> None:
         transport = FakeTransport(
             as_metadata={
                 "issuer": ISSUER,
                 "authorization_endpoint": "http://mcp.moomoo.com/authorize",
+                "token_endpoint": TOKEN_ENDPOINT,
+            }
+        )
+        with self.assertRaises(MoomooMcpOAuthError) as context:
+            fetch_authorization_server_metadata(transport, issuer=ISSUER)
+        self.assertEqual(context.exception.code, "authorization_metadata_invalid")
+
+    def test_mcp_resource_host_cannot_be_used_as_oauth_endpoint(self) -> None:
+        transport = FakeTransport(
+            as_metadata={
+                "issuer": ISSUER,
+                "authorization_endpoint": "https://mcp.moomoo.com/authorize",
                 "token_endpoint": TOKEN_ENDPOINT,
             }
         )
@@ -310,6 +338,24 @@ class DynamicClientRegistrationTests(unittest.TestCase):
         )
         self.assertNotIn("client_secret", transport.posted_json[0])
         self.assertEqual(transport.posted_json[0]["token_endpoint_auth_method"], "none")
+
+    def test_registration_matches_documented_moomoo_public_client_shape(self) -> None:
+        transport = FakeTransport(registration_response={"client_id": "new-client-id"})
+        register_mcp_client(
+            transport,
+            authorization_server=self._server(),
+            redirect_uri=DOCUMENTED_REDIRECT_URI,
+        )
+        self.assertEqual(
+            transport.posted_json[0],
+            {
+                "client_name": "Investment Research OS",
+                "redirect_uris": [DOCUMENTED_REDIRECT_URI],
+                "token_endpoint_auth_method": "none",
+                "grant_types": ["authorization_code", "refresh_token"],
+                "response_types": ["code"],
+            },
+        )
 
     def test_missing_registration_endpoint_fails_closed(self) -> None:
         transport = FakeTransport(registration_response={"client_id": "x"})
@@ -387,7 +433,7 @@ class AuthorizationUrlTests(unittest.TestCase):
             redirect_uri=REDIRECT_URI,
             attempt=attempt,
         )
-        self.assertIn("resource=https%3A%2F%2Fmcp.moomoo.com%2Fmcp", url)
+        self.assertIn("resource=https%3A%2F%2Fmcp.moomoo.com", url)
         self.assertIn("code_challenge_method=S256", url)
 
     def test_non_loopback_redirect_is_rejected(self) -> None:

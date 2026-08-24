@@ -89,3 +89,12 @@ class MoomooMcpTokenKeychain:
             service=MCP_KEYCHAIN_SERVICE_V2,
             account=self.account,
         )
+
+    def clear_all_local_tokens(self) -> None:
+        """Explicit full-clear path for bound and pre-v2 local credentials."""
+
+        self.delete_refresh_token()
+        self.backend.delete(
+            service=MCP_KEYCHAIN_SERVICE,
+            account=self._legacy_account,
+        )

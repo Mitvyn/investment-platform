@@ -261,6 +261,31 @@ function SourceHealth({
   );
 }
 
+function mcpErrorMessage(code: string): string {
+  const messages: Record<string, string> = {
+    authorization_metadata_invalid:
+      "Moomoo returned invalid OAuth metadata. Connection stopped safely.",
+    authorization_metadata_unavailable:
+      "Could not reach Moomoo OAuth metadata. Check internet access, then retry.",
+    client_registration_invalid:
+      "Moomoo rejected this app's public OAuth registration response.",
+    client_registration_unavailable:
+      "Moomoo OAuth client registration is unavailable. Retry later.",
+    keychain_write_failed:
+      "macOS Keychain could not update Moomoo authorization.",
+    moomoo_mcp_authorization_already_pending:
+      "Moomoo authorization is already open in the system browser.",
+    moomoo_mcp_authorization_unavailable:
+      "Local Moomoo authorization service is unavailable.",
+    moomoo_system_browser_unavailable:
+      "System browser could not open Moomoo authorization.",
+  };
+  return (
+    messages[code] ??
+    "Moomoo connection failed. Retry or clear local Moomoo access."
+  );
+}
+
 export default async function TickerWorkspace({
   searchParams,
 }: {
@@ -1491,7 +1516,7 @@ export default async function TickerWorkspace({
               ) : null}
               {params.mcp_error ? (
                 <p className="mt-3 text-sm text-challenge">
-                  Moomoo MCP connection action failed. Check connection, then retry.
+                  {mcpErrorMessage(params.mcp_error)}
                 </p>
               ) : null}
               {params.mcp === "discovered" ? (
@@ -1659,15 +1684,21 @@ export default async function TickerWorkspace({
                 authorization at Moomoo.
               </div>
               <div className="mt-4 flex justify-end">
-                <form action={disconnectMoomooAllAction}>
+                <form action={disconnectMoomooAllAction} className="text-right">
                   <input name="view" type="hidden" value="settings" />
                   <input
                     name="securityId"
                     type="hidden"
                     value={selectedSecurity?.securityId ?? ""}
                   />
+                  <p className="mb-2 max-w-xl text-xs text-muted-foreground">
+                    Removes local tokens, client identity, reconnect preferences,
+                    cached connection state, and diagnostics. This keeps research
+                    tickers, notes, and portfolio snapshots. It does not revoke
+                    access at Moomoo.
+                  </p>
                   <Button size="sm" type="submit" variant="ghost">
-                    Disconnect all local Moomoo access
+                    Clear all local Moomoo access
                   </Button>
                 </form>
               </div>

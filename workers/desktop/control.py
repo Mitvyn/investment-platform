@@ -867,12 +867,32 @@ class MoomooConnectionService:
             )
         attempt = create_mcp_pkce_attempt()
         try:
+            self._record_diagnostic(
+                subsystem="core_mcp",
+                stage="metadata_discovery_started",
+                reason_code="started",
+            )
             issuers = fetch_protected_resource_metadata(self._mcp_oauth_transport)
             authorization_server = fetch_authorization_server_metadata(
                 self._mcp_oauth_transport, issuer=issuers[0]
             )
+            self._record_diagnostic(
+                subsystem="core_mcp",
+                stage="metadata_discovery_ready",
+                reason_code="ready",
+            )
+            self._record_diagnostic(
+                subsystem="core_mcp",
+                stage="client_identity_resolution_started",
+                reason_code="started",
+            )
             client_id = self._resolve_mcp_client_id(
                 redirect_uri=redirect_uri, authorization_server=authorization_server
+            )
+            self._record_diagnostic(
+                subsystem="core_mcp",
+                stage="client_identity_resolution_ready",
+                reason_code="ready",
             )
             authorization_url = build_mcp_authorization_url(
                 authorization_endpoint=authorization_server.authorization_endpoint,
@@ -896,6 +916,11 @@ class MoomooConnectionService:
                 "moomoo_mcp_authorization_request_invalid"
             ) from error
         try:
+            self._record_diagnostic(
+                subsystem="core_mcp",
+                stage="browser_authorization_started",
+                reason_code="started",
+            )
             browser_opened = self._browser_opener(authorization_url)
         except OSError:
             browser_opened = False
@@ -903,6 +928,11 @@ class MoomooConnectionService:
             callback_server.server_close()
             self._set_mcp_failed("moomoo_system_browser_unavailable")
             raise DesktopControlError("moomoo_system_browser_unavailable")
+        self._record_diagnostic(
+            subsystem="core_mcp",
+            stage="browser_authorization_ready",
+            reason_code="ready",
+        )
         thread = threading.Thread(
             target=self._complete_mcp_connection,
             args=(
@@ -928,6 +958,11 @@ class MoomooConnectionService:
         """
 
         if self._mcp_oauth_client_id is not None:
+            self._record_diagnostic(
+                subsystem="core_mcp",
+                stage="client_identity_override_reused",
+                reason_code="ready",
+            )
             return self._mcp_oauth_client_id
         if self._mcp_client_identity_store is not None:
             return self._mcp_client_identity_store.load_any(resource=MOOMOO_MCP_RESOURCE)
@@ -957,7 +992,17 @@ class MoomooConnectionService:
                 resource=MOOMOO_MCP_RESOURCE, redirect_uri=redirect_uri
             )
             if existing is not None:
+                self._record_diagnostic(
+                    subsystem="core_mcp",
+                    stage="client_identity_persisted_reused",
+                    reason_code="ready",
+                )
                 return existing
+        self._record_diagnostic(
+            subsystem="core_mcp",
+            stage="client_registration_started",
+            reason_code="started",
+        )
         registration = register_mcp_client(
             self._mcp_oauth_transport,
             authorization_server=authorization_server,
@@ -971,6 +1016,11 @@ class MoomooConnectionService:
                     redirect_uri=redirect_uri,
                 )
             )
+        self._record_diagnostic(
+            subsystem="core_mcp",
+            stage="client_registration_ready",
+            reason_code="ready",
+        )
         return registration.client_id
 
     def _complete_mcp_connection(
@@ -997,6 +1047,11 @@ class MoomooConnectionService:
             self._set_mcp_failed("callback_state_invalid")
             return
         try:
+            self._record_diagnostic(
+                subsystem="core_mcp",
+                stage="token_exchange_started",
+                reason_code="started",
+            )
             tokens = exchange_mcp_authorization_code(
                 token_endpoint=authorization_server.token_endpoint,
                 client_id=client_id,
@@ -1008,6 +1063,11 @@ class MoomooConnectionService:
             )
             self._mcp_keychain_factory(operator_id, client_id).store_refresh_token(
                 tokens.refresh_token
+            )
+            self._record_diagnostic(
+                subsystem="core_mcp",
+                stage="token_exchange_ready",
+                reason_code="ready",
             )
         except MoomooMcpOAuthError as error:
             self._set_mcp_failed(error.code)
@@ -1027,6 +1087,11 @@ class MoomooConnectionService:
             self._mcp_access_token = tokens.access_token
         self._set_mcp_status(
             MoomooMcpDiscoveryStatus(state="discovering", tool_count=0)
+        )
+        self._record_diagnostic(
+            subsystem="core_mcp",
+            stage="tool_discovery_started",
+            reason_code="started",
         )
         self._run_mcp_discovery(operator_id=operator_id)
 
@@ -1163,10 +1228,30 @@ class MoomooConnectionService:
         return self.mcp_discovery_status()
 
     def disconnect_all(self, *, operator_id: str) -> None:
-        """Explicitly clear both the core MCP and optional OpenAPI connections."""
+        """Clear all local Moomoo authorization and connection metadata.
 
+        Security registry, research notebook, and portfolio snapshot stores are
+        separate repositories and are deliberately outside this operation.
+        """
+
+        try:
+            normalized_operator_id = str(uuid.UUID(operator_id))
+        except ValueError as error:
+            raise DesktopControlError("moomoo_operator_id_invalid") from error
+        client_id = self._current_mcp_client_id()
         self.disconnect_mcp(operator_id=operator_id)
         self.disconnect(operator_id=operator_id)
+        try:
+            if self._mcp_keychain_factory is not None and client_id is not None:
+                self._mcp_keychain_factory(
+                    normalized_operator_id, client_id
+                ).clear_all_local_tokens()
+            if self._mcp_client_identity_store is not None:
+                self._mcp_client_identity_store.clear()
+        except (MoomooKeychainError, OSError, RuntimeError, ValueError) as error:
+            raise DesktopControlError("moomoo_clear_all_failed") from error
+        if self._diagnostics_log is not None:
+            self._diagnostics_log.clear()
 
     def compose_holdings(
         self,

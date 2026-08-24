@@ -112,6 +112,22 @@ class MoomooMcpTokenKeychainTests(unittest.TestCase):
             "legacy-refresh-secret",
         )
 
+    def test_clear_all_local_tokens_removes_bound_and_legacy_entries(self) -> None:
+        backend = FakeBackend()
+        backend.store(
+            service=MCP_KEYCHAIN_SERVICE,
+            account=f"{OPERATOR_ID}:refresh_token",
+            secret="legacy-refresh-secret",
+        )
+        keychain = MoomooMcpTokenKeychain(
+            operator_id=OPERATOR_ID, client_id=CLIENT_A, backend=backend
+        )
+        keychain.store_refresh_token("bound-refresh-secret")
+
+        keychain.clear_all_local_tokens()
+
+        self.assertEqual(backend.items, {})
+
 
 if __name__ == "__main__":
     unittest.main()

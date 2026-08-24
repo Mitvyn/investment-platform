@@ -86,9 +86,9 @@ class FakeMcpOAuthTransport:
             }
         return {
             "issuer": "https://mcp.moomoo.com",
-            "authorization_endpoint": "https://mcp.moomoo.com/authorize",
-            "token_endpoint": "https://mcp.moomoo.com/token",
-            "registration_endpoint": "https://mcp.moomoo.com/register",
+            "authorization_endpoint": "https://webapi.moomoo.com/oauth2/authorize/confirm",
+            "token_endpoint": "https://webapi.moomoo.com/oauth2/token",
+            "registration_endpoint": "https://webapi.moomoo.com/oauth2/register",
             "code_challenge_methods_supported": ["S256"],
         }
 
@@ -135,6 +135,8 @@ def _service(
     mcp_client_factory=None,
     mcp_oauth_transport=None,
     oauth_transport=None,
+    identity_store=None,
+    diagnostics_log=None,
 ) -> MoomooConnectionService:
     backend = backend if backend is not None else KeychainBackend()
     return MoomooConnectionService(
@@ -148,6 +150,8 @@ def _service(
         ),
         mcp_oauth_client_id=MCP_CLIENT_ID,
         mcp_oauth_transport=mcp_oauth_transport or FakeMcpOAuthTransport(),
+        mcp_client_identity_store=identity_store,
+        diagnostics_log=diagnostics_log,
     )
 
 
@@ -238,8 +242,11 @@ class DesktopMoomooMcpDecoupledConnectionTests(unittest.TestCase):
     require, wait on, or be broken by OpenAPI/WebSocket streaming state."""
 
     def test_mcp_authorization_succeeds_with_no_openapi_connection_at_all(self) -> None:
+        from workers.moomoo_mcp.diagnostics import MoomooDiagnosticsLog
+
         opened_urls: list[str] = []
         backend = KeychainBackend()
+        diagnostics = MoomooDiagnosticsLog()
         service = MoomooConnectionService(
             keychain_factory=lambda operator_id: MoomooTokenKeychain(
                 operator_id=operator_id, backend=backend
@@ -252,6 +259,7 @@ class DesktopMoomooMcpDecoupledConnectionTests(unittest.TestCase):
             mcp_oauth_client_id=MCP_CLIENT_ID,
             mcp_oauth_transport=FakeMcpOAuthTransport(),
             browser_opener=lambda url: opened_urls.append(url) or True,
+            diagnostics_log=diagnostics,
         )
         # No resume_connection()/start_connection() call anywhere: OpenAPI
         # is never touched, self._operator_id/_client_id stay None.
@@ -262,7 +270,7 @@ class DesktopMoomooMcpDecoupledConnectionTests(unittest.TestCase):
         )
         self.assertEqual(status.state, "authorizing")
         self.assertEqual(len(opened_urls), 1)
-        self.assertIn("resource=https%3A%2F%2Fmcp.moomoo.com%2Fmcp", opened_urls[0])
+        self.assertIn("resource=https%3A%2F%2Fmcp.moomoo.com", opened_urls[0])
         state = parse_qs(urlsplit(opened_urls[0]).query)["state"][0]
         callback_port = int(urlsplit(redirect_uri).port or 0)
         callback = HTTPConnection("127.0.0.1", callback_port, timeout=2)
@@ -288,6 +296,25 @@ class DesktopMoomooMcpDecoupledConnectionTests(unittest.TestCase):
                 ],
             },
         )
+        lifecycle_stages = [entry["stage"] for entry in service.recent_diagnostics()]
+        expected_stages = [
+            "metadata_discovery_started",
+            "metadata_discovery_ready",
+            "client_identity_resolution_started",
+            "client_identity_resolution_ready",
+            "browser_authorization_started",
+            "browser_authorization_ready",
+            "token_exchange_started",
+            "token_exchange_ready",
+            "tool_discovery_started",
+            "ready",
+        ]
+        positions = [lifecycle_stages.index(stage) for stage in expected_stages]
+        self.assertEqual(positions, sorted(positions))
+        serialized = json.dumps(service.recent_diagnostics())
+        self.assertNotIn(MCP_CLIENT_ID, serialized)
+        self.assertNotIn("mcp-code", serialized)
+        self.assertNotIn("mcp-access-secret", serialized)
 
     def test_mcp_resumes_when_openapi_credential_is_entirely_missing(self) -> None:
         backend = KeychainBackend()
@@ -463,6 +490,15 @@ class DesktopMoomooDisconnectSemanticsTests(unittest.TestCase):
         )
 
     def test_disconnect_all_clears_both_only_through_one_explicit_action(self) -> None:
+        import tempfile
+        from pathlib import Path
+
+        from workers.moomoo_mcp.client_identity import (
+            MoomooMcpClientIdentity,
+            MoomooMcpClientIdentityStore,
+        )
+        from workers.moomoo_mcp.diagnostics import MoomooDiagnosticsLog
+
         backend = KeychainBackend()
         MoomooTokenKeychain(operator_id=OPERATOR_ID, backend=backend).store_refresh_token(
             "openapi-refresh-secret"
@@ -470,14 +506,35 @@ class DesktopMoomooDisconnectSemanticsTests(unittest.TestCase):
         MoomooMcpTokenKeychain(
             operator_id=OPERATOR_ID, client_id=MCP_CLIENT_ID, backend=backend
         ).store_refresh_token("mcp-refresh-secret")
-        service = _service(backend=backend)
-        service.resume_connection(client_id=CLIENT_ID, operator_id=OPERATOR_ID)
-        service.resume_mcp_connection(operator_id=OPERATOR_ID)
+        with tempfile.TemporaryDirectory() as directory:
+            identity_path = Path(directory) / "mcp-client.json"
+            identity_store = MoomooMcpClientIdentityStore(identity_path)
+            identity_store.save(
+                MoomooMcpClientIdentity(
+                    MCP_CLIENT_ID,
+                    MOOMOO_MCP_RESOURCE,
+                    "http://127.0.0.1:60355/callback",
+                )
+            )
+            diagnostics = MoomooDiagnosticsLog()
+            diagnostics.record(
+                subsystem="core_mcp", stage="resume", reason_code="ok"
+            )
+            service = _service(
+                backend=backend,
+                identity_store=identity_store,
+                diagnostics_log=diagnostics,
+            )
+            service.resume_connection(client_id=CLIENT_ID, operator_id=OPERATOR_ID)
+            service.resume_mcp_connection(operator_id=OPERATOR_ID)
 
-        service.disconnect_all(operator_id=OPERATOR_ID)
+            service.disconnect_all(operator_id=OPERATOR_ID)
 
-        self.assertEqual(service.mcp_discovery_status().state, "disconnected")
-        self.assertEqual(service.status().state, "disconnected")
+            self.assertEqual(service.mcp_discovery_status().state, "disconnected")
+            self.assertEqual(service.status().state, "disconnected")
+            self.assertFalse(identity_path.exists())
+            self.assertEqual(service.recent_diagnostics(), [])
+            self.assertEqual(backend.items, {})
 
     def test_intentional_mcp_disconnect_disables_automatic_resume_until_reconnect(
         self,

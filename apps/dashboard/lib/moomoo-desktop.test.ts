@@ -23,6 +23,7 @@ import {
   disconnectMoomooMcp,
   disconnectMoomooAll,
   loadMoomooDiagnostics,
+  MoomooMcpCommandError,
 } from "./moomoo-desktop.ts";
 
 test("connection failure detail overrides an older persisted mirror summary", () => {
@@ -206,7 +207,7 @@ test("MCP authorization starts through local worker with fixed callback only", a
   assert.equal(status.state, "authorizing");
   assert.deepEqual(JSON.parse(String(calls[0][1].body)), {
     operator_id: "11111111-1111-4111-8111-111111111111",
-    redirect_uri: "http://127.0.0.1:60355/callback",
+    redirect_uri: "http://localhost:60355/callback",
   });
 });
 
@@ -253,6 +254,40 @@ test("MCP disconnect clears only the core MCP connection", async () => {
   );
   assert.equal(status.state, "disconnected");
   assert.equal(new URL(calls[0][0]).pathname, "/v1/moomoo/mcp/disconnect");
+});
+
+test("MCP authorization preserves a reviewed worker reason code", async () => {
+  await assert.rejects(
+    beginMoomooMcpAuthorization(
+      { operatorId: "11111111-1111-4111-8111-111111111111" },
+      desktopEnvironment,
+      async () =>
+        Response.json(
+          { error: "authorization_metadata_invalid" },
+          { status: 400 },
+        ),
+    ),
+    (error: unknown) =>
+      error instanceof MoomooMcpCommandError &&
+      error.code === "authorization_metadata_invalid",
+  );
+});
+
+test("MCP authorization hides unreviewed worker error text", async () => {
+  await assert.rejects(
+    beginMoomooMcpAuthorization(
+      { operatorId: "11111111-1111-4111-8111-111111111111" },
+      desktopEnvironment,
+      async () =>
+        Response.json(
+          { error: "provider said token=secret" },
+          { status: 400 },
+        ),
+    ),
+    (error: unknown) =>
+      error instanceof MoomooMcpCommandError &&
+      error.code === "authorization_failed",
+  );
 });
 
 test("disconnect-all posts an explicit combined action", async () => {

@@ -88,6 +88,23 @@ class MoomooMcpClientIdentityStoreTests(unittest.TestCase):
             )
             self.assertNotIn("secret", path.read_text().lower())
 
+    def test_clear_removes_only_identity_file(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "identity.json"
+            sibling = Path(directory) / "portfolio.sqlite3"
+            store = MoomooMcpClientIdentityStore(path)
+            store.save(
+                MoomooMcpClientIdentity(
+                    "registered-client", RESOURCE, REDIRECT_URI
+                )
+            )
+            sibling.write_text("retained")
+
+            store.clear()
+
+            self.assertFalse(path.exists())
+            self.assertEqual(sibling.read_text(), "retained")
+
 
 if __name__ == "__main__":
     unittest.main()

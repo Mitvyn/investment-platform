@@ -112,5 +112,13 @@ class MoomooMcpClientIdentityStore:
         tmp_path.write_text(payload, encoding="utf-8")
         tmp_path.replace(self._path)
 
+    def clear(self) -> None:
+        """Remove this app's persisted public MCP client identity only."""
+
+        try:
+            self._path.unlink()
+        except FileNotFoundError:
+            return
+
 
 __all__ = ["MoomooMcpClientIdentity", "MoomooMcpClientIdentityStore"]

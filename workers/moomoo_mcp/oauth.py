@@ -21,13 +21,10 @@ specification (2025-06-18) relevant to this desktop-local public client:
   returned public `client_id` is meant to be persisted by callers, never a
   `client_secret` (this is a public, loopback-redirect desktop client).
 
-Metadata hosts are restricted to an exact allowlist rather than a broad
-`*.moomoo.com` suffix: no primary source available to this implementation
-documents a distinct authorization-server host, so the only host trusted is
-the MCP resource host itself (`mcp.moomoo.com`). A future pass may widen this
-allowlist once a specific sibling host is confirmed against real Moomoo
-metadata; until then an authorization server on any other host, including a
-plausible-looking Moomoo sibling, fails closed as `authorization_metadata_invalid`.
+Hosts are role-bound to exact live Moomoo metadata verified on 2026-08-21:
+the protected resource and issuer use `mcp.moomoo.com`, while authorization,
+registration, and token endpoints use `webapi.moomoo.com`. No wildcard sibling
+host is trusted.
 
 Only PKCE math (`create_pkce_attempt`/`PkceAuthorizationAttempt`) is reused
 from `workers.portfolio.oauth`; it is generic RFC 7636 code-verifier/
@@ -50,7 +47,8 @@ from workers.portfolio.oauth import (
     create_pkce_attempt,
 )
 
-MOOMOO_MCP_RESOURCE = "https://mcp.moomoo.com/mcp"
+MOOMOO_MCP_RESOURCE = "https://mcp.moomoo.com"
+MOOMOO_MCP_ENDPOINT = "https://mcp.moomoo.com/mcp"
 PROTECTED_RESOURCE_METADATA_WELL_KNOWN_URL = (
     "https://mcp.moomoo.com/.well-known/oauth-protected-resource"
 )
@@ -62,11 +60,9 @@ MAX_TOKEN_RESPONSE_BYTES = 1_048_576
 MAX_SCOPE_LENGTH = 2_048
 MAX_WWW_AUTHENTICATE_HEADER_LENGTH = 4_096
 
-# No primary source available to this implementation documents a distinct
-# authorization-server host for Moomoo's MCP server (see module docstring).
-# Fail closed on anything other than the MCP resource host itself rather
-# than trusting a broad `*.moomoo.com` suffix or an arbitrary metadata claim.
-_ALLOWED_HOSTS = frozenset({"mcp.moomoo.com"})
+_RESOURCE_AND_ISSUER_HOSTS = frozenset({"mcp.moomoo.com"})
+_OAUTH_ENDPOINT_HOSTS = frozenset({"webapi.moomoo.com"})
+_LOOPBACK_REDIRECT_HOSTS = frozenset({"127.0.0.1", "localhost"})
 
 
 class MoomooMcpOAuthError(RuntimeError):
@@ -212,13 +208,18 @@ class UrllibMoomooMcpOAuthTransport:
         return payload
 
 
-def _require_https_allowed_host(url: object, *, invalid_code: str) -> str:
+def _require_https_allowed_host(
+    url: object,
+    *,
+    invalid_code: str,
+    allowed_hosts: frozenset[str] = _RESOURCE_AND_ISSUER_HOSTS,
+) -> str:
     if not isinstance(url, str) or not url:
         raise MoomooMcpOAuthError(invalid_code)
     parsed = urlsplit(url)
     if parsed.scheme != "https" or not parsed.hostname:
         raise MoomooMcpOAuthError(invalid_code)
-    if parsed.hostname.lower() not in _ALLOWED_HOSTS:
+    if parsed.hostname.lower() not in allowed_hosts:
         raise MoomooMcpOAuthError(invalid_code)
     return url
 
@@ -348,10 +349,12 @@ def fetch_authorization_server_metadata(
     authorization_endpoint = _require_https_allowed_host(
         payload.get("authorization_endpoint"),
         invalid_code="authorization_metadata_invalid",
+        allowed_hosts=_OAUTH_ENDPOINT_HOSTS,
     )
     token_endpoint = _require_https_allowed_host(
         payload.get("token_endpoint"),
         invalid_code="authorization_metadata_invalid",
+        allowed_hosts=_OAUTH_ENDPOINT_HOSTS,
     )
     code_challenge_methods = payload.get("code_challenge_methods_supported")
     if code_challenge_methods is not None and (
@@ -362,7 +365,9 @@ def fetch_authorization_server_metadata(
     registration_endpoint_raw = payload.get("registration_endpoint")
     registration_endpoint = (
         _require_https_allowed_host(
-            registration_endpoint_raw, invalid_code="authorization_metadata_invalid"
+            registration_endpoint_raw,
+            invalid_code="authorization_metadata_invalid",
+            allowed_hosts=_OAUTH_ENDPOINT_HOSTS,
         )
         if registration_endpoint_raw is not None
         else None
@@ -392,16 +397,19 @@ def register_mcp_client(
     if authorization_server.registration_endpoint is None:
         raise MoomooMcpOAuthError("client_registration_unavailable")
     parsed_redirect = urlsplit(redirect_uri)
-    if parsed_redirect.scheme != "http" or parsed_redirect.hostname != "127.0.0.1":
+    if (
+        parsed_redirect.scheme != "http"
+        or parsed_redirect.hostname not in _LOOPBACK_REDIRECT_HOSTS
+    ):
         raise MoomooMcpOAuthError("authorization_metadata_invalid")
     payload = transport.post_json(
         authorization_server.registration_endpoint,
         payload={
+            "client_name": "Investment Research OS",
             "redirect_uris": [redirect_uri],
             "token_endpoint_auth_method": "none",
             "grant_types": ["authorization_code", "refresh_token"],
             "response_types": ["code"],
-            "application_type": "native",
         },
     )
     client_id = payload.get("client_id")
@@ -428,7 +436,7 @@ def build_mcp_authorization_url(
     parsed_redirect = urlsplit(redirect_uri)
     if (
         parsed_redirect.scheme != "http"
-        or parsed_redirect.hostname != "127.0.0.1"
+        or parsed_redirect.hostname not in _LOOPBACK_REDIRECT_HOSTS
         or parsed_redirect.port is None
         or parsed_redirect.path != "/callback"
         or parsed_redirect.query
@@ -436,7 +444,9 @@ def build_mcp_authorization_url(
     ):
         raise MoomooMcpOAuthError("authorization_metadata_invalid")
     _require_https_allowed_host(
-        authorization_endpoint, invalid_code="authorization_metadata_invalid"
+        authorization_endpoint,
+        invalid_code="authorization_metadata_invalid",
+        allowed_hosts=_OAUTH_ENDPOINT_HOSTS,
     )
     query = urlencode(
         {
@@ -472,7 +482,9 @@ def exchange_mcp_authorization_code(
     if not authorization_code:
         raise MoomooMcpOAuthError("callback_state_invalid")
     _require_https_allowed_host(
-        token_endpoint, invalid_code="authorization_metadata_invalid"
+        token_endpoint,
+        invalid_code="authorization_metadata_invalid",
+        allowed_hosts=_OAUTH_ENDPOINT_HOSTS,
     )
     try:
         verifier = attempt.consume_verifier(callback_state)
@@ -529,7 +541,9 @@ def refresh_mcp_access_token(
     if not refresh_token or "\n" in refresh_token or "\r" in refresh_token:
         raise MoomooMcpOAuthError("credential_missing")
     _require_https_allowed_host(
-        token_endpoint, invalid_code="authorization_metadata_invalid"
+        token_endpoint,
+        invalid_code="authorization_metadata_invalid",
+        allowed_hosts=_OAUTH_ENDPOINT_HOSTS,
     )
     try:
         payload = transport.post_form(

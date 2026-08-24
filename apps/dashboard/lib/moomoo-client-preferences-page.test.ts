@@ -102,7 +102,7 @@ test("MCP is the one primary Moomoo connection; OpenAPI streaming is secondary a
 
   // Settings never shows securities or holdings inside connection detail.
   const settingsCardStart = page.indexOf("Connect Moomoo");
-  const settingsCardEnd = page.indexOf("Disconnect all local Moomoo access");
+  const settingsCardEnd = page.indexOf("Clear all local Moomoo access");
   const connectionCard = page.slice(settingsCardStart, settingsCardEnd);
   assert.doesNotMatch(connectionCard, /MoomooHoldingsTable/);
 });
@@ -124,4 +124,36 @@ test("Moomoo MCP tool names stay collapsed behind a discoverable list, honestly 
   assert.match(page, /does not make a tool callable/i);
   assert.match(page, /App-approved callable read tool/);
   assert.match(page, /quote_stock_quote/);
+});
+
+test("MCP authorization shows bounded actionable failures instead of one generic error", () => {
+  const actions = readFileSync(
+    new URL("../app/moomoo-actions.ts", import.meta.url),
+    "utf8",
+  );
+  const page = readFileSync(new URL("../app/page.tsx", import.meta.url), "utf8");
+
+  assert.match(actions, /error instanceof MoomooMcpCommandError/);
+  assert.match(actions, /mcp_error=\$\{encodeURIComponent\(errorCode\)\}/);
+  assert.match(page, /authorization_metadata_unavailable/);
+  assert.match(page, /Could not reach Moomoo OAuth metadata/);
+  assert.match(page, /moomoo_system_browser_unavailable/);
+});
+
+test("full local clear removes connection preferences but retains research data", () => {
+  const actions = readFileSync(
+    new URL("../app/moomoo-actions.ts", import.meta.url),
+    "utf8",
+  );
+  const page = readFileSync(new URL("../app/page.tsx", import.meta.url), "utf8");
+  const clearSlice = actions.slice(
+    actions.indexOf("export async function disconnectMoomooAllAction"),
+  );
+
+  assert.match(clearSlice, /cookieStore\.delete\(MOOMOO_AUTO_RESUME_COOKIE\)/);
+  assert.match(clearSlice, /cookieStore\.delete\(MOOMOO_MCP_AUTO_RESUME_COOKIE\)/);
+  assert.match(clearSlice, /cookieStore\.delete\(MOOMOO_CLIENT_IDS_COOKIE\)/);
+  assert.match(page, /Clear all local Moomoo access/);
+  assert.match(page, /keeps research\s+tickers, notes, and portfolio snapshots/i);
+  assert.match(page, /does not revoke\s+access at Moomoo/i);
 });

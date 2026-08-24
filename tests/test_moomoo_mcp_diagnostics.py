@@ -69,6 +69,12 @@ class MoomooDiagnosticsLogTests(unittest.TestCase):
             [entry.reason_code for entry in log.recent(limit=2)], ["code3", "code4"]
         )
 
+    def test_clear_removes_all_local_diagnostics(self) -> None:
+        log = MoomooDiagnosticsLog()
+        log.record(subsystem="core_mcp", stage="resume", reason_code="credential_missing")
+        log.clear()
+        self.assertEqual(log.recent(), ())
+
 
 if __name__ == "__main__":
     unittest.main()
