@@ -17,7 +17,7 @@ import threading
 import unittest
 from datetime import UTC, date, datetime
 from pathlib import Path
-from uuid import uuid4
+from uuid import NAMESPACE_URL, uuid4, uuid5
 
 from investment_research_os.evidence_bundles import (
     CatalystSnapshot,
@@ -46,6 +46,19 @@ OPERATOR_ID = str(uuid4())
 OTHER_OPERATOR_ID = str(uuid4())
 
 
+def _identity(seed: str | None, label: str) -> str:
+    """Return a random identity, or a reproducible one when a seed is given.
+
+    A cross-process test cannot pickle a fixture between two independently
+    spawned processes, so both must be able to build the byte-identical
+    bundle from a seed alone.
+    """
+
+    if seed is None:
+        return str(uuid4())
+    return str(uuid5(NAMESPACE_URL, f"local-evidence-bundle/{seed}/{label}"))
+
+
 def _bundle(
     *,
     operator_id: str = OPERATOR_ID,
@@ -53,15 +66,16 @@ def _bundle(
     research_run_id: str | None = None,
     content_hash: str = "a" * 64,
     with_snapshots: bool = True,
+    identity_seed: str | None = None,
 ) -> EvidenceBundle:
-    passage_id = str(uuid4())
-    metric_id = str(uuid4())
-    catalyst_id = str(uuid4())
-    risk_id = str(uuid4())
+    passage_id = _identity(identity_seed, "passage")
+    metric_id = _identity(identity_seed, "metric")
+    catalyst_id = _identity(identity_seed, "catalyst")
+    risk_id = _identity(identity_seed, "risk")
     manifest = (
         EvidenceItem(
             evidence_id=passage_id,
-            evidence_version_id=str(uuid4()),
+            evidence_version_id=_identity(identity_seed, "evidence-version"),
             provenance_type="primary",
             item_kind="passage",
             source_class="sec",
@@ -73,7 +87,7 @@ def _bundle(
             filing_period_start=date(2026, 1, 1),
             filing_period_end=date(2026, 3, 31),
             content_hash="b" * 64,
-            passage_id=str(uuid4()),
+            passage_id=_identity(identity_seed, "passage-locator"),
             passage_hash="c" * 64,
             freshness="fresh",
             passage_text="Cash and equivalents were 412.0 million dollars.",
@@ -81,12 +95,12 @@ def _bundle(
     )
     if not with_snapshots:
         return EvidenceBundle(
-            id=bundle_id or str(uuid4()),
+            id=bundle_id or _identity(identity_seed, "bundle"),
             operator_id=operator_id,
-            research_run_id=research_run_id or str(uuid4()),
-            security_id=str(uuid4()),
+            research_run_id=research_run_id or _identity(identity_seed, "run"),
+            security_id=_identity(identity_seed, "security"),
             security_identity=SecurityIdentity(
-                id=str(uuid4()),
+                id=_identity(identity_seed, "security-identity"),
                 cik="0000320193",
                 issuer_name="Example Therapeutics Inc",
                 symbol="EXTX",
@@ -106,12 +120,12 @@ def _bundle(
             created_at=CREATED_AT,
         )
     return EvidenceBundle(
-        id=bundle_id or str(uuid4()),
+        id=bundle_id or _identity(identity_seed, "bundle"),
         operator_id=operator_id,
-        research_run_id=research_run_id or str(uuid4()),
-        security_id=str(uuid4()),
+        research_run_id=research_run_id or _identity(identity_seed, "run"),
+        security_id=_identity(identity_seed, "security"),
         security_identity=SecurityIdentity(
-            id=str(uuid4()),
+            id=_identity(identity_seed, "security-identity"),
             cik="0000320193",
             issuer_name="Example Therapeutics Inc",
             symbol="EXTX",
