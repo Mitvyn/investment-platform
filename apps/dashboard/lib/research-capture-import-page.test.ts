@@ -12,11 +12,15 @@ test("Research Overview exposes a capture-import path that feeds the existing ac
   assert.match(page, /Import a collected capture archive/);
   assert.match(
     page,
-    /This does not acquire sources, browse the web,\s+or call a provider or model/,
+    /This does not acquire sources, browse the web,\s+or\s+call a provider or model/,
   );
   assert.match(page, /action=\{importResearchCaptureAction\}/);
   assert.match(page, /name="securityId"/);
   assert.match(page, /name="archivePath"/);
+  assert.match(page, /name="captureArchive"/);
+  assert.match(page, /type="file"/);
+  assert.match(page, /name="confirmEmbeddedIssuerHosts"/);
+  assert.match(page, /The app derives cutoff and issuer hosts from the archive/);
   assert.match(page, /name="captureAsOfCutoff"/);
   assert.match(page, /name="trustedIssuerHosts"/);
   assert.match(page, /params\.capture_import === "accepted"/);

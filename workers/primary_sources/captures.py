@@ -210,6 +210,80 @@ class PrimarySourceCapture:
             ) from error
 
 
+@dataclass(frozen=True, slots=True)
+class PrimarySourceCaptureArchiveMetadata:
+    """Server-safe identity and validation metadata from a capture archive."""
+
+    package_sha256: str
+    capture_id: str
+    capture_revision: int
+    operator_id: str
+    security_id: str
+    cik: str
+    issuer_name: str
+    primary_listing_exchange: str
+    as_of_cutoff: datetime
+    trusted_issuer_hosts: tuple[str, ...]
+
+
+def inspect_primary_source_capture_archive(
+    raw_archive: bytes,
+) -> PrimarySourceCaptureArchiveMetadata:
+    """Read archive metadata without accepting or persisting its contents.
+
+    Issuer hosts come from the embedded plan only as candidates. The caller
+    must obtain explicit operator confirmation before using them for binding.
+    """
+
+    entries, package_sha256 = _archive_entries(raw_archive)
+    if "capture.json" not in entries or "primary-source-plan.json" not in entries:
+        raise PrimarySourceCaptureError("capture archive members are invalid")
+    manifest = _parse_json(entries["capture.json"], "capture manifest")
+    _fields(manifest, _TOP_LEVEL_FIELDS, "capture manifest")
+    if _text(manifest["contract_version"], "capture contract version") != CAPTURE_CONTRACT_VERSION:
+        raise PrimarySourceCaptureError("capture contract version is unsupported")
+    capture_id = _uuid(manifest["capture_id"], "capture ID")
+    capture_revision = _integer(manifest["revision"], "capture revision", minimum=1)
+    if _text(manifest["provenance_mode"], "capture provenance mode") != (
+        "operator_supplied_unverified"
+    ):
+        raise PrimarySourceCaptureError("capture provenance mode is unsupported")
+    _timestamp(manifest["assembled_at"], "capture assembled time")
+    loaded_plan = load_primary_source_plan(entries["primary-source-plan.json"])
+    context = _mapping(manifest["context"], "capture context")
+    _fields(context, _CONTEXT_FIELDS, "capture context")
+    plan_reference = _mapping(manifest["plan"], "capture plan")
+    _fields(plan_reference, _PLAN_FIELDS, "capture plan")
+    if dict(plan_reference) != {
+        "path": "primary-source-plan.json",
+        "plan_id": loaded_plan.plan_id,
+        "revision": loaded_plan.revision,
+        "content_hash": loaded_plan.content_hash,
+    }:
+        raise PrimarySourceCaptureError("capture plan does not match embedded source plan")
+    hosts: set[str] = set()
+    for source in loaded_plan.issuer_sources:
+        parsed = urlsplit(source.source_url)
+        if parsed.scheme != "https" or not parsed.hostname:
+            raise PrimarySourceCaptureError("issuer source origin is invalid")
+        hosts.add(parsed.hostname.casefold())
+    return PrimarySourceCaptureArchiveMetadata(
+        package_sha256=package_sha256,
+        capture_id=capture_id,
+        capture_revision=capture_revision,
+        operator_id=_uuid(context["operator_id"], "capture operator ID"),
+        security_id=_uuid(context["security_id"], "capture security ID"),
+        cik=_text(context["cik"], "capture CIK"),
+        issuer_name=_text(context["issuer_name"], "capture issuer name"),
+        primary_listing_exchange=_text(
+            context["primary_listing_exchange"],
+            "capture listing exchange",
+        ),
+        as_of_cutoff=_timestamp(context["as_of_cutoff"], "capture as-of cutoff"),
+        trusted_issuer_hosts=tuple(sorted(hosts)),
+    )
+
+
 class _CaptureTransport:
     def __init__(
         self,
@@ -1233,7 +1307,9 @@ __all__ = [
     "CaptureMiss",
     "CapturedResponse",
     "PrimarySourceCapture",
+    "PrimarySourceCaptureArchiveMetadata",
     "PrimarySourceCaptureError",
     "PrimarySourceCaptureSession",
+    "inspect_primary_source_capture_archive",
     "load_primary_source_capture",
 ]

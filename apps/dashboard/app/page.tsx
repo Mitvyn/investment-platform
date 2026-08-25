@@ -1104,17 +1104,18 @@ export default async function TickerWorkspace({
                   Import a collected capture archive
                 </CardTitle>
                 <CardDescription>
-                  Import an already collected, bounded evidence archive from
-                  local disk. This does not acquire sources, browse the web,
-                  or call a provider or model; it validates the archive
-                  against its embedded plan and this security, then persists
-                  an immutable accepted receipt selectable below.
+                  Drop one already collected, bounded evidence archive. The
+                  app derives cutoff and issuer hosts from the embedded plan,
+                  binds it to this security, and persists an immutable accepted
+                  receipt. This does not acquire sources, browse the web, or
+                  call a provider or model.
                 </CardDescription>
               </CardHeader>
               <CardContent>
                 <form
                   action={importResearchCaptureAction}
-                  className="grid gap-3 sm:grid-cols-2"
+                  className="grid gap-3"
+                  encType="multipart/form-data"
                 >
                   <input
                     name="securityId"
@@ -1125,55 +1126,101 @@ export default async function TickerWorkspace({
                   <div className="flex flex-col gap-1">
                     <label
                       className="text-xs font-medium text-muted-foreground"
-                      htmlFor="archivePath"
+                      htmlFor="captureArchive"
                     >
-                      Local capture archive path
+                      Capture archive
                     </label>
                     <input
                       className="h-11 w-full rounded-md border border-input bg-background px-3 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/40"
-                      id="archivePath"
-                      name="archivePath"
-                      placeholder="/Users/operator/captures/rxrx-v3.zip"
+                      accept=".zip,application/zip"
+                      id="captureArchive"
+                      name="captureArchive"
                       required
-                      type="text"
+                      type="file"
                     />
                   </div>
-                  <div className="flex flex-col gap-1">
-                    <label
-                      className="text-xs font-medium text-muted-foreground"
-                      htmlFor="captureAsOfCutoff"
-                    >
-                      UTC as-of cutoff
-                    </label>
+                  <label className="flex items-start gap-3 rounded-md border border-border bg-muted/35 px-3 py-3 text-xs">
                     <input
-                      className="h-11 w-full rounded-md border border-input bg-background px-3 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/40"
-                      id="captureAsOfCutoff"
-                      name="captureAsOfCutoff"
-                      placeholder="2026-05-06T23:59:59Z"
+                      className="mt-0.5 size-4 accent-primary"
+                      name="confirmEmbeddedIssuerHosts"
                       required
-                      type="text"
+                      type="checkbox"
+                      value="on"
                     />
-                  </div>
-                  <div className="flex flex-col gap-1 sm:col-span-2">
-                    <label
-                      className="text-xs font-medium text-muted-foreground"
-                      htmlFor="trustedIssuerHosts"
-                    >
-                      Trusted issuer hosts (comma separated)
-                    </label>
-                    <input
-                      className="h-11 w-full rounded-md border border-input bg-background px-3 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/40"
-                      id="trustedIssuerHosts"
-                      name="trustedIssuerHosts"
-                      placeholder="ir.example.com"
-                      required
-                      type="text"
-                    />
-                  </div>
-                  <Button className="justify-self-start sm:col-span-2" type="submit">
+                    <span>
+                      The app derives cutoff and issuer hosts from the archive
+                      and uses them only to validate this security. Confirm the
+                      embedded issuer sources are intended for this import.
+                    </span>
+                  </label>
+                  <Button className="justify-self-start" type="submit">
                     Import capture
                   </Button>
                 </form>
+                <details className="mt-5 rounded-md border border-border px-3 py-2">
+                  <summary className="cursor-pointer text-xs font-medium">
+                    Advanced: import from an existing local path
+                  </summary>
+                  <form
+                    action={importResearchCaptureAction}
+                    className="mt-4 grid gap-3 sm:grid-cols-2"
+                  >
+                    <input
+                      name="securityId"
+                      type="hidden"
+                      value={selectedSecurity.securityId}
+                    />
+                    <input name="view" type="hidden" value={activeSection} />
+                    <div className="flex flex-col gap-1">
+                      <label
+                        className="text-xs font-medium text-muted-foreground"
+                        htmlFor="archivePath"
+                      >
+                        Local archive path
+                      </label>
+                      <input
+                        className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/40"
+                        id="archivePath"
+                        name="archivePath"
+                        placeholder="/Users/operator/captures/rxrx-v3.zip"
+                        type="text"
+                      />
+                    </div>
+                    <div className="flex flex-col gap-1">
+                      <label
+                        className="text-xs font-medium text-muted-foreground"
+                        htmlFor="captureAsOfCutoff"
+                      >
+                        UTC as-of cutoff
+                      </label>
+                      <input
+                        className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/40"
+                        id="captureAsOfCutoff"
+                        name="captureAsOfCutoff"
+                        placeholder="2026-05-06T23:59:59Z"
+                        type="text"
+                      />
+                    </div>
+                    <div className="flex flex-col gap-1 sm:col-span-2">
+                      <label
+                        className="text-xs font-medium text-muted-foreground"
+                        htmlFor="trustedIssuerHosts"
+                      >
+                        Trusted issuer hosts
+                      </label>
+                      <input
+                        className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/40"
+                        id="trustedIssuerHosts"
+                        name="trustedIssuerHosts"
+                        placeholder="ir.example.com"
+                        type="text"
+                      />
+                    </div>
+                    <Button className="justify-self-start sm:col-span-2" type="submit">
+                      Import local path
+                    </Button>
+                  </form>
+                </details>
                 {params.capture_import === "accepted" ? (
                   <p
                     aria-live="polite"

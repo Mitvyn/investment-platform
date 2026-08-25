@@ -26,6 +26,16 @@ export type ResearchCaptureImportRequest = {
   trustedIssuerHosts: string[];
 };
 
+export type ResearchCaptureUploadRequest = {
+  archive: Blob;
+  cik: string;
+  confirmEmbeddedIssuerHosts: boolean;
+  issuerName: string;
+  operatorId: string;
+  primaryListingExchange: string;
+  securityId: string;
+};
+
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const CONTROL_ORIGIN_PATTERN = /^http:\/\/127\.0\.0\.1:\d+$/;
@@ -116,6 +126,62 @@ export async function importResearchCapture(
   const payload: unknown = await response.json();
   if (!response.ok || !isImportReceipt(payload)) {
     throw new Error("capture import request failed");
+  }
+  return {
+    acceptedAt: payload.accepted_at,
+    asOfCutoff: payload.as_of_cutoff,
+    captureContentHash: payload.capture_content_hash,
+    captureId: payload.capture_id,
+    captureRevision: payload.capture_revision,
+    questionType: payload.question_type,
+    questionTypeVersion: payload.question_type_version,
+    workflowConfigVersion: payload.workflow_config_version,
+  };
+}
+
+export async function importResearchCaptureUpload(
+  request: ResearchCaptureUploadRequest,
+  environment: DesktopEnvironment = process.env,
+  fetcher: FetchLike = fetch,
+): Promise<ImportedResearchCapture> {
+  if (
+    !UUID_PATTERN.test(request.operatorId) ||
+    !UUID_PATTERN.test(request.securityId)
+  ) {
+    throw new TypeError("capture upload identity is invalid");
+  }
+  if (!(request.archive instanceof Blob) || request.archive.size <= 0) {
+    throw new TypeError("capture upload archive is invalid");
+  }
+  if (request.archive.size > 25_000_000) {
+    throw new TypeError("capture upload archive is too large");
+  }
+  if (!request.confirmEmbeddedIssuerHosts) {
+    throw new TypeError("embedded issuer hosts require confirmation");
+  }
+  const contract = controlContract(environment);
+  if (!contract) {
+    throw new Error("Desktop capture import service is unavailable");
+  }
+  const response = await fetcher(`${contract.origin}/v1/research/captures/upload`, {
+    body: request.archive,
+    cache: "no-store",
+    headers: {
+      Authorization: `Bearer ${contract.token}`,
+      "Content-Type": request.archive.type || "application/zip",
+      "X-IROS-CIK": request.cik,
+      "X-IROS-Confirm-Embedded-Issuer-Hosts": "true",
+      "X-IROS-Issuer-Name": request.issuerName,
+      "X-IROS-Operator-ID": request.operatorId,
+      "X-IROS-Primary-Listing-Exchange": request.primaryListingExchange,
+      "X-IROS-Security-ID": request.securityId,
+    },
+    method: "POST",
+    signal: AbortSignal.timeout(30_000),
+  });
+  const payload: unknown = await response.json();
+  if (!response.ok || !isImportReceipt(payload)) {
+    throw new Error("capture upload request failed");
   }
   return {
     acceptedAt: payload.accepted_at,

@@ -12,6 +12,7 @@ from workers.desktop.research_capture_import import (
     DesktopCaptureImportError,
     DesktopCaptureImportRequest,
     DesktopCaptureImportService,
+    DesktopCaptureUploadRequest,
 )
 from workers.primary_sources.storage import FilePrimarySourceCaptureRepository
 
@@ -137,6 +138,49 @@ class DesktopCaptureImportServiceTests(unittest.TestCase):
             with self.assertRaises(DesktopCaptureImportError):
                 service.import_capture(
                     self._request(archive_path, trusted_issuer_hosts=())
+                )
+
+    def test_uploaded_archive_derives_cutoff_and_issuer_hosts_after_confirmation(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "captures"
+            service = self._service(root)
+
+            persisted = service.import_uploaded_capture(
+                DesktopCaptureUploadRequest(
+                    operator_id=OPERATOR_ID,
+                    security_id=SECURITY_ID,
+                    cik="0001601830",
+                    issuer_name="Recursion Pharmaceuticals, Inc.",
+                    primary_listing_exchange="NASDAQ",
+                    raw_archive=_valid_archive_bytes(),
+                    confirm_embedded_issuer_hosts=True,
+                )
+            )
+
+            self.assertEqual(persisted.operator_id, OPERATOR_ID)
+            self.assertEqual(persisted.security_id, SECURITY_ID)
+            self.assertEqual(persisted.as_of_cutoff, CUTOFF)
+
+    def test_uploaded_archive_requires_explicit_issuer_host_confirmation(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            service = self._service(Path(directory) / "captures")
+
+            with self.assertRaisesRegex(
+                DesktopCaptureImportError,
+                "issuer hosts require confirmation",
+            ):
+                service.import_uploaded_capture(
+                    DesktopCaptureUploadRequest(
+                        operator_id=OPERATOR_ID,
+                        security_id=SECURITY_ID,
+                        cik="0001601830",
+                        issuer_name="Recursion Pharmaceuticals, Inc.",
+                        primary_listing_exchange="NASDAQ",
+                        raw_archive=_valid_archive_bytes(),
+                        confirm_embedded_issuer_hosts=False,
+                    )
                 )
 
     def test_conflicting_archive_bytes_for_same_identity_are_rejected(self) -> None:

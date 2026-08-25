@@ -44,6 +44,8 @@ from workers.desktop.research_capture_import import (
     DesktopCaptureImportError,
     DesktopCaptureImportRequest,
     DesktopCaptureImportService,
+    DesktopCaptureUploadRequest,
+    MAX_CAPTURE_ARCHIVE_BYTES,
 )
 from workers.desktop.research_notebook import (
     DesktopResearchNotebook,
@@ -2262,12 +2264,79 @@ class DesktopControlServer:
                     "/v1/security-registry/import-moomoo",
                     "/v1/research/notebook",
                     "/v1/research/captures/import",
+                    "/v1/research/captures/upload",
                     "/v1/research/market-evidence/quote",
                     "/v1/research/market-evidence/history",
                     "/v1/quant/dataset/import",
                     "/v1/quant/runs",
                 }:
                     self._send_json(404, {"error": "desktop_control_not_found"})
+                    return
+                if self.path == "/v1/research/captures/upload":
+                    if research_capture_import_service is None:
+                        self._send_json(
+                            503,
+                            {"error": "primary_source_capture_import_unavailable"},
+                        )
+                        return
+                    length = self.headers.get("Content-Length", "")
+                    try:
+                        content_length = int(length)
+                    except ValueError:
+                        self._send_json(400, {"error": "capture_upload_invalid"})
+                        return
+                    if content_length <= 0 or content_length > MAX_CAPTURE_ARCHIVE_BYTES:
+                        self._send_json(400, {"error": "capture_upload_size_invalid"})
+                        return
+                    raw_archive = self.rfile.read(content_length)
+                    if len(raw_archive) != content_length:
+                        self._send_json(400, {"error": "capture_upload_body_invalid"})
+                        return
+                    try:
+                        persisted = research_capture_import_service.import_uploaded_capture(
+                            DesktopCaptureUploadRequest(
+                                operator_id=self.headers.get("X-IROS-Operator-ID", ""),
+                                security_id=self.headers.get("X-IROS-Security-ID", ""),
+                                cik=self.headers.get("X-IROS-CIK", ""),
+                                issuer_name=self.headers.get("X-IROS-Issuer-Name", ""),
+                                primary_listing_exchange=self.headers.get(
+                                    "X-IROS-Primary-Listing-Exchange", ""
+                                ),
+                                raw_archive=raw_archive,
+                                confirm_embedded_issuer_hosts=(
+                                    self.headers.get(
+                                        "X-IROS-Confirm-Embedded-Issuer-Hosts", ""
+                                    ).casefold()
+                                    == "true"
+                                ),
+                            )
+                        )
+                    except (DesktopCaptureImportError, ValueError, TypeError) as error:
+                        self._send_json(
+                            400,
+                            {
+                                "error": "primary_source_capture_upload_invalid",
+                                "reason": str(error),
+                            },
+                        )
+                        return
+                    entry = AcceptedCaptureCatalogEntry(
+                        capture_id=persisted.capture_id,
+                        capture_revision=persisted.capture_revision,
+                        capture_content_hash=persisted.capture_content_hash,
+                        as_of_cutoff=persisted.as_of_cutoff,
+                        question_type=persisted.question_type,
+                        question_type_version=persisted.question_type_version,
+                        workflow_config_version=persisted.workflow_config_version,
+                        accepted_at=persisted.accepted_at,
+                    )
+                    self._send_json(
+                        200,
+                        {
+                            "contract_version": "primary_source_capture_import_receipt.v1",
+                            **entry.as_dict(),
+                        },
+                    )
                     return
                 length = self.headers.get("Content-Length", "")
                 try:

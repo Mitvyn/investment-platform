@@ -16,6 +16,11 @@ const nextConfig: NextConfig = {
           IROS_SUPABASE_URL: supabaseUrl,
         }
       : undefined,
+  experimental: {
+    serverActions: {
+      bodySizeLimit: "25mb",
+    },
+  },
   reactStrictMode: true,
 };
 

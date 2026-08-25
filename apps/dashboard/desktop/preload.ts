@@ -62,19 +62,34 @@ const launch = resolveDesktopWorkerLaunch(
   Deno.execPath(),
 );
 
-try {
-  const runtime = await launchDesktopWorker({
-    ...launch,
-    parentPid: Deno.pid,
-    readyTimeoutMs: 30_000,
-  });
-  Deno.env.set("IROS_DESKTOP_WORKER_STATE", "ready");
-  Deno.env.set("IROS_DESKTOP_CONTROL_ORIGIN", runtime.status.control_origin);
-  Deno.env.set("IROS_DESKTOP_CONTROL_TOKEN", runtime.status.control_token);
-  globalThis.addEventListener("unload", () => {
-    if (resizeSaveTimer !== undefined) clearTimeout(resizeSaveTimer);
-    void runtime.stop();
-  });
-} catch {
-  Deno.env.set("IROS_DESKTOP_WORKER_STATE", "failed");
-}
+let stopWorker: (() => Promise<unknown>) | undefined;
+let unloadRequested = false;
+
+globalThis.addEventListener("unload", () => {
+  unloadRequested = true;
+  if (resizeSaveTimer !== undefined) clearTimeout(resizeSaveTimer);
+  void stopWorker?.();
+});
+
+// Do not block initial webview navigation on PyInstaller/worker startup. The
+// dashboard can render its login/loading state while the control server comes
+// up, then reads the ready state through the existing desktop environment.
+void (async () => {
+  try {
+    const runtime = await launchDesktopWorker({
+      ...launch,
+      parentPid: Deno.pid,
+      readyTimeoutMs: 30_000,
+    });
+    stopWorker = runtime.stop;
+    if (unloadRequested) {
+      await runtime.stop();
+      return;
+    }
+    Deno.env.set("IROS_DESKTOP_WORKER_STATE", "ready");
+    Deno.env.set("IROS_DESKTOP_CONTROL_ORIGIN", runtime.status.control_origin);
+    Deno.env.set("IROS_DESKTOP_CONTROL_TOKEN", runtime.status.control_token);
+  } catch {
+    Deno.env.set("IROS_DESKTOP_WORKER_STATE", "failed");
+  }
+})();

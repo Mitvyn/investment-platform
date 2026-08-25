@@ -27,3 +27,22 @@ test("importResearchCaptureAction verifies securityId against the server-owned s
     "ownership must be verified before any capture import",
   );
 });
+
+test("importResearchCaptureAction uses uploaded archive and server-owned identity", () => {
+  const actions = readFileSync(
+    new URL("../app/research-capture-import-actions.ts", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(actions, /formData\.get\("captureArchive"\)/);
+  assert.match(actions, /importResearchCaptureUpload/);
+  assert.match(actions, /confirmEmbeddedIssuerHosts/);
+  assert.doesNotMatch(actions, /formData\.get\("cik"\)/);
+  assert.doesNotMatch(actions, /formData\.get\("issuerName"\)/);
+  const uploadIndex = actions.indexOf("importResearchCaptureUpload(");
+  const canonicalCikIndex = actions.indexOf("cik: security.cik");
+  const canonicalIssuerIndex = actions.indexOf("issuerName: security.companyName");
+  assert.ok(uploadIndex >= 0);
+  assert.ok(canonicalCikIndex > uploadIndex);
+  assert.ok(canonicalIssuerIndex > uploadIndex);
+});

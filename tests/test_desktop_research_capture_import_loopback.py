@@ -98,6 +98,46 @@ class DesktopResearchCaptureImportLoopbackTests(unittest.TestCase):
             for prohibited in ("archive", "path", "package_sha256", "plan_content_hash"):
                 self.assertNotIn(prohibited, serialized)
 
+    def test_loopback_upload_accepts_raw_archive_and_returns_sanitized_receipt(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "captures"
+            server = DesktopControlServer(
+                service=object(),  # type: ignore[arg-type]
+                control_token="control-secret",
+                research_capture_import_service=DesktopCaptureImportService(
+                    FilePrimarySourceCaptureRepository(root),
+                    clock=lambda: datetime(2026, 5, 7, 3, tzinfo=UTC),
+                ),
+            )
+            server.start()
+            self.addCleanup(server.stop)
+            parsed = urlsplit(server.origin)
+            connection = HTTPConnection(parsed.hostname, parsed.port, timeout=1)
+            raw_archive = Path(_archive_path(Path(directory))).read_bytes()
+            connection.request(
+                "POST",
+                "/v1/research/captures/upload",
+                body=raw_archive,
+                headers={
+                    "Authorization": "Bearer control-secret",
+                    "Content-Type": "application/zip",
+                    "X-IROS-Operator-ID": OPERATOR_ID,
+                    "X-IROS-Security-ID": SECURITY_ID,
+                    "X-IROS-CIK": "0001601830",
+                    "X-IROS-Issuer-Name": "Recursion Pharmaceuticals, Inc.",
+                    "X-IROS-Primary-Listing-Exchange": "NASDAQ",
+                    "X-IROS-Confirm-Embedded-Issuer-Hosts": "true",
+                },
+            )
+            response = connection.getresponse()
+            self.assertEqual(response.status, 200)
+            payload = json.loads(response.read())
+            self.assertEqual(
+                payload["contract_version"],
+                "primary_source_capture_import_receipt.v1",
+            )
+            self.assertNotIn("package_sha256", json.dumps(payload))
+
     def test_loopback_rejects_malformed_request_and_unavailable_service(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / "captures"

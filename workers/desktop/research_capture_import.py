@@ -7,6 +7,7 @@ from typing import Callable
 
 from workers.primary_sources.captures import (
     PrimarySourceCaptureError,
+    inspect_primary_source_capture_archive,
     load_primary_source_capture,
 )
 from workers.primary_sources.models import PrimarySourceRequest
@@ -33,6 +34,17 @@ class DesktopCaptureImportRequest:
     as_of_cutoff: datetime
     archive_path: Path
     trusted_issuer_hosts: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class DesktopCaptureUploadRequest:
+    operator_id: str
+    security_id: str
+    cik: str
+    issuer_name: str
+    primary_listing_exchange: str
+    raw_archive: bytes
+    confirm_embedded_issuer_hosts: bool
 
 
 class DesktopCaptureImportService:
@@ -74,18 +86,69 @@ class DesktopCaptureImportService:
             raise DesktopCaptureImportError(
                 "capture archive path is unreadable"
             ) from error
+        return self._import_bytes(
+            raw_archive,
+            operator_id=request.operator_id,
+            security_id=request.security_id,
+            cik=request.cik,
+            issuer_name=request.issuer_name,
+            primary_listing_exchange=request.primary_listing_exchange,
+            as_of_cutoff=request.as_of_cutoff,
+            trusted_issuer_hosts=request.trusted_issuer_hosts,
+        )
+
+    def import_uploaded_capture(
+        self, request: DesktopCaptureUploadRequest
+    ) -> PersistedPrimarySourceCapture:
+        if not isinstance(request.raw_archive, bytes):
+            raise DesktopCaptureImportError("capture archive bytes are invalid")
+        if not request.raw_archive or len(request.raw_archive) > MAX_CAPTURE_ARCHIVE_BYTES:
+            raise DesktopCaptureImportError("capture archive size is invalid")
+        if not request.confirm_embedded_issuer_hosts:
+            raise DesktopCaptureImportError(
+                "embedded issuer hosts require confirmation"
+            )
+        try:
+            metadata = inspect_primary_source_capture_archive(request.raw_archive)
+        except (PrimarySourceCaptureError, ValueError) as error:
+            raise DesktopCaptureImportError(str(error)) from error
+        if metadata.operator_id != request.operator_id:
+            raise DesktopCaptureImportError("capture operator identity does not match")
+        return self._import_bytes(
+            request.raw_archive,
+            operator_id=request.operator_id,
+            security_id=request.security_id,
+            cik=request.cik,
+            issuer_name=request.issuer_name,
+            primary_listing_exchange=request.primary_listing_exchange,
+            as_of_cutoff=metadata.as_of_cutoff,
+            trusted_issuer_hosts=metadata.trusted_issuer_hosts,
+        )
+
+    def _import_bytes(
+        self,
+        raw_archive: bytes,
+        *,
+        operator_id: str,
+        security_id: str,
+        cik: str,
+        issuer_name: str,
+        primary_listing_exchange: str,
+        as_of_cutoff: datetime,
+        trusted_issuer_hosts: tuple[str, ...],
+    ) -> PersistedPrimarySourceCapture:
         try:
             capture = load_primary_source_capture(
                 raw_archive,
                 request=PrimarySourceRequest(
-                    operator_id=request.operator_id,
-                    security_id=request.security_id,
-                    cik=request.cik,
-                    issuer_name=request.issuer_name,
-                    primary_listing_exchange=request.primary_listing_exchange,
-                    as_of_cutoff=request.as_of_cutoff,
+                    operator_id=operator_id,
+                    security_id=security_id,
+                    cik=cik,
+                    issuer_name=issuer_name,
+                    primary_listing_exchange=primary_listing_exchange,
+                    as_of_cutoff=as_of_cutoff,
                 ),
-                trusted_issuer_hosts=request.trusted_issuer_hosts,
+                trusted_issuer_hosts=trusted_issuer_hosts,
                 accepted_at=self._clock,
             )
         except (PrimarySourceCaptureError, ValueError) as error:
@@ -100,5 +163,6 @@ __all__ = [
     "DesktopCaptureImportError",
     "DesktopCaptureImportRequest",
     "DesktopCaptureImportService",
+    "DesktopCaptureUploadRequest",
     "MAX_CAPTURE_ARCHIVE_BYTES",
 ]

@@ -2,7 +2,10 @@
 
 import { redirect } from "next/navigation";
 
-import { importResearchCapture } from "../lib/research-capture-import";
+import {
+  importResearchCapture,
+  importResearchCaptureUpload,
+} from "../lib/research-capture-import";
 import { isCanonicalSecurityKnown } from "../lib/research-notebook";
 import { loadSecurityDirectory } from "../lib/securities";
 import { createClient } from "../lib/supabase/server";
@@ -29,19 +32,33 @@ export async function importResearchCaptureAction(formData: FormData) {
   }
 
   try {
-    await importResearchCapture({
-      archivePath: String(formData.get("archivePath") ?? ""),
-      asOfCutoff: String(formData.get("captureAsOfCutoff") ?? ""),
-      cik: security.cik,
-      issuerName: security.companyName,
-      operatorId,
-      primaryListingExchange: security.primaryListingExchange,
-      securityId,
-      trustedIssuerHosts: String(formData.get("trustedIssuerHosts") ?? "")
-        .split(",")
-        .map((host) => host.trim())
-        .filter((host) => host.length > 0),
-    });
+    const archive = formData.get("captureArchive");
+    if (typeof Blob !== "undefined" && archive instanceof Blob) {
+      await importResearchCaptureUpload({
+        archive,
+        cik: security.cik,
+        confirmEmbeddedIssuerHosts:
+          String(formData.get("confirmEmbeddedIssuerHosts") ?? "") === "on",
+        issuerName: security.companyName,
+        operatorId,
+        primaryListingExchange: security.primaryListingExchange,
+        securityId,
+      });
+    } else {
+      await importResearchCapture({
+        archivePath: String(formData.get("archivePath") ?? ""),
+        asOfCutoff: String(formData.get("captureAsOfCutoff") ?? ""),
+        cik: security.cik,
+        issuerName: security.companyName,
+        operatorId,
+        primaryListingExchange: security.primaryListingExchange,
+        securityId,
+        trustedIssuerHosts: String(formData.get("trustedIssuerHosts") ?? "")
+          .split(",")
+          .map((host) => host.trim())
+          .filter((host) => host.length > 0),
+      });
+    }
   } catch {
     query.set("capture_import_error", "import_failed");
     redirect(`/?${query.toString()}`);
