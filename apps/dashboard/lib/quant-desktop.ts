@@ -71,6 +71,16 @@ export type QuantRunRequest = {
   securityId: string;
 };
 
+export type QuantFetchRequest = {
+  asOfCutoff: string;
+  operatorId: string;
+  securityId: string;
+  start: string;
+  ticker: string;
+};
+
+const ISO_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+
 function controlContract(environment: DesktopEnvironment) {
   const origin = environment.IROS_DESKTOP_CONTROL_ORIGIN ?? "";
   const token = environment.IROS_DESKTOP_CONTROL_TOKEN ?? "";
@@ -252,6 +262,49 @@ export async function importQuantDataset(
       dataset_path: datasetPath,
       operator_id: request.operatorId,
       security_id: request.securityId,
+    },
+    environment,
+    fetcher,
+  );
+  const status = parseQuantDatasetStatus(payload);
+  if (status === null || status.dataset === null) {
+    throw new QuantDesktopError("quant_response_invalid");
+  }
+  return status;
+}
+
+/**
+ * Fetch history from the approved provider transport and make it active.
+ *
+ * ``request.ticker`` must already be the caller's own server-derived value
+ * from the canonical security directory. This client never looks a ticker up
+ * itself and has no security metadata to check one against; deriving it is
+ * the server action's job, not this module's.
+ */
+export async function fetchQuantDataset(
+  request: QuantFetchRequest,
+  environment: DesktopEnvironment = process.env,
+  fetcher: FetchLike = fetch,
+): Promise<QuantDatasetStatus> {
+  requireIdentity(request.operatorId, request.securityId);
+  const ticker = request.ticker.trim();
+  if (!ticker) {
+    throw new QuantDesktopError("fetch_ticker_invalid");
+  }
+  if (
+    !ISO_DATE_PATTERN.test(request.start) ||
+    !ISO_DATE_PATTERN.test(request.asOfCutoff)
+  ) {
+    throw new QuantDesktopError("fetch_window_invalid");
+  }
+  const payload = await post(
+    "/v1/quant/dataset/fetch",
+    {
+      as_of_cutoff: request.asOfCutoff,
+      operator_id: request.operatorId,
+      security_id: request.securityId,
+      start: request.start,
+      ticker,
     },
     environment,
     fetcher,

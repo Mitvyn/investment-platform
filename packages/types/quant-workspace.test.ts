@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  isQuantErrorCode,
   parseQuantDatasetStatus,
   parseQuantLocalResult,
   type QuantLocalResult,
@@ -212,4 +213,17 @@ test("rejects a result with an unknown validation outcome", () => {
     ),
     null,
   );
+});
+
+test("recognises every provider-fetch error code as reviewed", () => {
+  for (const code of [
+    "fetch_provider_blocked",
+    "fetch_provider_rejected",
+    "fetch_provider_unavailable",
+    "fetch_ticker_invalid",
+    "fetch_window_invalid",
+  ]) {
+    assert.equal(isQuantErrorCode(code), true);
+  }
+  assert.equal(isQuantErrorCode("fetch_made_up_code"), false);
 });

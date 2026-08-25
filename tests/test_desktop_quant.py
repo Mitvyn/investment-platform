@@ -14,6 +14,8 @@ from investment_research_os.quant_sources import payload_sha256
 from workers.quant_workspace import intake
 from workers.desktop.control import DesktopControlServer, MoomooConnectionService
 from workers.portfolio.keychain import MoomooTokenKeychain
+from workers.quant_sources.transports import HistoryBar, HistoryPayload
+from workers.quant_sources.workspace_bridge import ProviderQuantWorkspaceBridge
 from workers.quant_workspace.intake import QuantWorkspaceError
 from workers.quant_workspace.service import DesktopQuantService
 from workers.quant_workspace.storage import FileQuantWorkspaceStore
@@ -123,6 +125,46 @@ def _idle_moomoo_service() -> MoomooConnectionService:
 
 def service_for(root: Path) -> DesktopQuantService:
     return DesktopQuantService(FileQuantWorkspaceStore(root))
+
+
+class FakeProviderTransport:
+    """An injected transport standing in for the approved yfinance one."""
+
+    provider_id = "fixture"
+
+    def __init__(self, result: HistoryPayload | Exception | None = None) -> None:
+        self.result = result if result is not None else self._default_payload()
+        self.calls: list[tuple[str, date, date]] = []
+
+    @staticmethod
+    def _default_payload() -> HistoryPayload:
+        return HistoryPayload(
+            provider_id="fixture",
+            symbol="RXRX",
+            currency="USD",
+            source_revision="rev-1",
+            bars=(
+                HistoryBar("2026-01-05", "100", "101", "99", "100", 1000),
+                HistoryBar("2026-01-06", "101", "102", "100", "101", 1100),
+            ),
+        )
+
+    def fetch_daily_history(
+        self, ticker: str, *, start: date, end: date
+    ) -> HistoryPayload:
+        self.calls.append((ticker, start, end))
+        if isinstance(self.result, Exception):
+            raise self.result
+        return self.result
+
+
+def bridge_for(
+    root: Path, transport: object | None = None
+) -> ProviderQuantWorkspaceBridge:
+    return ProviderQuantWorkspaceBridge(
+        FileQuantWorkspaceStore(root),
+        transport=transport if transport is not None else FakeProviderTransport(),  # type: ignore[arg-type]
+    )
 
 
 class DesktopQuantServiceTests(unittest.TestCase):
@@ -421,6 +463,124 @@ class DesktopQuantServiceTests(unittest.TestCase):
             self.assertEqual(caught.exception.code, "run_dataset_missing")
 
 
+class ProviderQuantWorkspaceBridgeTests(unittest.TestCase):
+    def test_fetch_persists_a_dataset_reachable_through_the_workspace_service(
+        self,
+    ) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory) / "quant"
+            receipt = bridge_for(root).fetch_dataset(
+                operator_id=OPERATOR_ID,
+                security_id=SECURITY_ID,
+                ticker="RXRX",
+                start=date(2026, 1, 5),
+                as_of_cutoff=date(2026, 1, 6),
+            )
+            dataset = receipt["dataset"]
+            assert isinstance(dataset, dict)
+            self.assertEqual(dataset["session_count"], 2)
+            self.assertEqual(dataset["currency"], "USD")
+            self.assertEqual(dataset["source_id"], "fixture")
+            self.assertNotIn("bars", dataset)
+
+            # A fresh service instance over the same directory stands in for a
+            # restarted worker: the dataset must be readable without the
+            # bridge that fetched it.
+            status = service_for(root).dataset_status(
+                operator_id=OPERATOR_ID, security_id=SECURITY_ID
+            )
+            self.assertEqual(status["dataset"], dataset)
+
+    def test_the_provider_declared_currency_is_used_exactly_as_returned(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory) / "quant"
+            transport = FakeProviderTransport(
+                HistoryPayload(
+                    provider_id="fixture",
+                    symbol="RXRX",
+                    currency="HKD",
+                    source_revision="rev-1",
+                    bars=(
+                        HistoryBar("2026-01-05", "100", "101", "99", "100", 1000),
+                        HistoryBar("2026-01-06", "101", "102", "100", "101", 1100),
+                    ),
+                )
+            )
+            receipt = bridge_for(root, transport).fetch_dataset(
+                operator_id=OPERATOR_ID,
+                security_id=SECURITY_ID,
+                ticker="RXRX",
+                start=date(2026, 1, 5),
+                as_of_cutoff=date(2026, 1, 6),
+            )
+            dataset = receipt["dataset"]
+            assert isinstance(dataset, dict)
+            self.assertEqual(dataset["currency"], "HKD")
+
+    def test_fetching_a_new_dataset_clears_the_previous_result(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory) / "quant"
+            service = service_for(root)
+            path = write_document(Path(directory), document())
+            service.import_dataset(
+                operator_id=OPERATOR_ID,
+                security_id=SECURITY_ID,
+                dataset_path=path,
+            )
+            service.run_analysis(
+                operator_id=OPERATOR_ID,
+                security_id=SECURITY_ID,
+                assumptions=ASSUMPTIONS,
+            )
+            self.assertIsNotNone(
+                service.latest_result(
+                    operator_id=OPERATOR_ID, security_id=SECURITY_ID
+                )
+            )
+
+            bridge_for(root).fetch_dataset(
+                operator_id=OPERATOR_ID,
+                security_id=SECURITY_ID,
+                ticker="RXRX",
+                start=date(2026, 1, 5),
+                as_of_cutoff=date(2026, 1, 6),
+            )
+
+            self.assertIsNone(
+                service_for(root).latest_result(
+                    operator_id=OPERATOR_ID, security_id=SECURITY_ID
+                )
+            )
+
+    def test_a_blocked_or_rejected_fetch_raises_a_reviewed_code(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory) / "quant"
+            with self.assertRaises(QuantWorkspaceError) as caught:
+                bridge_for(
+                    root,
+                    FakeProviderTransport(
+                        HistoryPayload(
+                            provider_id="fixture",
+                            symbol="OTHER",
+                            currency="USD",
+                            source_revision="rev-1",
+                            bars=(
+                                HistoryBar(
+                                    "2026-01-05", "100", "101", "99", "100", 1000
+                                ),
+                            ),
+                        )
+                    ),
+                ).fetch_dataset(
+                    operator_id=OPERATOR_ID,
+                    security_id=SECURITY_ID,
+                    ticker="RXRX",
+                    start=date(2026, 1, 5),
+                    as_of_cutoff=date(2026, 1, 5),
+                )
+            self.assertEqual(caught.exception.code, "fetch_provider_rejected")
+
+
 class DesktopQuantRouteTests(unittest.TestCase):
     def setUp(self) -> None:
         self._directory = TemporaryDirectory()
@@ -431,6 +591,7 @@ class DesktopQuantRouteTests(unittest.TestCase):
             service=_idle_moomoo_service(),
             control_token=self.token,
             quant_service=service_for(self.root / "quant"),
+            quant_provider_bridge=bridge_for(self.root / "quant"),
         )
         self.server.start()
         self.addCleanup(self.server.stop)
@@ -567,6 +728,97 @@ class DesktopQuantRouteTests(unittest.TestCase):
             {"error": "quant_request_invalid", "reason": "run_dataset_missing"},
         )
 
+    def test_fetch_route_requires_authorization(self) -> None:
+        status, payload = self.request(
+            "/v1/quant/dataset/fetch",
+            body={
+                "as_of_cutoff": "2026-01-06",
+                "operator_id": OPERATOR_ID,
+                "security_id": SECURITY_ID,
+                "start": "2026-01-05",
+                "ticker": "RXRX",
+            },
+            token="wrong-token",
+        )
+        self.assertEqual(status, 401)
+        self.assertEqual(payload, {"error": "desktop_control_unauthorized"})
+
+    def test_fetch_route_persists_a_dataset_the_dataset_route_then_reports(
+        self,
+    ) -> None:
+        status, receipt = self.request(
+            "/v1/quant/dataset/fetch",
+            body={
+                "as_of_cutoff": "2026-01-06",
+                "operator_id": OPERATOR_ID,
+                "security_id": SECURITY_ID,
+                "start": "2026-01-05",
+                "ticker": "RXRX",
+            },
+        )
+        self.assertEqual(status, 200)
+        assert isinstance(receipt, dict)
+        assert isinstance(receipt["dataset"], dict)
+        self.assertEqual(receipt["dataset"]["session_count"], 2)
+        self.assertNotIn("bars", receipt["dataset"])
+
+        status, status_payload = self.request(
+            f"/v1/quant/dataset?operator_id={OPERATOR_ID}&security_id={SECURITY_ID}"
+        )
+        self.assertEqual(status, 200)
+        assert isinstance(status_payload, dict)
+        self.assertEqual(status_payload["dataset"], receipt["dataset"])
+
+    def test_fetch_route_returns_a_bounded_error_code(self) -> None:
+        status, payload = self.request(
+            "/v1/quant/dataset/fetch",
+            body={
+                "as_of_cutoff": "2026-01-01",
+                "operator_id": OPERATOR_ID,
+                "security_id": SECURITY_ID,
+                "start": "2026-01-05",
+                "ticker": "RXRX",
+            },
+        )
+        self.assertEqual(status, 400)
+        self.assertEqual(
+            payload,
+            {"error": "quant_request_invalid", "reason": "fetch_provider_rejected"},
+        )
+
+    def test_fetch_route_reports_unavailable_without_a_provider_bridge(self) -> None:
+        server = DesktopControlServer(
+            service=_idle_moomoo_service(),
+            control_token=self.token,
+            quant_service=service_for(self.root / "quant-no-bridge"),
+        )
+        server.start()
+        self.addCleanup(server.stop)
+        request = urllib.request.Request(
+            f"{server.origin}/v1/quant/dataset/fetch",
+            data=json.dumps(
+                {
+                    "as_of_cutoff": "2026-01-06",
+                    "operator_id": OPERATOR_ID,
+                    "security_id": SECURITY_ID,
+                    "start": "2026-01-05",
+                    "ticker": "RXRX",
+                }
+            ).encode("utf-8"),
+            headers={
+                "Authorization": f"Bearer {self.token}",
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=10) as response:
+                status, payload = response.status, json.loads(response.read())
+        except urllib.error.HTTPError as error:
+            status, payload = error.code, json.loads(error.read())
+        self.assertEqual(status, 503)
+        self.assertEqual(payload, {"error": "quant_workspace_unavailable"})
+
     def test_quant_routes_reject_unexpected_fields(self) -> None:
         for path, body in (
             (
@@ -585,6 +837,17 @@ class DesktopQuantRouteTests(unittest.TestCase):
                     "operator_id": OPERATOR_ID,
                     "portfolio_value": "1",
                     "security_id": SECURITY_ID,
+                },
+            ),
+            (
+                "/v1/quant/dataset/fetch",
+                {
+                    "as_of_cutoff": "2026-01-06",
+                    "currency": "USD",
+                    "operator_id": OPERATOR_ID,
+                    "security_id": SECURITY_ID,
+                    "start": "2026-01-05",
+                    "ticker": "RXRX",
                 },
             ),
         ):

@@ -4,6 +4,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
+  fetchQuantDatasetAction,
   importQuantDatasetAction,
   runQuantAnalysisAction,
 } from "@/app/quant-actions";
@@ -235,6 +236,38 @@ export function QuantPanel({
             <Button disabled={!canImport} type="submit" variant="outline">
               Import dataset
             </Button>
+          </form>
+
+          <form action={fetchQuantDatasetAction} className="mt-4">
+            <input name="securityId" type="hidden" value={identity} />
+            <p className="text-xs text-muted-foreground">
+              Or fetch daily history for {ticker || "this security"} from the
+              approved provider. The ticker is looked up on the server from the
+              security directory; nothing you type here is trusted as a ticker.
+            </p>
+            <div className="mt-3 flex flex-wrap items-end gap-3">
+              <label className="text-sm">
+                <span className="font-medium">Start date</span>
+                <input
+                  className="mt-1 block rounded-md border border-border bg-transparent px-3 py-2 font-mono text-xs"
+                  name="start"
+                  required
+                  type="date"
+                />
+              </label>
+              <label className="text-sm">
+                <span className="font-medium">As-of cutoff</span>
+                <input
+                  className="mt-1 block rounded-md border border-border bg-transparent px-3 py-2 font-mono text-xs"
+                  name="asOfCutoff"
+                  required
+                  type="date"
+                />
+              </label>
+              <Button disabled={!canImport} type="submit" variant="outline">
+                Fetch from provider
+              </Button>
+            </div>
           </form>
         </section>
 

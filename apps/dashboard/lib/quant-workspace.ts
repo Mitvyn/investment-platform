@@ -112,6 +112,14 @@ const ERROR_MESSAGES: Record<string, string> = {
   dataset_split_uncovered:
     "A corporate action falls on a date the file does not trade into, so it could never be applied.",
   dataset_too_large: "That file is larger than this workspace accepts.",
+  fetch_provider_blocked:
+    "That provider's historical data is not enabled yet, so nothing was fetched.",
+  fetch_provider_rejected:
+    "The provider could not return usable history for that ticker and window, so nothing was changed.",
+  fetch_provider_unavailable:
+    "This desktop build has no approved provider connection configured, so nothing can be fetched.",
+  fetch_ticker_invalid: "That security has no ticker on record, so nothing could be fetched.",
+  fetch_window_invalid: "The start date and as-of cutoff must both be calendar dates written as YYYY-MM-DD.",
   quant_request_invalid: "That request was not in a form this workspace accepts.",
   quant_workspace_unavailable:
     "The local analysis service is not running, so datasets and analyses are unavailable.",
@@ -387,7 +395,7 @@ export function buildQuantWorkspaceView({
     return {
       ...base,
       headline:
-        "Import a daily price dataset for this security to begin. Nothing is fetched for you and no account data is used.",
+        "Import a daily price dataset for this security, or fetch one from the approved provider, to begin. No account data is used.",
       state: "no_dataset",
     };
   }

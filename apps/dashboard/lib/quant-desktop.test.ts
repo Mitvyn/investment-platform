@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   QuantDesktopError,
+  fetchQuantDataset,
   importQuantDataset,
   loadLatestQuantResult,
   loadQuantDatasetStatus,
@@ -231,6 +232,128 @@ test("import refuses a relative path before any request is made", async () => {
       assert.equal(error.code, "dataset_path_invalid");
       return true;
     },
+  );
+});
+
+test("fetch posts the operator, ticker, and window and returns the parsed receipt", async () => {
+  const { calls, fetcher } = recordingFetch(datasetStatus(receipt()));
+
+  const status = await fetchQuantDataset(
+    {
+      asOfCutoff: "2026-01-20",
+      operatorId: OPERATOR_ID,
+      securityId: SECURITY_ID,
+      start: "2025-01-06",
+      ticker: "frvo",
+    },
+    READY_ENVIRONMENT,
+    fetcher,
+  );
+
+  assert.equal(status.dataset?.source_id, "operator_local_csv");
+  assert.equal(calls[0].url, "http://127.0.0.1:60355/v1/quant/dataset/fetch");
+  assert.deepEqual(JSON.parse(String(calls[0].init?.body)), {
+    as_of_cutoff: "2026-01-20",
+    operator_id: OPERATOR_ID,
+    security_id: SECURITY_ID,
+    start: "2025-01-06",
+    ticker: "frvo",
+  });
+});
+
+test("fetch refuses a blank ticker before any request is made", async () => {
+  await assert.rejects(
+    fetchQuantDataset(
+      {
+        asOfCutoff: "2026-01-20",
+        operatorId: OPERATOR_ID,
+        securityId: SECURITY_ID,
+        start: "2025-01-06",
+        ticker: "   ",
+      },
+      READY_ENVIRONMENT,
+      async () => {
+        throw new Error("no request may be made for a blank ticker");
+      },
+    ),
+    (error: unknown) => {
+      assert.ok(error instanceof QuantDesktopError);
+      assert.equal(error.code, "fetch_ticker_invalid");
+      return true;
+    },
+  );
+});
+
+test("fetch refuses a non-ISO window date before any request is made", async () => {
+  for (const [start, asOfCutoff] of [
+    ["01/06/2025", "2026-01-20"],
+    ["2025-01-06", "next friday"],
+  ]) {
+    await assert.rejects(
+      fetchQuantDataset(
+        {
+          asOfCutoff,
+          operatorId: OPERATOR_ID,
+          securityId: SECURITY_ID,
+          start,
+          ticker: "FRVO",
+        },
+        READY_ENVIRONMENT,
+        async () => {
+          throw new Error("no request may be made for an invalid window");
+        },
+      ),
+      (error: unknown) => {
+        assert.ok(error instanceof QuantDesktopError);
+        assert.equal(error.code, "fetch_window_invalid");
+        return true;
+      },
+    );
+  }
+});
+
+test("fetch surfaces the worker's reviewed code on a provider rejection", async () => {
+  const { fetcher } = recordingFetch(
+    { error: "quant_request_invalid", reason: "fetch_provider_rejected" },
+    400,
+  );
+
+  await assert.rejects(
+    fetchQuantDataset(
+      {
+        asOfCutoff: "2026-01-20",
+        operatorId: OPERATOR_ID,
+        securityId: SECURITY_ID,
+        start: "2025-01-06",
+        ticker: "FRVO",
+      },
+      READY_ENVIRONMENT,
+      fetcher,
+    ),
+    (error: unknown) => {
+      assert.ok(error instanceof QuantDesktopError);
+      assert.equal(error.code, "fetch_provider_rejected");
+      return true;
+    },
+  );
+});
+
+test("fetch refuses a non-canonical identity before any request", async () => {
+  await assert.rejects(
+    fetchQuantDataset(
+      {
+        asOfCutoff: "2026-01-20",
+        operatorId: "not-a-uuid",
+        securityId: SECURITY_ID,
+        start: "2025-01-06",
+        ticker: "FRVO",
+      },
+      READY_ENVIRONMENT,
+      async () => {
+        throw new Error("no request may be made for an invalid identity");
+      },
+    ),
+    QuantDesktopError,
   );
 });
 

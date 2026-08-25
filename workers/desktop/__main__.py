@@ -16,6 +16,12 @@ from workers.desktop.research_capture_import import DesktopCaptureImportService
 from workers.desktop.research_notebook import DesktopResearchNotebook
 from workers.desktop.research_run import DesktopResearchRunService
 from workers.desktop.security_registry import DesktopSecurityRegistry
+from workers.market.client import YFinanceSettings
+from workers.quant_sources.live import (
+    YFinanceHistoryTransport,
+    yfinance_end_exclusive_policy,
+)
+from workers.quant_sources.workspace_bridge import ProviderQuantWorkspaceBridge
 from workers.quant_workspace.service import DesktopQuantService
 from workers.quant_workspace.storage import FileQuantWorkspaceStore
 from workers.moomoo_mcp.client_identity import MoomooMcpClientIdentityStore
@@ -237,6 +243,16 @@ def run(*, healthcheck: bool = False) -> int:
         research_notebook=DesktopResearchNotebook(_ticker_notebook_path()),
         quant_service=DesktopQuantService(
             FileQuantWorkspaceStore(_quant_workspace_root())
+        ),
+        # The only approved live history transport. Moomoo history has no
+        # verified endpoint and is not wired in here; see
+        # MOOMOO_HISTORY_BLOCKER in workers/quant_sources/live.py.
+        quant_provider_bridge=ProviderQuantWorkspaceBridge(
+            FileQuantWorkspaceStore(_quant_workspace_root()),
+            transport=YFinanceHistoryTransport(
+                YFinanceSettings(),
+                window_semantics=yfinance_end_exclusive_policy(),
+            ),
         ),
         research_capture_import_service=DesktopCaptureImportService(
             capture_repository,

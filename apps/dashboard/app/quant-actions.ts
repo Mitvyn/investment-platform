@@ -4,6 +4,7 @@ import { redirect } from "next/navigation";
 
 import {
   QuantDesktopError,
+  fetchQuantDataset,
   importQuantDataset,
   runQuantAnalysis,
 } from "../lib/quant-desktop";
@@ -61,11 +62,12 @@ async function authorizedRequest(formData: FormData) {
   if (securityId) query.set("security", securityId);
 
   const directory = await loadSecurityDirectory();
-  if (!directory.some((entry) => entry.securityId === securityId)) {
+  const entry = directory.find((candidate) => candidate.securityId === securityId);
+  if (entry === undefined) {
     query.set("quant_error", "workspace_identity_invalid");
     redirect(`/?${query.toString()}`);
   }
-  return { operatorId, query, securityId };
+  return { entry, operatorId, query, securityId };
 }
 
 function failureCode(error: unknown): string {
@@ -85,6 +87,26 @@ export async function importQuantDatasetAction(formData: FormData) {
     redirect(`/?${query.toString()}`);
   }
   query.set("quant", "dataset_imported");
+  redirect(`/?${query.toString()}`);
+}
+
+export async function fetchQuantDatasetAction(formData: FormData) {
+  const { entry, operatorId, query, securityId } = await authorizedRequest(formData);
+  // `authorizedRequest` already redirected if no directory entry matched, so
+  // `entry` is always present here; the assertion just states that to the
+  // type checker.
+  const ticker = entry!.ticker;
+
+  const start = String(formData.get("start") ?? "").trim();
+  const asOfCutoff = String(formData.get("asOfCutoff") ?? "").trim();
+
+  try {
+    await fetchQuantDataset({ asOfCutoff, operatorId, securityId, start, ticker });
+  } catch (error) {
+    query.set("quant_error", failureCode(error));
+    redirect(`/?${query.toString()}`);
+  }
+  query.set("quant", "dataset_fetched");
   redirect(`/?${query.toString()}`);
 }
 

@@ -33,7 +33,7 @@ from workers.quant_workspace.storage import FileQuantWorkspaceStore
 DATASET_RECEIPT_CONTRACT_VERSION = "quant_local_dataset_receipt.v1"
 
 
-def _dataset_receipt(dataset: PointInTimeDataset) -> dict[str, object]:
+def dataset_receipt(dataset: PointInTimeDataset) -> dict[str, object]:
     """What the browser may know about a dataset.
 
     Counts, dates, identities, and hashes. Never a bar, a price, or a row: the
@@ -100,7 +100,7 @@ class DesktopQuantService:
         )
         return {
             "contract_version": DATASET_RECEIPT_CONTRACT_VERSION,
-            "dataset": None if dataset is None else _dataset_receipt(dataset),
+            "dataset": None if dataset is None else dataset_receipt(dataset),
             "security_id": security_id,
         }
 
@@ -138,7 +138,7 @@ class DesktopQuantService:
         )
         return {
             "contract_version": DATASET_RECEIPT_CONTRACT_VERSION,
-            "dataset": _dataset_receipt(dataset),
+            "dataset": dataset_receipt(dataset),
             "security_id": security_id,
         }
 

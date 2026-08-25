@@ -316,6 +316,24 @@ def authorize_window_semantics(
     return registered
 
 
+@dataclass(frozen=True, slots=True)
+class LiveAcquisition:
+    """One checked provider fetch, and the exact rows its receipt was built from.
+
+    The receipt's own bar values have already been through Quant's Decimal
+    normalisation and no longer match the provider's declared text, so they
+    cannot be replayed into a ``quant_local_dataset.v1`` document and expected
+    to reproduce ``dataset.source_content_sha256``. ``bar_rows`` and
+    ``split_rows`` are the provider's declared values before that
+    normalisation, which is what a caller needing to persist a document
+    alongside the receipt must use instead.
+    """
+
+    dataset: PointInTimeDataset
+    bar_rows: tuple[dict[str, object], ...]
+    split_rows: tuple[dict[str, object], ...]
+
+
 class LiveQuantSource:
     """Turn one transport's daily history into one Quant point-in-time receipt.
 
@@ -334,9 +352,51 @@ class LiveQuantSource:
         ticker: str,
         security_id: str,
         as_of_cutoff: date,
-        currency: str,
         start: date,
+        currency: str | None = None,
     ) -> PointInTimeDataset:
+        return self._acquire(
+            ticker=ticker,
+            security_id=security_id,
+            as_of_cutoff=as_of_cutoff,
+            currency=currency,
+            start=start,
+        ).dataset
+
+    def acquire_with_rows(
+        self,
+        *,
+        ticker: str,
+        security_id: str,
+        as_of_cutoff: date,
+        start: date,
+        currency: str | None = None,
+    ) -> LiveAcquisition:
+        """Like :meth:`acquire`, but also returns the rows behind the receipt.
+
+        Only a caller that must persist a ``quant_local_dataset.v1`` document
+        alongside the receipt, so it can be reloaded and re-validated after a
+        restart, needs this. Every other caller should keep using
+        :meth:`acquire`.
+        """
+
+        return self._acquire(
+            ticker=ticker,
+            security_id=security_id,
+            as_of_cutoff=as_of_cutoff,
+            currency=currency,
+            start=start,
+        )
+
+    def _acquire(
+        self,
+        *,
+        ticker: str,
+        security_id: str,
+        as_of_cutoff: date,
+        currency: str | None,
+        start: date,
+    ) -> LiveAcquisition:
         normalized_ticker = ticker.strip().upper()
         if not normalized_ticker:
             raise TransportError("ticker is required")
@@ -376,7 +436,14 @@ class LiveQuantSource:
             raise TransportError(
                 f"transport returned a different symbol {payload.symbol!r}"
             )
-        if payload.currency != currency:
+        # A caller that already knows the currency it expects (for example,
+        # one replaying a receipt it validated before) may assert it here and
+        # have a mismatch refused. A caller with no independent currency of
+        # its own, such as a fresh provider fetch, passes none and simply
+        # takes the provider's own declared currency, which ``HistoryPayload``
+        # has already checked is a well-formed ISO 4217 code. Neither path
+        # ever assumes or defaults a currency.
+        if currency is not None and payload.currency != currency:
             raise TransportError(
                 f"transport currency {payload.currency!r} does not match the "
                 f"requested currency {currency!r}"
@@ -395,10 +462,10 @@ class LiveQuantSource:
                 bar_rows=bar_rows,
                 split_rows=split_rows,
             )
-            return acquire_point_in_time_dataset(
+            dataset = acquire_point_in_time_dataset(
                 security_id=security_id,
                 as_of_cutoff=as_of_cutoff,
-                currency=currency,
+                currency=payload.currency,
                 snapshot=snapshot,
             )
         except QuantContractError as error:
@@ -406,6 +473,9 @@ class LiveQuantSource:
                 f"{payload.provider_id} history cannot form a Quant receipt: "
                 f"{error}"
             ) from error
+        return LiveAcquisition(
+            dataset=dataset, bar_rows=bar_rows, split_rows=split_rows
+        )
 
 
 def _rows(
@@ -766,6 +836,7 @@ __all__ = [
     "authorize_window_semantics",
     "test_window_semantics_policy",
     "MOOMOO_PROVIDER_ID",
+    "LiveAcquisition",
     "LiveQuantSource",
     "MoomooHistoryTransport",
     "YFINANCE_PROVIDER_ID",

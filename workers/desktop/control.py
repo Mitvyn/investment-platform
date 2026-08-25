@@ -57,6 +57,7 @@ from workers.desktop.research_run import (
     DesktopResearchRunService,
 )
 from workers.desktop.security_registry import DesktopSecurityRegistry
+from workers.quant_sources.workspace_bridge import ProviderQuantWorkspaceBridge
 from workers.quant_workspace.intake import QuantWorkspaceError
 from workers.quant_workspace.service import DesktopQuantService
 from workers.moomoo_mcp.client_identity import (
@@ -1983,11 +1984,13 @@ class DesktopControlServer:
         research_capture_import_service: DesktopCaptureImportService | None = None,
         quant_service: DesktopQuantService | None = None,
         research_run_service: DesktopResearchRunService | None = None,
+        quant_provider_bridge: ProviderQuantWorkspaceBridge | None = None,
     ) -> None:
         if not control_token:
             raise ValueError("Desktop control token is required")
         self._service = service
         self._quant_service = quant_service
+        self._quant_provider_bridge = quant_provider_bridge
         self._research_capture_catalog = research_capture_catalog
         self._security_registry = security_registry
         self._research_notebook = research_notebook
@@ -2029,6 +2032,7 @@ class DesktopControlServer:
         research_capture_import_service = self._research_capture_import_service
         quant_service = self._quant_service
         research_run_service = self._research_run_service
+        quant_provider_bridge = self._quant_provider_bridge
         expected_token = self._control_token
 
         class Handler(BaseHTTPRequestHandler):
@@ -2311,6 +2315,7 @@ class DesktopControlServer:
                     "/v1/research/market-evidence/quote",
                     "/v1/research/market-evidence/history",
                     "/v1/quant/dataset/import",
+                    "/v1/quant/dataset/fetch",
                     "/v1/quant/runs",
                     "/v1/research/run/command",
                 }:
@@ -2470,6 +2475,43 @@ class DesktopControlServer:
                         200,
                         {"contract_version": "ticker_notebook_note.v1", **note},
                     )
+                    return
+                if self.path == "/v1/quant/dataset/fetch":
+                    if quant_provider_bridge is None:
+                        self._send_json(503, {"error": "quant_workspace_unavailable"})
+                        return
+                    try:
+                        required = {
+                            "operator_id",
+                            "security_id",
+                            "ticker",
+                            "start",
+                            "as_of_cutoff",
+                        }
+                        if set(body) != required:
+                            raise ValueError
+                        operator_id = str(uuid.UUID(str(body["operator_id"])))
+                        security_id = str(uuid.UUID(str(body["security_id"])))
+                        ticker = str(body["ticker"])
+                        start = date.fromisoformat(str(body["start"]))
+                        as_of_cutoff = date.fromisoformat(str(body["as_of_cutoff"]))
+                        payload: Mapping[str, object] = quant_provider_bridge.fetch_dataset(
+                            operator_id=operator_id,
+                            security_id=security_id,
+                            ticker=ticker,
+                            start=start,
+                            as_of_cutoff=as_of_cutoff,
+                        )
+                    except (ValueError, TypeError, QuantWorkspaceError) as error:
+                        self._send_json(
+                            400,
+                            {
+                                "error": "quant_request_invalid",
+                                "reason": getattr(error, "code", "quant_request_invalid"),
+                            },
+                        )
+                        return
+                    self._send_json(200, dict(payload))
                     return
                 if self.path in ("/v1/quant/dataset/import", "/v1/quant/runs"):
                     if quant_service is None:
