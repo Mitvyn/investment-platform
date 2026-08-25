@@ -1,11 +1,12 @@
 # Handover: QUANT-004 local provider-fetch path
 
-Isolated worktree, to be committed, not merged and not pushed.
+Originally isolated worktree. Integrated into `development` as `fcce828`;
+kept as implementation handover for the provider-fetch slice.
 
 ```text
-worktree: /Users/mwong/Personal/investment-platform-quant-provider
-branch:   feature/quant-provider-dataset
-base:     23d01af (development)
+source worktree: /Users/mwong/Personal/investment-platform-quant-provider
+source branch:   feature/quant-provider-dataset
+integrated commit: fcce828 on development
 ```
 
 ## Scope delivered
