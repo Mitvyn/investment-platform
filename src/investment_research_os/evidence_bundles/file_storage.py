@@ -19,6 +19,7 @@ identity, secret, filesystem archive path, provider payload, or prompt.
 
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import json
 import os
@@ -26,7 +27,8 @@ import uuid
 from datetime import UTC, date, datetime
 from pathlib import Path
 from tempfile import NamedTemporaryFile
-from typing import Any, Mapping
+from contextlib import contextmanager
+from typing import Any, Iterator, Mapping
 
 from investment_research_os.research_runs import (
     EligibilityCheck,
@@ -397,6 +399,33 @@ class FileEvidenceBundleRepository:
         self._root = root
 
     def save(self, bundle: EvidenceBundle) -> EvidenceBundle:
+        # The run-index claim and the bundle record are one transaction. Two
+        # concurrent saves of different bundles for one research run would
+        # otherwise both read an unclaimed index and both write, leaving a
+        # bundle record whose run is claimed by the other bundle.
+        with self._operator_lock(bundle.operator_id):
+            return self._save(bundle)
+
+    @contextmanager
+    def _operator_lock(self, operator_id: str) -> Iterator[None]:
+        root = self._operator_root(operator_id)
+        self._verify_ancestry(root)
+        root.mkdir(parents=True, exist_ok=True, mode=0o700)
+        os.chmod(root, 0o700)
+        self._verify_ancestry(root)
+        path = root / "save.lock"
+        if path.is_symlink():
+            raise LocalEvidenceBundleStorageError(
+                "evidence bundle lock must not be a symlink"
+            )
+        descriptor = os.open(path, os.O_CREAT | os.O_RDWR, 0o600)
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX)
+            yield
+        finally:
+            os.close(descriptor)
+
+    def _save(self, bundle: EvidenceBundle) -> EvidenceBundle:
         existing = self.get(bundle.operator_id, bundle.id)
         if existing is not None:
             if existing != bundle:
@@ -502,13 +531,34 @@ class FileEvidenceBundleRepository:
             key: payload,
         }
 
-    def _write(self, path: Path, record: Mapping[str, Any]) -> None:
-        if path.parent.is_symlink():
+    def _verify_ancestry(self, path: Path) -> None:
+        """Refuse a path any of whose segments below the root is a symlink.
+
+        Checking only the immediate parent leaves the operator directory free
+        to redirect every record under it somewhere outside the storage root.
+        Each segment from the root down to the file itself is checked, so a
+        redirect at any depth is refused rather than followed.
+        """
+
+        if self._root.is_symlink():
             raise LocalEvidenceBundleStorageError(
-                "evidence bundle directory must not be a symlink"
+                "evidence bundle storage root must not be a symlink"
             )
+        current = self._root
+        for segment in path.relative_to(self._root).parts:
+            current = current / segment
+            if current.is_symlink():
+                raise LocalEvidenceBundleStorageError(
+                    "evidence bundle path must not cross a symlink"
+                )
+
+    def _write(self, path: Path, record: Mapping[str, Any]) -> None:
+        self._verify_ancestry(path)
         path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         os.chmod(path.parent, 0o700)
+        # The directory only came into existence above, so ancestry is
+        # re-checked before anything is written into it.
+        self._verify_ancestry(path)
         body = json.dumps(record, sort_keys=True, separators=(",", ":")).encode()
         with NamedTemporaryFile(dir=path.parent, delete=False) as temporary:
             temporary.write(body)
@@ -531,7 +581,13 @@ class FileEvidenceBundleRepository:
         contract_version: str,
         key: str,
     ) -> Mapping[str, Any] | None:
-        if path.parent.is_symlink() or path.is_symlink() or not path.is_file():
+        try:
+            self._verify_ancestry(path)
+        except LocalEvidenceBundleStorageError:
+            # A redirected path holds no record of ours. Reads report absence
+            # rather than raising, matching how a missing record behaves.
+            return None
+        if not path.is_file():
             return None
         try:
             record = json.loads(path.read_text())

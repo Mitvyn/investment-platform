@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+import threading
 import unittest
 from datetime import UTC, date, datetime
 from pathlib import Path
@@ -387,6 +388,90 @@ class FileEvidenceBundleRepositoryTests(unittest.TestCase):
             self.assertEqual(os.stat(root).st_mode & 0o777, 0o700)
             self.assertEqual(os.stat(path.parent).st_mode & 0o777, 0o700)
             self.assertEqual(os.stat(path).st_mode & 0o777, 0o600)
+
+    def test_symlinked_operator_directory_is_never_read(self) -> None:
+        # Checking only the immediate parent would let a symlinked operator
+        # directory serve records from outside the storage root.
+        bundle = _bundle()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "bundles"
+            repository = FileEvidenceBundleRepository(root)
+            repository.save(bundle)
+            operator_root = root / bundle.operator_id
+            elsewhere = Path(directory) / "elsewhere"
+            operator_root.rename(elsewhere)
+            operator_root.symlink_to(elsewhere)
+            self.assertIsNone(repository.get(bundle.operator_id, bundle.id))
+            self.assertIsNone(
+                repository.get_for_run(bundle.operator_id, bundle.research_run_id)
+            )
+
+    def test_symlinked_operator_directory_is_never_written_through(self) -> None:
+        bundle = _bundle()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "bundles"
+            repository = FileEvidenceBundleRepository(root)
+            elsewhere = Path(directory) / "elsewhere"
+            elsewhere.mkdir()
+            (root / bundle.operator_id).symlink_to(elsewhere)
+            with self.assertRaises(LocalEvidenceBundleStorageError):
+                repository.save(bundle)
+            self.assertEqual(list(elsewhere.iterdir()), [])
+
+    def test_symlinked_bundle_directory_is_never_written_through(self) -> None:
+        bundle = _bundle()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "bundles"
+            repository = FileEvidenceBundleRepository(root)
+            elsewhere = Path(directory) / "elsewhere"
+            elsewhere.mkdir()
+            operator_root = root / bundle.operator_id
+            operator_root.mkdir(parents=True)
+            (operator_root / "bundles").symlink_to(elsewhere)
+            with self.assertRaises(LocalEvidenceBundleStorageError):
+                repository.save(bundle)
+            self.assertEqual(list(elsewhere.iterdir()), [])
+
+    def test_concurrent_saves_for_one_run_leave_no_orphaned_bundle(self) -> None:
+        # Two processes claiming one research run must resolve to exactly one
+        # bundle record. Without a lock around the claim and the write, both
+        # read an unclaimed index and both write.
+        research_run_id = str(uuid4())
+        first = _bundle(research_run_id=research_run_id)
+        second = _bundle(research_run_id=research_run_id)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "bundles"
+            repository = FileEvidenceBundleRepository(root)
+            barrier = threading.Barrier(2)
+            failures: list[BaseException] = []
+
+            def attempt(bundle: EvidenceBundle) -> None:
+                barrier.wait()
+                try:
+                    FileEvidenceBundleRepository(root).save(bundle)
+                except BaseException as error:  # noqa: BLE001
+                    failures.append(error)
+
+            workers = [
+                threading.Thread(target=attempt, args=(first,)),
+                threading.Thread(target=attempt, args=(second,)),
+            ]
+            for worker in workers:
+                worker.start()
+            for worker in workers:
+                worker.join(timeout=30)
+                self.assertFalse(worker.is_alive())
+
+            self.assertEqual(len(failures), 1)
+            self.assertIsInstance(failures[0], EvidenceBundleError)
+            stored = repository.get_for_run(OPERATOR_ID, research_run_id)
+            self.assertIsNotNone(stored)
+            records = sorted(
+                (root / OPERATOR_ID / "bundles").iterdir()
+            )
+            self.assertEqual(
+                [path.name for path in records], [f"{stored.id}.json"]
+            )
 
 
 if __name__ == "__main__":
