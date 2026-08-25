@@ -13,7 +13,12 @@ import threading
 import unittest
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from uuid import uuid4
 
+from investment_research_os.evidence_bundles.file_storage import (
+    FileEvidenceBundleRepository,
+    LocalEvidenceBundleStorageError,
+)
 from investment_research_os.research_runs.file_storage import (
     FileResearchRunRepository,
 )
@@ -36,6 +41,7 @@ ACCEPTED_AT = datetime(2026, 5, 7, 3, tzinfo=UTC)
 NOW = datetime(2026, 5, 7, 4, tzinfo=UTC)
 SEC_USER_AGENT = "Investment Research OS research@example.com"
 WORKER_ID = "desktop-local-worker"
+DEFAULT_BUNDLE_REPOSITORY = object()
 
 
 class MovableClock:
@@ -80,11 +86,18 @@ class LocalResearchRunCommandEndToEndTests(unittest.TestCase):
         captures,
         clock: MovableClock,
         diagnostics=None,
+        evidence_bundles=DEFAULT_BUNDLE_REPOSITORY,
     ):
+        # `evidence_bundles=None` composes the executor with no durable local
+        # Evidence Bundle store, which is how the path behaved before this
+        # slice and must still block honestly.
+        if evidence_bundles is DEFAULT_BUNDLE_REPOSITORY:
+            evidence_bundles = FileEvidenceBundleRepository(root / "bundles")
         return compose_local_research_command_executor(
             worker_id=WORKER_ID,
             commands=commands,
             research_run_repository=FileResearchRunRepository(root / "runs"),
+            evidence_bundle_repository=evidence_bundles,
             capture_repository=captures,
             ticker=PLATFORM_CASE.display_symbol,
             trusted_issuer_hosts=PLATFORM_CASE.issuer_trusted_hosts,
@@ -138,17 +151,21 @@ class LocalResearchRunCommandEndToEndTests(unittest.TestCase):
 
         self.assertEqual(
             tuple(outcome.status for outcome in outcomes),
-            ("checkpointed", "blocked"),
+            ("checkpointed", "checkpointed", "blocked"),
         )
         self.assertEqual(outcomes[1].stage, "evidence_bundle")
+        self.assertEqual(outcomes[2].stage, "valuation_snapshot")
         self.assertEqual(
-            outcomes[1].blocking_reason_codes,
-            LOCAL_STAGE_BLOCKING_REASONS["evidence_bundle"],
+            outcomes[2].blocking_reason_codes,
+            LOCAL_STAGE_BLOCKING_REASONS["valuation_snapshot"],
         )
         self.assertEqual(receipt.command_state, "blocked")
         self.assertNotEqual(receipt.command_state, "completed")
         self.assertEqual(receipt.research_run_id, outcomes[0].artifact_id)
-        self.assertEqual(progress["completed_stages"], ["research_run"])
+        self.assertEqual(
+            progress["completed_stages"],
+            ["research_run", "evidence_bundle"],
+        )
         self.assertIsNotNone(run)
         self.assertEqual(run.security_id, persisted.security_id)
         self.assertEqual(run.as_of_cutoff, persisted.as_of_cutoff)
@@ -169,6 +186,8 @@ class LocalResearchRunCommandEndToEndTests(unittest.TestCase):
         self.assertEqual(
             events,
             (
+                "command_claimed",
+                "stage_checkpointed",
                 "command_claimed",
                 "stage_checkpointed",
                 "command_claimed",
@@ -213,9 +232,13 @@ class LocalResearchRunCommandEndToEndTests(unittest.TestCase):
         self.assertEqual(first.status, "checkpointed")
         self.assertEqual(restarted_progress["completed_stages"], ["research_run"])
         self.assertEqual(restarted_progress["attempt_number"], 1)
-        self.assertEqual(second.status, "blocked")
+        self.assertEqual(second.status, "checkpointed")
         self.assertEqual(replayed_command.command_id, command.command_id)
-        self.assertEqual(third.status, "idle")
+        # The replayed command is the same one, so the third pass carries it to
+        # the first boundary that has no local implementation instead of
+        # starting anything new.
+        self.assertEqual(third.status, "blocked")
+        self.assertEqual(third.stage, "valuation_snapshot")
         self.assertEqual(len(run_files), 1)
         self.assertEqual(len(command_files), 1)
 
@@ -355,6 +378,221 @@ class LocalResearchRunCommandEndToEndTests(unittest.TestCase):
             self.assertNotIn(forbidden, serialized)
 
     def test_execution_leaves_no_worker_thread_residue(self) -> None:
+        clock = MovableClock(NOW)
+        before = {thread.name for thread in threading.enumerate()}
+        with tempfile.TemporaryDirectory() as directory:
+            root, source_request, captures, persisted = self._fixture(directory, clock)
+            commands = self._commands(root, source_request.operator_id, clock)
+            self._enqueue(commands, persisted)
+
+            self._executor(root, commands, captures, clock).run_bounded(max_stages=6)
+
+        self.assertEqual(
+            {thread.name for thread in threading.enumerate()} - before,
+            set(),
+        )
+
+    def test_evidence_bundle_is_bound_to_the_exact_research_run(self) -> None:
+        clock = MovableClock(NOW)
+        with tempfile.TemporaryDirectory() as directory:
+            root, source_request, captures, persisted = self._fixture(directory, clock)
+            commands = self._commands(root, source_request.operator_id, clock)
+            command = self._enqueue(commands, persisted)
+            bundles = FileEvidenceBundleRepository(root / "bundles")
+
+            outcomes = self._executor(
+                root,
+                commands,
+                captures,
+                clock,
+                evidence_bundles=bundles,
+            ).run_bounded(max_stages=6)
+
+            receipt = commands.get(command.command_id)
+            run_id = outcomes[0].artifact_id
+            bundle = bundles.get(source_request.operator_id, outcomes[1].artifact_id)
+            by_run = bundles.get_for_run(source_request.operator_id, run_id)
+
+        self.assertEqual(outcomes[1].status, "checkpointed")
+        self.assertIsNotNone(bundle)
+        self.assertEqual(bundle, by_run)
+        self.assertEqual(bundle.research_run_id, run_id)
+        self.assertEqual(bundle.operator_id, source_request.operator_id)
+        self.assertEqual(bundle.security_id, persisted.security_id)
+        self.assertEqual(bundle.as_of_cutoff, persisted.as_of_cutoff)
+        self.assertEqual(len(bundle.content_hash), 64)
+        self.assertTrue(bundle.manifest)
+        # A stage that cannot reach an approved valuation source stops there.
+        # It never reports the command complete.
+        self.assertEqual(receipt.command_state, "blocked")
+        self.assertNotEqual(receipt.command_state, "completed")
+
+    def test_evidence_bundle_survives_restart_without_duplication(self) -> None:
+        clock = MovableClock(NOW)
+        with tempfile.TemporaryDirectory() as directory:
+            root, source_request, captures, persisted = self._fixture(directory, clock)
+            commands = self._commands(root, source_request.operator_id, clock)
+            command = self._enqueue(commands, persisted)
+            first = self._executor(root, commands, captures, clock).run_bounded(
+                max_stages=2
+            )
+
+            clock.advance(30)
+            restarted_commands = self._commands(root, source_request.operator_id, clock)
+            restarted_captures = FilePrimarySourceCaptureRepository(root / "captures")
+            reloaded = FileEvidenceBundleRepository(root / "bundles").get(
+                source_request.operator_id,
+                first[1].artifact_id,
+            )
+            replayed_command = self._enqueue(restarted_commands, persisted)
+            second = self._executor(
+                root,
+                restarted_commands,
+                restarted_captures,
+                clock,
+            ).run_bounded(max_stages=2)
+            progress = restarted_commands.progress(command.command_id)
+            bundle_records = sorted(
+                path.name for path in (root / "bundles").rglob("*.json")
+            )
+
+        self.assertEqual(replayed_command.command_id, command.command_id)
+        self.assertIsNotNone(reloaded)
+        self.assertEqual(reloaded.research_run_id, first[0].artifact_id)
+        self.assertEqual(
+            progress["completed_stages"],
+            ["research_run", "evidence_bundle"],
+        )
+        self.assertEqual(second[0].status, "blocked")
+        self.assertEqual(second[0].stage, "valuation_snapshot")
+        self.assertEqual(
+            bundle_records,
+            sorted(
+                [
+                    f"{first[1].artifact_id}.json",
+                    f"{first[0].artifact_id}.json",
+                ]
+            ),
+        )
+
+    def test_replayed_evidence_bundle_stage_reuses_one_bundle(self) -> None:
+        clock = MovableClock(NOW)
+        with tempfile.TemporaryDirectory() as directory:
+            root, source_request, captures, persisted = self._fixture(directory, clock)
+            commands = self._commands(root, source_request.operator_id, clock)
+            self._enqueue(commands, persisted)
+            bundles = FileEvidenceBundleRepository(root / "bundles")
+            executor = self._executor(
+                root,
+                commands,
+                captures,
+                clock,
+                evidence_bundles=bundles,
+            )
+            first = executor.run_bounded(max_stages=2)
+            run_id = first[0].artifact_id
+            bundle = bundles.get_for_run(source_request.operator_id, run_id)
+
+            # Re-enqueueing the same capture triple resolves to the same
+            # command, and running it again must resolve to the identical
+            # immutable bundle rather than materialising a second one.
+            self._enqueue(commands, persisted)
+            second = executor.run_bounded(max_stages=2)
+            replayed = bundles.get_for_run(source_request.operator_id, run_id)
+            records = sorted(
+                path.name
+                for path in (root / "bundles").rglob("*.json")
+            )
+
+        self.assertEqual(first[1].status, "checkpointed")
+        self.assertIsNotNone(bundle)
+        self.assertEqual(bundle, replayed)
+        self.assertEqual(second[0].status, "blocked")
+        self.assertEqual(second[0].stage, "valuation_snapshot")
+        self.assertEqual(
+            records,
+            sorted([f"{bundle.id}.json", f"{run_id}.json"]),
+        )
+
+    def test_another_operator_cannot_read_the_local_bundle(self) -> None:
+        clock = MovableClock(NOW)
+        foreign_operator = str(uuid4())
+        with tempfile.TemporaryDirectory() as directory:
+            root, source_request, captures, persisted = self._fixture(directory, clock)
+            commands = self._commands(root, source_request.operator_id, clock)
+            self._enqueue(commands, persisted)
+            bundles = FileEvidenceBundleRepository(root / "bundles")
+            outcomes = self._executor(
+                root,
+                commands,
+                captures,
+                clock,
+                evidence_bundles=bundles,
+            ).run_bounded(max_stages=2)
+            run_id = outcomes[0].artifact_id
+            bundle_id = outcomes[1].artifact_id
+
+        self.assertNotEqual(foreign_operator, source_request.operator_id)
+        with tempfile.TemporaryDirectory() as directory:
+            isolated = FileEvidenceBundleRepository(Path(directory) / "bundles")
+            self.assertIsNone(isolated.get(foreign_operator, bundle_id))
+            self.assertIsNone(isolated.get_for_run(foreign_operator, run_id))
+
+    def test_tampered_bundle_record_fails_the_stage_rather_than_lying(self) -> None:
+        clock = MovableClock(NOW)
+        with tempfile.TemporaryDirectory() as directory:
+            root, source_request, captures, persisted = self._fixture(directory, clock)
+            commands = self._commands(root, source_request.operator_id, clock)
+            self._enqueue(commands, persisted)
+            bundles = FileEvidenceBundleRepository(root / "bundles")
+            outcomes = self._executor(
+                root,
+                commands,
+                captures,
+                clock,
+                evidence_bundles=bundles,
+            ).run_bounded(max_stages=2)
+            path = (
+                root
+                / "bundles"
+                / source_request.operator_id
+                / "bundles"
+                / f"{outcomes[1].artifact_id}.json"
+            )
+            record = json.loads(path.read_text())
+            record["evidence_bundle"]["security_id"] = str(uuid4())
+            path.write_text(json.dumps(record))
+            with self.assertRaises(LocalEvidenceBundleStorageError):
+                bundles.get(source_request.operator_id, outcomes[1].artifact_id)
+
+    def test_without_a_local_bundle_store_the_path_still_blocks_honestly(self) -> None:
+        clock = MovableClock(NOW)
+        with tempfile.TemporaryDirectory() as directory:
+            root, source_request, captures, persisted = self._fixture(directory, clock)
+            commands = self._commands(root, source_request.operator_id, clock)
+            command = self._enqueue(commands, persisted)
+
+            outcomes = self._executor(
+                root,
+                commands,
+                captures,
+                clock,
+                evidence_bundles=None,
+            ).run_bounded(max_stages=6)
+            receipt = commands.get(command.command_id)
+
+        self.assertEqual(
+            tuple(outcome.status for outcome in outcomes),
+            ("checkpointed", "blocked"),
+        )
+        self.assertEqual(outcomes[1].stage, "evidence_bundle")
+        self.assertEqual(
+            outcomes[1].blocking_reason_codes,
+            LOCAL_STAGE_BLOCKING_REASONS["evidence_bundle"],
+        )
+        self.assertEqual(receipt.command_state, "blocked")
+
+    def test_bundle_stage_leaves_no_worker_thread_residue(self) -> None:
         clock = MovableClock(NOW)
         before = {thread.name for thread in threading.enumerate()}
         with tempfile.TemporaryDirectory() as directory:

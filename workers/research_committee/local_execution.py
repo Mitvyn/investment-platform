@@ -32,7 +32,10 @@ from workers.primary_sources.storage import (
 )
 
 from .capture_research_run import AcceptedCaptureSecurityContext
-from .composition import compose_accepted_capture_research_run_stage
+from .composition import (
+    compose_accepted_capture_research_run_stage,
+    compose_dynamic_persistent_evidence_bundle_stage,
+)
 from .local_commands import FileResearchRunCommandStore
 from .storage import STAGES
 from .worker import (
@@ -361,6 +364,27 @@ class LocalResearchCommandExecutor:
             self._diagnostics.record(event, **fields)
 
 
+class DeclaredTrustedIssuerHostRegistry:
+    """Serves the operator-declared trusted issuer hosts for local execution.
+
+    The hosted registry keys hosts by security and workflow version because it
+    serves many configurations at once. The local executor is composed for one
+    operator with one declared host list, exactly as the offline acceptance CLI
+    requires, so resolving is a pass-through. The declaration is still checked
+    for emptiness here rather than assumed, because an empty list would let the
+    evidence source treat any host as trusted.
+    """
+
+    def __init__(self, hosts: tuple[str, ...]) -> None:
+        if not hosts or any(not str(host).strip() for host in hosts):
+            raise LocalExecutionError("trusted issuer hosts are required")
+        self._hosts = tuple(str(host).strip() for host in hosts)
+
+    def resolve(self, research_run: Any) -> tuple[str, ...]:
+        del research_run  # One declared list covers this operator's captures.
+        return self._hosts
+
+
 def compose_local_research_command_executor(
     *,
     worker_id: str,
@@ -371,10 +395,17 @@ def compose_local_research_command_executor(
     trusted_issuer_hosts: tuple[str, ...],
     sec_user_agent: str,
     clock: Callable[[], datetime],
+    evidence_bundle_repository: Any | None = None,
     diagnostics: LocalExecutionDiagnostics | None = None,
     heartbeat_interval_seconds: float = 60.0,
 ) -> LocalResearchCommandExecutor:
-    """Compose the only locally executable stage plus its blocked boundaries."""
+    """Compose the locally executable stages plus their blocked boundaries.
+
+    `evidence_bundle_repository` is optional. Without a durable local Evidence
+    Bundle store the `evidence_bundle` stage is not composed at all, and the
+    command records the same explicit block it recorded before that store
+    existed. Nothing is ever half-executed to fill the gap.
+    """
 
     research_run_stage = compose_accepted_capture_research_run_stage(
         research_run_repository=research_run_repository,
@@ -387,10 +418,28 @@ def compose_local_research_command_executor(
         sec_user_agent=sec_user_agent,
         clock=clock,
     )
+    stages: dict[str, ResearchRunStage] = {"research_run": research_run_stage}
+    if evidence_bundle_repository is not None:
+        # The stage resolves the Research Run itself and refuses any run whose
+        # operator, security, cutoff, or workflow version differs from the
+        # claim, so the bundle can only ever bind to the exact capture-bound
+        # run this command already produced. The evidence itself is replayed
+        # from that accepted capture: no provider, model, or network client is
+        # constructed here.
+        stages["evidence_bundle"] = compose_dynamic_persistent_evidence_bundle_stage(
+            research_run_repository=research_run_repository,
+            evidence_bundle_repository=evidence_bundle_repository,
+            capture_repository=capture_repository,
+            trusted_issuer_host_registry=DeclaredTrustedIssuerHostRegistry(
+                trusted_issuer_hosts
+            ),
+            sec_user_agent=sec_user_agent,
+            clock=clock,
+        )
     return LocalResearchCommandExecutor(
         worker_id=worker_id,
         commands=commands,
-        stages={"research_run": research_run_stage},
+        stages=stages,
         diagnostics=diagnostics,
         heartbeat_interval_seconds=heartbeat_interval_seconds,
     )
@@ -401,6 +450,7 @@ def default_local_capture_root(repository_root: Path) -> Path:
 
 
 __all__ = [
+    "DeclaredTrustedIssuerHostRegistry",
     "EmbeddedPlanSecurityContextResolver",
     "LOCAL_STAGE_BLOCKING_REASONS",
     "LocalExecutionDiagnostics",
