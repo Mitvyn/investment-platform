@@ -9,6 +9,8 @@ test("ticker workspace renders canonical command progress when available", () =>
   );
 
   assert.match(page, /loadResearchRunCommandProgress/);
+  assert.match(page, /research_run_local_command_receipt\.v1/);
+  assert.match(page, /Local execution persisted the Research Run and evidence bundle/);
   assert.match(page, /presentResearchRunCommandProgress/);
   assert.match(
     page,

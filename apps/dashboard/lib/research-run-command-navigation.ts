@@ -16,9 +16,13 @@ export function researchRunCommandNavigation(
   elapsedMilliseconds = 0,
   contractVersion:
     | "research_run_command_receipt.v1"
-    | "research_run_command_receipt.v2" = "research_run_command_receipt.v2",
+    | "research_run_command_receipt.v2"
+    | "research_run_local_command_receipt.v1" = "research_run_command_receipt.v2",
 ): ResearchRunCommandNavigation {
-  if (contractVersion === "research_run_command_receipt.v1") {
+  if (
+    contractVersion === "research_run_command_receipt.v1" ||
+    contractVersion === "research_run_local_command_receipt.v1"
+  ) {
     return { kind: "stop" };
   }
   if (state === "completed" && researchRunId) {

@@ -4,11 +4,16 @@ import { redirect } from "next/navigation";
 
 import { enqueueResearchRunCommand } from "../lib/research-run-launcher";
 import {
+  enqueueLocalResearchRunCommand,
+  isLocalResearchRuntimeReady,
+} from "../lib/research-run-local";
+import {
   buildResearchRequestFromAcceptedCapture,
   parseAcceptedResearchCaptureSelection,
   resolveAcceptedResearchCapture,
 } from "../lib/research-desktop";
 import { createClient } from "../lib/supabase/server";
+import { loadSecurityDirectory } from "../lib/securities";
 
 export async function launchResearchRun(formData: FormData) {
   const supabase = await createClient();
@@ -38,14 +43,30 @@ export async function launchResearchRun(formData: FormData) {
       securityId,
       operatorFocus,
     );
-    const receipt = await enqueueResearchRunCommand(
-      supabase,
-      claims,
-      request,
-      preparedCapture,
-      new Date(),
-    );
-    commandId = receipt.command_id;
+    if (isLocalResearchRuntimeReady()) {
+      const security = (await loadSecurityDirectory()).find(
+        (entry) => entry.securityId === securityId,
+      );
+      if (!security) throw new Error("Research Run security is unavailable");
+      const local = await enqueueLocalResearchRunCommand({
+        operatorId,
+        securityId,
+        ticker: security.ticker,
+        request,
+        preparedCapture,
+        now: new Date(),
+      });
+      commandId = local.receipt.command_id;
+    } else {
+      const receipt = await enqueueResearchRunCommand(
+        supabase,
+        claims,
+        request,
+        preparedCapture,
+        new Date(),
+      );
+      commandId = receipt.command_id;
+    }
   } catch (error) {
     const errorCode = error instanceof Error &&
       /selected accepted capture is unavailable/.test(error.message)

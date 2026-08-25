@@ -2,6 +2,11 @@ import {
   createResearchRunCommandLoader,
   type ResearchRunCommandRow,
 } from "./research-run-command-loader";
+import {
+  isLocalResearchRuntimeReady,
+  loadLocalResearchRunCommand,
+  type LocalResearchRunCommandReceipt,
+} from "./research-run-local";
 import { createClient } from "./supabase/server";
 
 const UUID_PATTERN =
@@ -28,9 +33,16 @@ const loadFromRows = createResearchRunCommandLoader(
 export async function loadResearchRunCommand(
   operatorId: string,
   commandId: string,
-) {
+): Promise<
+  | Awaited<ReturnType<typeof loadFromRows>>
+  | LocalResearchRunCommandReceipt
+  | null
+> {
   if (!UUID_PATTERN.test(operatorId) || !UUID_PATTERN.test(commandId)) {
     return null;
+  }
+  if (isLocalResearchRuntimeReady()) {
+    return loadLocalResearchRunCommand(operatorId, commandId);
   }
   return loadFromRows(operatorId, commandId);
 }

@@ -418,6 +418,12 @@ export default async function TickerWorkspace({
   const historicalResearchCommand =
     visibleResearchCommand?.contract_version ===
     "research_run_command_receipt.v1";
+  const localResearchCommand =
+    visibleResearchCommand?.contract_version ===
+    "research_run_local_command_receipt.v1";
+  const currentResearchCommand =
+    visibleResearchCommand?.contract_version === "research_run_command_receipt.v2" ||
+    localResearchCommand;
   let researchCommandTitle = "";
   let researchCommandDescription =
     "Command state is persisted in the authenticated research ledger.";
@@ -428,12 +434,14 @@ export default async function TickerWorkspace({
   } else if (visibleResearchCommand?.state === "blocked") {
     researchCommandTitle = "Launch blocked";
     researchCommandDescription =
-      "No evidence, market, or model execution was started.";
+      localResearchCommand
+        ? "Local execution persisted the Research Run and evidence bundle, then stopped at the approved valuation boundary."
+        : "No evidence, market, or model execution was started.";
   } else if (visibleResearchCommand) {
     researchCommandTitle = `Research command ${visibleResearchCommand.state}`;
   }
   const researchCommandProgress =
-    visibleResearchCommand?.contract_version === "research_run_command_receipt.v2"
+    currentResearchCommand
     ? await loadResearchRunCommandProgress(
         operatorId,
         visibleResearchCommand.command_id,

@@ -13,7 +13,8 @@ export function ResearchRunCommandPoller({
 }: {
   contractVersion:
     | "research_run_command_receipt.v1"
-    | "research_run_command_receipt.v2";
+    | "research_run_command_receipt.v2"
+    | "research_run_local_command_receipt.v1";
   researchRunId: string | null;
   state: ResearchRunCommandState;
 }) {

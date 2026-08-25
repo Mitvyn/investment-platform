@@ -30,6 +30,9 @@ test("dashboard exposes an authenticated fixed-contract Research Run launcher", 
   assert.match(page, /blocking_reason_codes/);
   assert.match(actions, /auth\.getClaims\(\)/);
   assert.match(actions, /enqueueResearchRunCommand/);
+  assert.match(actions, /enqueueLocalResearchRunCommand/);
+  assert.match(actions, /isLocalResearchRuntimeReady/);
+  assert.match(actions, /loadSecurityDirectory/);
   assert.match(actions, /parseAcceptedResearchCaptureSelection/);
   assert.match(actions, /resolveAcceptedResearchCapture/);
   assert.match(actions, /formData\.get\("captureSelection"\)/);

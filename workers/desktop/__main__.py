@@ -14,6 +14,7 @@ from workers.desktop.control import DesktopControlServer, MoomooConnectionServic
 from workers.desktop.research import DesktopResearchCaptureCatalog
 from workers.desktop.research_capture_import import DesktopCaptureImportService
 from workers.desktop.research_notebook import DesktopResearchNotebook
+from workers.desktop.research_run import DesktopResearchRunService
 from workers.desktop.security_registry import DesktopSecurityRegistry
 from workers.quant_workspace.service import DesktopQuantService
 from workers.quant_workspace.storage import FileQuantWorkspaceStore
@@ -150,6 +151,22 @@ def _mcp_diagnostics_path(
     return Path.cwd() / "data" / "moomoo-diagnostics.json"
 
 
+def _local_research_storage_path(
+    name: str,
+    *,
+    packaged: bool = bool(getattr(sys, "frozen", False)),
+) -> Path:
+    if packaged:
+        return (
+            Path.home()
+            / "Library"
+            / "Application Support"
+            / "Investment Research OS"
+            / name
+        )
+    return Path.cwd() / "data" / name
+
+
 def run(*, healthcheck: bool = False) -> int:
     if healthcheck:
         print(
@@ -177,6 +194,9 @@ def run(*, healthcheck: bool = False) -> int:
     signal.signal(signal.SIGTERM, request_stop)
 
     control_token = secrets.token_urlsafe(32)
+    capture_repository = FilePrimarySourceCaptureRepository(
+        _research_capture_root(os.environ)
+    )
     control_server = DesktopControlServer(
         control_token=control_token,
         service=MoomooConnectionService(
@@ -211,7 +231,7 @@ def run(*, healthcheck: bool = False) -> int:
             ),
         ),
         research_capture_catalog=DesktopResearchCaptureCatalog(
-            FilePrimarySourceCaptureRepository(_research_capture_root(os.environ))
+            capture_repository
         ),
         security_registry=DesktopSecurityRegistry(_security_registry_path()),
         research_notebook=DesktopResearchNotebook(_ticker_notebook_path()),
@@ -219,7 +239,20 @@ def run(*, healthcheck: bool = False) -> int:
             FileQuantWorkspaceStore(_quant_workspace_root())
         ),
         research_capture_import_service=DesktopCaptureImportService(
-            FilePrimarySourceCaptureRepository(_research_capture_root(os.environ)),
+            capture_repository,
+            clock=lambda: datetime.now(UTC),
+        ),
+        research_run_service=DesktopResearchRunService(
+            capture_repository=capture_repository,
+            command_root=_local_research_storage_path("research-run-commands"),
+            research_run_root=_local_research_storage_path("research-runs"),
+            evidence_bundle_root=_local_research_storage_path("evidence-bundles"),
+            sec_user_agent=(
+                os.environ.get(
+                    "SEC_USER_AGENT",
+                    "Investment Research OS local@example.com",
+                ).strip()
+            ),
             clock=lambda: datetime.now(UTC),
         ),
     )

@@ -51,6 +51,11 @@ from workers.desktop.research_notebook import (
     DesktopResearchNotebook,
     TickerNotebookError,
 )
+from workers.desktop.research_run import (
+    DesktopResearchRunError,
+    DesktopResearchRunRequest,
+    DesktopResearchRunService,
+)
 from workers.desktop.security_registry import DesktopSecurityRegistry
 from workers.quant_workspace.intake import QuantWorkspaceError
 from workers.quant_workspace.service import DesktopQuantService
@@ -1977,6 +1982,7 @@ class DesktopControlServer:
         research_notebook: DesktopResearchNotebook | None = None,
         research_capture_import_service: DesktopCaptureImportService | None = None,
         quant_service: DesktopQuantService | None = None,
+        research_run_service: DesktopResearchRunService | None = None,
     ) -> None:
         if not control_token:
             raise ValueError("Desktop control token is required")
@@ -1986,6 +1992,7 @@ class DesktopControlServer:
         self._security_registry = security_registry
         self._research_notebook = research_notebook
         self._research_capture_import_service = research_capture_import_service
+        self._research_run_service = research_run_service
         self._control_token = control_token
         self._server = ThreadingHTTPServer(("127.0.0.1", 0), self._handler_type())
         self._thread: threading.Thread | None = None
@@ -2021,6 +2028,7 @@ class DesktopControlServer:
         research_notebook = self._research_notebook
         research_capture_import_service = self._research_capture_import_service
         quant_service = self._quant_service
+        research_run_service = self._research_run_service
         expected_token = self._control_token
 
         class Handler(BaseHTTPRequestHandler):
@@ -2164,6 +2172,41 @@ class DesktopControlServer:
                         },
                     )
                     return
+                if parsed.path == "/v1/research/run/command":
+                    if research_run_service is None:
+                        self._send_json(
+                            503,
+                            {"error": "research_run_service_unavailable"},
+                        )
+                        return
+                    try:
+                        query = parse_qs(parsed.query, keep_blank_values=True)
+                        if set(query) != {"operator_id", "command_id"} or any(
+                            len(values) != 1 or not values[0]
+                            for values in query.values()
+                        ):
+                            raise ValueError
+                        response = research_run_service.load(
+                            operator_id=query["operator_id"][0],
+                            command_id=query["command_id"][0],
+                        )
+                    except DesktopResearchRunError as error:
+                        self._send_json(400, {"error": error.code})
+                        return
+                    except (TypeError, ValueError):
+                        self._send_json(
+                            400,
+                            {"error": "research_run_request_invalid"},
+                        )
+                        return
+                    if response is None:
+                        self._send_json(
+                            404,
+                            {"error": "research_run_command_unavailable"},
+                        )
+                        return
+                    self._send_json(200, response)
+                    return
                 if parsed.path == "/v1/research/market-evidence/quote":
                     try:
                         query = parse_qs(parsed.query, keep_blank_values=True)
@@ -2269,6 +2312,7 @@ class DesktopControlServer:
                     "/v1/research/market-evidence/history",
                     "/v1/quant/dataset/import",
                     "/v1/quant/runs",
+                    "/v1/research/run/command",
                 }:
                     self._send_json(404, {"error": "desktop_control_not_found"})
                     return
@@ -2465,6 +2509,66 @@ class DesktopControlServer:
                         )
                         return
                     self._send_json(200, dict(payload))
+                if self.path == "/v1/research/run/command":
+                    if research_run_service is None:
+                        self._send_json(
+                            503,
+                            {"error": "research_run_service_unavailable"},
+                        )
+                        return
+                    try:
+                        expected_fields = {
+                            "operator_id",
+                            "security_id",
+                            "ticker",
+                            "question_type_version",
+                            "workflow_config_version",
+                            "as_of_cutoff",
+                            "operator_focus",
+                            "capture_id",
+                            "capture_revision",
+                            "capture_content_hash",
+                        }
+                        if set(body) != expected_fields:
+                            raise ValueError
+                        cutoff = datetime.fromisoformat(
+                            str(body["as_of_cutoff"]).replace("Z", "+00:00")
+                        )
+                        if cutoff.tzinfo is None or cutoff.utcoffset() is None:
+                            raise ValueError
+                        if body["operator_focus"] is not None and not isinstance(
+                            body["operator_focus"], str
+                        ):
+                            raise ValueError
+                        if not isinstance(body["capture_revision"], int) or isinstance(
+                            body["capture_revision"], bool
+                        ):
+                            raise ValueError
+                        request = DesktopResearchRunRequest(
+                            operator_id=str(body["operator_id"]),
+                            security_id=str(body["security_id"]),
+                            ticker=str(body["ticker"]),
+                            question_type_version=str(body["question_type_version"]),
+                            workflow_config_version=str(
+                                body["workflow_config_version"]
+                            ),
+                            as_of_cutoff=cutoff,
+                            operator_focus=body["operator_focus"],
+                            capture_id=str(body["capture_id"]),
+                            capture_revision=body["capture_revision"],
+                            capture_content_hash=str(body["capture_content_hash"]),
+                        )
+                        response = research_run_service.enqueue_and_execute(request)
+                    except DesktopResearchRunError as error:
+                        self._send_json(400, {"error": error.code})
+                        return
+                    except (TypeError, ValueError):
+                        self._send_json(
+                            400,
+                            {"error": "research_run_request_invalid"},
+                        )
+                        return
+                    self._send_json(200, response)
                     return
                 if self.path == "/v1/research/captures/import":
                     if research_capture_import_service is None:
