@@ -30,3 +30,15 @@ test("Research presents decision summary before one continuous detail workspace"
   assert.match(workspace, /Import, preflight, command state, notebook, and source receipts/);
   assert.doesNotMatch(page, /<ResearchStageRail/);
 });
+
+test("Research keeps legacy market and source detail below the summary", () => {
+  const summaryRenderIndex = page.indexOf("<ResearchDecisionSummary");
+  const detailHeadingIndex = page.indexOf("<ResearchDetailsHeading");
+  const marketDetailIndex = page.indexOf('aria-label="Market and source detail"');
+
+  assert.ok(summaryRenderIndex >= 0);
+  assert.ok(detailHeadingIndex > summaryRenderIndex);
+  assert.ok(marketDetailIndex > detailHeadingIndex);
+  assert.match(page.slice(marketDetailIndex), /Market context/);
+  assert.match(page.slice(marketDetailIndex), /Source health/);
+});

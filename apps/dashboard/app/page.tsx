@@ -2124,7 +2124,22 @@ export default async function TickerWorkspace({
               </CardHeader>
             </Card>
           ) : activeSection === "research" && hasResearch ? (
-            <>
+            <details
+              aria-label="Market and source detail"
+              className="group mt-10 rounded-xl border border-border bg-card"
+            >
+              <summary className="cursor-pointer list-none px-5 py-4 font-medium marker:hidden sm:px-6">
+                <span className="flex items-center justify-between gap-4">
+                  <span>
+                    <span className="block text-sm">Market and source detail</span>
+                    <span className="mt-1 block text-xs font-normal text-muted-foreground">
+                      Price history, financials, catalyst, risk, and source health.
+                    </span>
+                  </span>
+                  <ChevronDown aria-hidden="true" className="size-4 transition-transform group-open:rotate-180" />
+                </span>
+              </summary>
+              <div className="border-t border-border p-5 sm:p-6">
               <section
                 className="grid gap-8 border-b border-border py-10 sm:py-14 lg:grid-cols-[1fr_auto] lg:items-end"
                 id="overview"
@@ -2641,7 +2656,8 @@ export default async function TickerWorkspace({
                 </Card>
               ) : null}
 
-            </>
+              </div>
+            </details>
           ) : null}
         </div>
       </main>
