@@ -970,9 +970,23 @@ export default async function TickerWorkspace({
               </Card>
             </div>
           ) : null}
-          {activeSection === "research" && selectedSecurity ? (
-            <ResearchRunHistoryPanel presentation={researchHistoryPresentation} />
-          ) : null}
+          {activeSection === "research" ? (
+            <details className="group mt-5 rounded-xl border border-border bg-card">
+              <summary className="cursor-pointer list-none px-5 py-4 font-medium marker:hidden">
+                <span className="flex items-center justify-between gap-4">
+                  <span>
+                    <span className="block text-sm">Research controls and source ledger</span>
+                    <span className="mt-1 block text-xs font-normal text-muted-foreground">
+                      Import, preflight, command state, notebook, and source receipts.
+                    </span>
+                  </span>
+                  <ChevronDown aria-hidden="true" className="size-4 transition-transform group-open:rotate-180" />
+                </span>
+              </summary>
+              <div className="grid gap-5 border-t border-border p-5">
+                {activeSection === "research" && selectedSecurity ? (
+                  <ResearchRunHistoryPanel presentation={researchHistoryPresentation} />
+                ) : null}
           {false ? (
             <div className="mt-5">
               <ResearchRunHistoryPanel presentation={researchHistoryPresentation} />
@@ -1447,6 +1461,9 @@ export default async function TickerWorkspace({
                 </form>
               </CardContent>
             </Card>
+          ) : null}
+              </div>
+            </details>
           ) : null}
           {activeSection === "research" ? (
             <>
