@@ -18,6 +18,8 @@ from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from typing import Mapping
 
+from workers.moomoo_mcp.envelope import unwrap_expected_mapping
+
 MARKET_QUOTE_TOOL_NAME = "quote_stock_quote"
 TICKER_PATTERN = re.compile(r"^[A-Z]{2,3}\.[A-Z0-9][A-Z0-9.\-]{0,31}$")
 MAX_SUMMARY_FIELDS = 10
@@ -33,7 +35,20 @@ REQUIRED_ANY_PRICE_FIELDS = ("last_price", "price", "cur_price", "close_price")
 # silently passed through.
 ALLOWED_STRUCTURED_FIELDS = frozenset(
     {
+        "after_market",
+        "amplitude",
         "code",
+        "dark_status",
+        "data_date",
+        "data_time",
+        "future_ex_data",
+        "listing_date",
+        "name",
+        "option_ex_data",
+        "overnight",
+        "pre_market",
+        "prev_close_price",
+        "sec_status",
         "symbol",
         "time",
         "timestamp",
@@ -48,6 +63,7 @@ ALLOWED_STRUCTURED_FIELDS = frozenset(
         "previous_close_price",
         "volume",
         "turnover",
+        "turnover_rate",
         "suspension",
         "security_status",
     }
@@ -56,6 +72,10 @@ ALLOWED_STRUCTURED_FIELDS = frozenset(
 
 class MarketEvidenceError(ValueError):
     """Raised when a market-evidence tool result cannot be trusted."""
+
+    def __init__(self, message: str, *, code: str = "quote_result_invalid") -> None:
+        super().__init__(message)
+        self.code = code
 
 
 @dataclass(frozen=True, slots=True)
@@ -123,8 +143,22 @@ def build_market_quote_evidence(
             summary={},
         )
 
-    structured = raw_result.get("structuredContent")
-    if not isinstance(structured, Mapping) or not structured:
+    raw_structured = raw_result.get("structuredContent")
+    structured = unwrap_expected_mapping(raw_structured, "quote_list")
+    if structured is not None:
+        quote_list = structured["quote_list"]
+        if (
+            not isinstance(quote_list, list)
+            or len(quote_list) != 1
+            or not isinstance(quote_list[0], Mapping)
+        ):
+            raise MarketEvidenceError(
+                "market evidence quote list must contain exactly one quote"
+            )
+        structured = quote_list[0]
+    elif isinstance(raw_structured, Mapping) and set(raw_structured) & ALLOWED_STRUCTURED_FIELDS:
+        structured = raw_structured
+    else:
         raise MarketEvidenceError("market evidence structured content is invalid")
     unknown_fields = set(structured) - ALLOWED_STRUCTURED_FIELDS
     if unknown_fields:
@@ -200,7 +234,7 @@ def _require_finite_positive_price(structured: Mapping[str, object]) -> None:
 
 
 def _extract_provider_time(structured: Mapping[str, object]) -> datetime | None:
-    for key in ("time", "timestamp"):
+    for key in ("data_time", "data_time_ms", "time", "timestamp"):
         value = structured.get(key)
         if isinstance(value, bool):
             continue

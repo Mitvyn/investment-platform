@@ -15,6 +15,8 @@ from workers.desktop.research import DesktopResearchCaptureCatalog
 from workers.desktop.research_capture_import import DesktopCaptureImportService
 from workers.desktop.research_notebook import DesktopResearchNotebook
 from workers.desktop.security_registry import DesktopSecurityRegistry
+from workers.quant_workspace.service import DesktopQuantService
+from workers.quant_workspace.storage import FileQuantWorkspaceStore
 from workers.moomoo_mcp.client_identity import MoomooMcpClientIdentityStore
 from workers.moomoo_mcp.diagnostics import MoomooDiagnosticsLog
 from workers.moomoo_mcp.http_client import MoomooMcpHttpClient
@@ -101,6 +103,23 @@ def _ticker_notebook_path(
     return Path.cwd() / "data" / "ticker-notebook.sqlite3"
 
 
+def _quant_workspace_root(
+    *,
+    packaged: bool = bool(getattr(sys, "frozen", False)),
+) -> Path:
+    """Where imported Quant datasets and computed results live."""
+
+    if packaged:
+        return (
+            Path.home()
+            / "Library"
+            / "Application Support"
+            / "Investment Research OS"
+            / "quant-workspace"
+        )
+    return Path.cwd() / "data" / "quant-workspace"
+
+
 def _mcp_client_identity_path(
     *,
     packaged: bool = bool(getattr(sys, "frozen", False)),
@@ -114,6 +133,21 @@ def _mcp_client_identity_path(
             / "moomoo-mcp-client-identity.json"
         )
     return Path.cwd() / "data" / "moomoo-mcp-client-identity.json"
+
+
+def _mcp_diagnostics_path(
+    *,
+    packaged: bool = bool(getattr(sys, "frozen", False)),
+) -> Path:
+    if packaged:
+        return (
+            Path.home()
+            / "Library"
+            / "Application Support"
+            / "Investment Research OS"
+            / "moomoo-diagnostics.json"
+        )
+    return Path.cwd() / "data" / "moomoo-diagnostics.json"
 
 
 def run(*, healthcheck: bool = False) -> int:
@@ -171,7 +205,7 @@ def run(*, healthcheck: bool = False) -> int:
             mcp_client_identity_store=MoomooMcpClientIdentityStore(
                 _mcp_client_identity_path()
             ),
-            diagnostics_log=MoomooDiagnosticsLog(),
+            diagnostics_log=MoomooDiagnosticsLog(path=_mcp_diagnostics_path()),
             quote_stream_factory=lambda access_supplier: MoomooQuoteStream(
                 access_supplier=access_supplier
             ),
@@ -181,6 +215,9 @@ def run(*, healthcheck: bool = False) -> int:
         ),
         security_registry=DesktopSecurityRegistry(_security_registry_path()),
         research_notebook=DesktopResearchNotebook(_ticker_notebook_path()),
+        quant_service=DesktopQuantService(
+            FileQuantWorkspaceStore(_quant_workspace_root())
+        ),
         research_capture_import_service=DesktopCaptureImportService(
             FilePrimarySourceCaptureRepository(_research_capture_root(os.environ)),
             clock=lambda: datetime.now(UTC),

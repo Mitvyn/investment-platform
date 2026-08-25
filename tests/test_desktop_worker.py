@@ -12,7 +12,9 @@ from urllib.parse import urlsplit
 
 from workers.desktop.__main__ import (
     _build_moomoo_portfolio_client,
+    _quant_workspace_root,
     _research_capture_root,
+    _mcp_diagnostics_path,
     _security_registry_path,
     _ticker_notebook_path,
 )
@@ -21,6 +23,27 @@ from workers.portfolio.moomoo import UrllibMoomooTransport
 
 
 class DesktopWorkerTests(unittest.TestCase):
+    def test_quant_workspace_root_is_local_and_separate_from_research(self) -> None:
+        self.assertEqual(
+            _quant_workspace_root(packaged=True),
+            Path.home()
+            / "Library"
+            / "Application Support"
+            / "Investment Research OS"
+            / "quant-workspace",
+        )
+        self.assertEqual(
+            _quant_workspace_root(packaged=False),
+            Path.cwd() / "data" / "quant-workspace",
+        )
+        self.assertNotEqual(
+            _quant_workspace_root(packaged=True),
+            _research_capture_root({}, packaged=True),
+        )
+        self.assertNotIn(
+            "holdings", str(_quant_workspace_root(packaged=False)).lower()
+        )
+
     def test_research_capture_root_is_stable_and_override_must_be_absolute(
         self,
     ) -> None:
@@ -79,6 +102,24 @@ class DesktopWorkerTests(unittest.TestCase):
         self.assertNotEqual(
             _ticker_notebook_path(packaged=True),
             _security_registry_path(packaged=True),
+        )
+
+    def test_mcp_diagnostics_path_is_local_and_separate_from_research_data(self) -> None:
+        self.assertEqual(
+            _mcp_diagnostics_path(packaged=True),
+            Path.home()
+            / "Library"
+            / "Application Support"
+            / "Investment Research OS"
+            / "moomoo-diagnostics.json",
+        )
+        self.assertEqual(
+            _mcp_diagnostics_path(packaged=False),
+            Path.cwd() / "data" / "moomoo-diagnostics.json",
+        )
+        self.assertNotEqual(
+            _mcp_diagnostics_path(packaged=True),
+            _ticker_notebook_path(packaged=True),
         )
 
     def test_desktop_build_scrubs_service_credentials_before_packaging(self) -> None:

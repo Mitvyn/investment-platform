@@ -13,6 +13,8 @@ from workers.desktop.control import (
     DesktopControlServer,
     MoomooConnectionService,
 )
+from workers.moomoo_mcp.diagnostics import MoomooDiagnosticsLog
+from workers.moomoo_mcp.http_client import MoomooMcpError
 from workers.portfolio.keychain import MoomooTokenKeychain
 
 OPERATOR_ID = "11111111-1111-4111-8111-111111111111"
@@ -92,6 +94,112 @@ class FakeWriteAttemptClient(FakeMarketClient):
         raise AssertionError("write/trade tool must never be dispatched")
 
 
+class FailingMarketClient(FakeMarketClient):
+    def call_tool(self, name: str, arguments: Mapping[str, object]) -> Mapping[str, object]:
+        del name, arguments
+        raise MoomooMcpError("provider detail hidden", code="jsonrpc_error")
+
+
+class MalformedMarketClient(FakeMarketClient):
+    def call_tool(self, name: str, arguments: Mapping[str, object]) -> Mapping[str, object]:
+        self.calls.append((name, arguments))
+        return {
+            "isError": False,
+            "structuredContent": {},
+            "content": [
+                {
+                    "type": "text",
+                    "text": json.dumps(
+                        {
+                            "s": "ok",
+                            "d": {
+                                "quote_list": [
+                                    {"code": "US.FRVO", "last_price": "12.34"}
+                                ]
+                            },
+                            "private_provider_field": "must-not-log",
+                        }
+                    ),
+                }
+            ],
+        }
+
+
+class HistoryMarketClient(FakeMarketClient):
+    def list_tools(self) -> list[Mapping[str, object]]:
+        return [
+            *super().list_tools(),
+            {
+                "name": "quote_history_kline",
+                "description": "Daily history read",
+                "inputSchema": {"type": "object"},
+            },
+        ]
+
+    def call_tool(self, name: str, arguments: Mapping[str, object]) -> Mapping[str, object]:
+        self.calls.append((name, arguments))
+        return {
+            "isError": False,
+            "structuredContent": {
+                "kline_list": [
+                    {
+                        "changeRate": 1.25,
+                        "close": 8.5,
+                        "date": 20260820,
+                        "high": 8.75,
+                        "lastClose": 8.4,
+                        "low": 8.1,
+                        "open": 8.2,
+                        "timeKey": 1_777_000_000_000,
+                        "timeZone": -240,
+                        "turnover": 100_000,
+                        "turnoverRate": 0.5,
+                        "volume": 12_000,
+                    }
+                ]
+            },
+        }
+
+
+class PortfolioMarketClient(FakeMarketClient):
+    calls: list[tuple[str, Mapping[str, object]]] = []
+
+    def list_tools(self) -> list[Mapping[str, object]]:
+        return [
+            {"name": "account_authorized_trd_accs", "inputSchema": {"type": "object"}},
+            {"name": "account_positions", "inputSchema": {"type": "object"}},
+        ]
+
+    def call_tool(self, name: str, arguments: Mapping[str, object]) -> Mapping[str, object]:
+        self.calls.append((name, arguments))
+        if name == "account_authorized_trd_accs":
+            return {
+                "isError": False,
+                "structuredContent": {
+                    "accounts": [{
+                        "acc_id": "account-private-1",
+                        "acc_type": "SECURITIES",
+                        "account_card_number": "card-private-1",
+                        "enable_market": ["2"],
+                        "security_firm": "Moomoo",
+                        "univs_account_card_number": "universal-private-1",
+                    }]
+                },
+            }
+        return {
+            "isError": False,
+            "structuredContent": {
+                "positions": [{
+                    "can_sell_qty": "5", "code": "US.FRVO", "cost_price": "8.00",
+                    "currency": "USD", "market_val": "42.50", "nominal_price": "8.50",
+                    "pl_ratio": "0.0625", "pl_val": "2.50", "position_side": "LONG",
+                    "qty": "5", "realized_pl": "0", "stock_name": "FRVO",
+                    "today_pl_val": "0.50", "unrealized_pl": "2.50",
+                }]
+            },
+        }
+
+
 def unused_loopback_port() -> int:
     with socket.socket() as server:
         server.bind(("127.0.0.1", 0))
@@ -111,7 +219,13 @@ class MutableClock:
 
 
 class DesktopMoomooMarketEvidenceTests(unittest.TestCase):
-    def _service(self, factory: object, *, clock: object = fixed_clock) -> MoomooConnectionService:
+    def _service(
+        self,
+        factory: object,
+        *,
+        clock: object = fixed_clock,
+        diagnostics_log: MoomooDiagnosticsLog | None = None,
+    ) -> MoomooConnectionService:
         backend = KeychainBackend()
         MoomooTokenKeychain(operator_id=OPERATOR_ID, backend=backend).store_refresh_token(
             "refresh-secret"
@@ -124,12 +238,135 @@ class DesktopMoomooMarketEvidenceTests(unittest.TestCase):
             oauth_transport=OAuthTransport(),
             mcp_client_factory=factory,
             clock=clock,
+            diagnostics_log=diagnostics_log,
         )
         service.resume_connection(client_id=CLIENT_ID, operator_id=OPERATOR_ID)
         if factory is not None:
             service._mcp_access_token = "mcp-access-secret"  # type: ignore[attr-defined]
             service._mcp_operator_id = OPERATOR_ID  # type: ignore[attr-defined]
         return service
+
+    def test_fetch_daily_history_uses_exact_bounded_allowlisted_contract(self) -> None:
+        clients: list[HistoryMarketClient] = []
+
+        def factory(token: str) -> HistoryMarketClient:
+            client = HistoryMarketClient(token)
+            clients.append(client)
+            return client
+
+        service = self._service(factory)
+        service.discover_mcp_tools(operator_id=OPERATOR_ID)
+
+        status = service.fetch_market_history(
+            operator_id=OPERATOR_ID,
+            security_id=SECURITY_ID,
+            ticker="US.FRVO",
+            start="2026-08-01",
+            end="2026-08-20",
+            max_bars=50,
+        )
+
+        self.assertEqual(status.state, "ready")
+        self.assertEqual(status.evidence["bar_count"], 1)
+        self.assertEqual(
+            clients[-1].calls,
+            [
+                (
+                    "quote_history_kline",
+                    {
+                        "autype": 1,
+                        "end": "2026-08-20",
+                        "extended_time": 0,
+                        "ktype": 2,
+                        "num": 50,
+                        "start": "2026-08-01",
+                        "symbol": "US.FRVO",
+                    },
+                )
+            ],
+        )
+
+    def test_refresh_mcp_holdings_uses_only_reviewed_account_read_tools(self) -> None:
+        clients: list[PortfolioMarketClient] = []
+
+        def factory(token: str) -> PortfolioMarketClient:
+            client = PortfolioMarketClient(token)
+            clients.append(client)
+            return client
+
+        service = self._service(factory)
+        service.discover_mcp_tools(operator_id=OPERATOR_ID)
+
+        mirror = service.refresh_mcp_holdings(operator_id=OPERATOR_ID)
+
+        self.assertEqual(mirror.sync_state, "ready")
+        self.assertEqual(len(mirror.accounts), 1)
+        self.assertEqual(len(mirror.positions), 1)
+        self.assertEqual(
+            clients[-1].calls,
+            [
+                ("account_authorized_trd_accs", {}),
+                ("account_positions", {"acc_id": "account-private-1"}),
+            ],
+        )
+
+    def test_quote_transport_failure_records_bounded_diagnostic_reason(self) -> None:
+        diagnostics = MoomooDiagnosticsLog()
+        service = self._service(
+            lambda token: FailingMarketClient(token),
+            diagnostics_log=diagnostics,
+        )
+        service.discover_mcp_tools(operator_id=OPERATOR_ID)
+
+        status = service.fetch_market_quote(
+            operator_id=OPERATOR_ID,
+            security_id=SECURITY_ID,
+            ticker="US.AAPL",
+        )
+
+        self.assertEqual(status.error_code, "moomoo_market_evidence_request_failed")
+        self.assertEqual(
+            service.recent_diagnostics()[-1]["stage"],
+            "market_quote_failed",
+        )
+        self.assertEqual(
+            service.recent_diagnostics()[-1]["reason_code"],
+            "jsonrpc_error",
+        )
+        self.assertNotIn("provider detail hidden", json.dumps(service.recent_diagnostics()))
+
+    def test_malformed_quote_records_payload_free_result_shape(self) -> None:
+        diagnostics = MoomooDiagnosticsLog()
+        service = self._service(
+            lambda token: MalformedMarketClient(token),
+            diagnostics_log=diagnostics,
+        )
+        service.discover_mcp_tools(operator_id=OPERATOR_ID)
+
+        status = service.fetch_market_quote(
+            operator_id=OPERATOR_ID,
+            security_id=SECURITY_ID,
+            ticker="US.FRVO",
+        )
+
+        self.assertEqual(status.error_code, "moomoo_market_evidence_malformed")
+        diagnostic = service.recent_diagnostics()[-1]
+        self.assertEqual(diagnostic["stage"], "market_quote_malformed")
+        self.assertEqual(
+            diagnostic["shape"],
+            {
+                "structured_kind": "object",
+                "structured_shape": "empty",
+                "content_kind": "array",
+                "content_count": 1,
+                "content_types": ["text"],
+                "text_json_kind": "object",
+            },
+        )
+        serialized = json.dumps(diagnostic)
+        self.assertNotIn("US.FRVO", serialized)
+        self.assertNotIn("last_price", serialized)
+        self.assertNotIn("private_provider_field", serialized)
 
     def test_fetch_market_quote_requires_prior_discovery(self) -> None:
         service = self._service(lambda token: FakeMarketClient(token))
@@ -376,6 +613,65 @@ class DesktopMoomooMarketEvidenceTests(unittest.TestCase):
         self.assertEqual(response.status, 200)
         self.assertEqual(payload["state"], "ready")
         self.assertEqual(payload["evidence"]["ticker"], "US.AAPL")
+
+    def test_daily_history_is_available_through_authenticated_loopback(self) -> None:
+        service = self._service(lambda token: HistoryMarketClient(token))
+        service.discover_mcp_tools(operator_id=OPERATOR_ID)
+        server = DesktopControlServer(service=service, control_token="control-secret")
+        server.start()
+        self.addCleanup(server.stop)
+        parsed = urlsplit(server.origin)
+        connection = HTTPConnection(parsed.hostname, parsed.port, timeout=2)
+        body = json.dumps(
+            {
+                "end": "2026-08-20",
+                "max_bars": 50,
+                "operator_id": OPERATOR_ID,
+                "security_id": SECURITY_ID,
+                "start": "2026-08-01",
+                "ticker": "US.FRVO",
+            }
+        )
+        connection.request(
+            "POST",
+            "/v1/research/market-evidence/history",
+            body=body,
+            headers={
+                "Authorization": "Bearer control-secret",
+                "Content-Type": "application/json",
+            },
+        )
+        response = connection.getresponse()
+        payload = json.loads(response.read())
+
+        self.assertEqual(response.status, 200)
+        self.assertEqual(payload["contract_version"], "market_history_evidence.v1")
+        self.assertEqual(payload["evidence"]["bar_count"], 1)
+
+    def test_mcp_holdings_refresh_is_available_through_authenticated_loopback(self) -> None:
+        service = self._service(lambda token: PortfolioMarketClient(token))
+        service.discover_mcp_tools(operator_id=OPERATOR_ID)
+        server = DesktopControlServer(service=service, control_token="control-secret")
+        server.start()
+        self.addCleanup(server.stop)
+        parsed = urlsplit(server.origin)
+        connection = HTTPConnection(parsed.hostname, parsed.port, timeout=2)
+        connection.request(
+            "POST",
+            "/v1/moomoo/mcp/holdings/refresh",
+            body=json.dumps({"operator_id": OPERATOR_ID}),
+            headers={
+                "Authorization": "Bearer control-secret",
+                "Content-Type": "application/json",
+            },
+        )
+        response = connection.getresponse()
+        payload = json.loads(response.read())
+
+        self.assertEqual(response.status, 200)
+        self.assertEqual(payload["sync_state"], "ready")
+        self.assertEqual(payload["position_count"], 1)
+        self.assertNotIn("account-private-1", json.dumps(payload))
 
     def test_write_tool_is_never_dispatched_even_if_requested(self) -> None:
         service = self._service(lambda token: FakeWriteAttemptClient(token))

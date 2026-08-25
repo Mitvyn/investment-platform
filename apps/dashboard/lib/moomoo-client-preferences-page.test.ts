@@ -13,7 +13,7 @@ test("desktop Moomoo connection remembers client IDs without presenting security
     "utf8",
   );
   const reconnect = readFileSync(
-    new URL("../components/moomoo-auto-reconnect.tsx", import.meta.url),
+    new URL("../components/moomoo-mcp-auto-reconnect.tsx", import.meta.url),
     "utf8",
   );
   const desktop = readFileSync(new URL("./moomoo-desktop.ts", import.meta.url), "utf8");
@@ -27,8 +27,8 @@ test("desktop Moomoo connection remembers client IDs without presenting security
   );
   assert.match(page, /parseMoomooClientIds/);
   assert.match(page, /<MoomooClientIdPicker savedClientIds=\{savedClientIds\}/);
-  assert.match(page, /<MoomooAutoReconnect/);
-  assert.match(page, /clientId=\{autoResumeClientId\}/);
+  assert.match(page, /<MoomooConnectionAutoReconnect/);
+  assert.match(page, /openApiClientId=\{autoResumeClientId\}/);
   assert.match(page, /parseMoomooAutoResumeClientId\(autoResumePreference\)/);
   assert.doesNotMatch(page, /savedClientIds\[0\]/);
   assert.match(actions, /MOOMOO_AUTO_RESUME_COOKIE/);
@@ -73,12 +73,24 @@ test("MCP is the one primary Moomoo connection; OpenAPI streaming is secondary a
   assert.match(page, /Enable streaming quotes \(optional\)/);
   assert.match(page, /<details[\s\S]*Enable streaming quotes \(optional\)[\s\S]*<\/details>/);
 
-  // Startup auto-resume for MCP is wired independently of OpenAPI's, but is
-  // still gated by its own explicit, independent MCP auto-resume preference
+  // Startup auto-resume keeps independent preferences/outcomes, but sequences
+  // core MCP before optional OpenAPI so concurrent Keychain prompts cannot race.
+  // MCP remains gated by its own explicit, independent auto-resume preference
   // (never the OpenAPI cookie names) so an intentional MCP disconnect stops
   // silent resume from firing again on the next page load.
-  assert.match(page, /<MoomooMcpAutoReconnect/);
+  assert.match(page, /<MoomooConnectionAutoReconnect/);
+  assert.match(
+    page,
+    /mcpActive=\{\s*mcpAutoResumeEnabled\s*&&\s*\["disconnected", "unavailable"\]\.includes\(moomooMcpStatus\.state\)/,
+  );
+  assert.match(page, /action=\{refreshMoomooMcpPortfolio\}/);
+  assert.match(page, /Refresh holdings from Moomoo/);
   assert.match(mcpReconnect, /resumeMoomooMcpSilently/);
+  assert.match(mcpReconnect, /resumeMoomooSilently/);
+  assert.ok(
+    mcpReconnect.indexOf("await resumeMoomooMcpSilently") <
+      mcpReconnect.indexOf("await resumeMoomooSilently"),
+  );
   assert.match(actions, /export async function resumeMoomooMcpSilently/);
   const resumeMoomooMcpSilentlySlice = actions.slice(
     actions.indexOf("export async function resumeMoomooMcpSilently"),
@@ -124,6 +136,18 @@ test("Moomoo MCP tool names stay collapsed behind a discoverable list, honestly 
   assert.match(page, /does not make a tool callable/i);
   assert.match(page, /App-approved callable read tool/);
   assert.match(page, /quote_stock_quote/);
+});
+
+test("Moomoo connection diagnostics stay collapsed and expose bounded lifecycle fields only", () => {
+  const page = readFileSync(new URL("../app/page.tsx", import.meta.url), "utf8");
+
+  assert.match(page, /loadMoomooDiagnostics/);
+  assert.match(page, /<details[\s\S]*Connection diagnostics[\s\S]*<\/details>/);
+  assert.match(page, /moomooDiagnostics\.map/);
+  assert.match(page, /entry\.stage/);
+  assert.match(page, /entry\.reasonCode/);
+  assert.match(page, /entry\.shape\.structuredShape/);
+  assert.doesNotMatch(page, /entry\.(?:token|payload|clientId|accountId)/);
 });
 
 test("MCP authorization shows bounded actionable failures instead of one generic error", () => {

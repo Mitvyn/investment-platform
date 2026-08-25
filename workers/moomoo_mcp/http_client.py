@@ -30,6 +30,10 @@ MAX_RESPONSE_BYTES = 1_048_576
 class MoomooMcpError(RuntimeError):
     """Raised when MCP discovery cannot produce a trusted manifest."""
 
+    def __init__(self, message: str, *, code: str = "request_failed") -> None:
+        super().__init__(message)
+        self.code = code
+
 
 class MoomooMcpHttpClient:
     """Authenticated Moomoo MCP client for discovery and one-tool-at-a-time calls.
@@ -127,11 +131,11 @@ class MoomooMcpHttpClient:
             raise MoomooMcpError("Moomoo MCP tool result isError flag is invalid")
         structured = result.get("structuredContent")
         content = result.get("content")
-        if structured is None and content is None:
+        if structured is not None and not isinstance(structured, Mapping):
             raise MoomooMcpError("Moomoo MCP tool result is invalid")
-        if structured is not None and (
-            not isinstance(structured, Mapping) or not structured
-        ):
+        if isinstance(structured, Mapping) and not structured:
+            structured = None
+        if structured is None and content is None:
             raise MoomooMcpError("Moomoo MCP tool result is invalid")
         if content is not None and (
             not isinstance(content, list)
@@ -139,7 +143,14 @@ class MoomooMcpHttpClient:
             or any(not isinstance(item, Mapping) for item in content)
         ):
             raise MoomooMcpError("Moomoo MCP tool result is invalid")
-        return dict(result)
+        normalized_result = dict(result)
+        if not is_error and structured is None:
+            structured = _json_text_content(content)
+        if not is_error and structured is not None:
+            normalized_result["structuredContent"] = _unwrap_provider_rest_envelope(
+                structured
+            )
+        return normalized_result
 
     def _request(
         self,
@@ -187,7 +198,10 @@ class MoomooMcpHttpClient:
         except MoomooMcpError:
             raise
         except HTTPError as error:
-            raise MoomooMcpError(f"Moomoo MCP HTTP status {error.code}") from error
+            raise MoomooMcpError(
+                f"Moomoo MCP HTTP status {error.code}",
+                code=f"http_{error.code}",
+            ) from error
         except (URLError, TimeoutError, OSError) as error:
             raise MoomooMcpError("Moomoo MCP request failed") from error
         if len(raw) > MAX_RESPONSE_BYTES:
@@ -205,7 +219,10 @@ class MoomooMcpHttpClient:
             raise MoomooMcpError("Moomoo MCP JSON-RPC response is invalid")
         error = message.get("error")
         if error is not None:
-            raise MoomooMcpError("Moomoo MCP JSON-RPC request failed")
+            raise MoomooMcpError(
+                "Moomoo MCP JSON-RPC request failed",
+                code=_jsonrpc_error_code(error),
+            )
         result = message.get("result")
         if not isinstance(result, Mapping):
             raise MoomooMcpError("Moomoo MCP JSON-RPC result is invalid")
@@ -238,6 +255,77 @@ def _decode_message(raw: bytes, headers: Mapping[str, str]) -> Mapping[str, obje
     if not isinstance(message, Mapping):
         raise MoomooMcpError("Moomoo MCP response is invalid")
     return message
+
+
+def _jsonrpc_error_code(error: object) -> str:
+    if not isinstance(error, Mapping):
+        return "jsonrpc_error"
+    code = error.get("code")
+    return {
+        -32700: "jsonrpc_parse_error",
+        -32600: "jsonrpc_invalid_request",
+        -32601: "jsonrpc_method_not_found",
+        -32602: "jsonrpc_invalid_params",
+        -32603: "jsonrpc_internal_error",
+    }.get(code, "jsonrpc_provider_error")
+
+
+def _json_text_content(content: object) -> Mapping[str, object]:
+    """Recover protocol-valid structured data from one JSON TextContent block.
+
+    MCP 2025-06-18 makes ``structuredContent`` optional and permits structured
+    results to be serialized in ``content`` for compatibility. Keep fallback
+    narrow: exactly one text block containing one non-empty JSON object.
+    """
+
+    if not isinstance(content, list) or len(content) != 1:
+        raise MoomooMcpError("Moomoo MCP tool text result is ambiguous")
+    item = content[0]
+    if not isinstance(item, Mapping) or item.get("type") != "text":
+        raise MoomooMcpError("Moomoo MCP tool text result is invalid")
+    text = item.get("text")
+    if not isinstance(text, str) or not text.strip():
+        raise MoomooMcpError("Moomoo MCP tool text result is invalid")
+    try:
+        decoded = json.loads(text)
+    except json.JSONDecodeError as error:
+        raise MoomooMcpError("Moomoo MCP tool text result is invalid JSON") from error
+    if not isinstance(decoded, Mapping) or not decoded:
+        raise MoomooMcpError("Moomoo MCP tool text result is invalid")
+    return dict(decoded)
+
+
+def _unwrap_provider_rest_envelope(
+    structured: Mapping[str, object],
+) -> Mapping[str, object]:
+    """Unwrap Moomoo's documented REST success envelope when MCP preserves it.
+
+    Moomoo's tool catalog documents flattened response ``wrap`` fields, while
+    its backing API documents ``s`` / ``d`` plus ``errcode`` / ``errmsg``.
+    Some MCP TextContent responses preserve that backing envelope. Keep the
+    older exact ``ret_code`` / ``ret_msg`` / ``data`` compatibility form too;
+    never broaden arbitrary nested provider payloads.
+    """
+
+    if set(structured) == {"s", "d"}:
+        if structured.get("s") != "ok":
+            raise MoomooMcpError(
+                "Moomoo MCP provider reported an error", code="tool_provider_error"
+            )
+        data = structured.get("d")
+        if not isinstance(data, Mapping) or not data:
+            raise MoomooMcpError("Moomoo MCP provider data is invalid")
+        return dict(data)
+    if set(structured) != {"ret_code", "ret_msg", "data"}:
+        return dict(structured)
+    if structured.get("ret_code") != 0:
+        raise MoomooMcpError(
+            "Moomoo MCP provider reported an error", code="tool_provider_error"
+        )
+    data = structured.get("data")
+    if not isinstance(data, Mapping) or not data:
+        raise MoomooMcpError("Moomoo MCP provider data is invalid")
+    return dict(data)
 
 
 __all__ = ["MOOMOO_MCP_ENDPOINT", "MoomooMcpError", "MoomooMcpHttpClient"]

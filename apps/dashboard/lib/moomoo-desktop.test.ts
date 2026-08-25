@@ -18,6 +18,8 @@ import {
   resumeMoomooDesktopConnection,
   discoverMoomooMcpTools,
   fetchMoomooMarketQuoteEvidence,
+  fetchMoomooMarketHistoryEvidence,
+  refreshMoomooMcpHoldings,
   loadMoomooMarketQuoteStatus,
   resumeMoomooMcpConnection,
   disconnectMoomooMcp,
@@ -333,6 +335,57 @@ test("diagnostics load only bounded safe fields and stay empty without a runtime
   ]);
 });
 
+test("diagnostics preserve only validated payload-free result shape", async () => {
+  const entries = await loadMoomooDiagnostics(desktopEnvironment, async () =>
+    Response.json({
+      contract_version: "moomoo_diagnostics.v1",
+      entries: [
+        {
+          timestamp: "2026-08-21T12:00:00",
+          subsystem: "core_mcp",
+          stage: "market_quote_malformed",
+          reason_code: "moomoo_market_evidence_malformed",
+          shape: {
+            structured_kind: "object",
+            structured_shape: "s_d_envelope",
+            content_kind: "array",
+            content_count: 1,
+            content_types: ["text"],
+            text_json_kind: "invalid",
+            provider_value: "must-not-survive",
+          },
+        },
+        {
+          timestamp: "2026-08-21T12:00:01",
+          subsystem: "core_mcp",
+          stage: "market_quote_malformed",
+          reason_code: "moomoo_market_evidence_malformed",
+          shape: {
+            structured_kind: "object",
+            structured_shape: "s_d_envelope",
+            content_kind: "array",
+            content_count: 1,
+            content_types: ["text"],
+            text_json_kind: "invalid",
+          },
+        },
+      ],
+    }),
+  );
+
+  assert.equal(entries.length, 2);
+  assert.equal("shape" in entries[0], false);
+  assert.deepEqual(entries[1].shape, {
+    structuredKind: "object",
+    structuredShape: "s_d_envelope",
+    contentKind: "array",
+    contentCount: 1,
+    contentTypes: ["text"],
+    textJsonKind: "invalid",
+  });
+  assert.equal(JSON.stringify(entries).includes("must-not-survive"), false);
+});
+
 test("market quote evidence sends canonical identity and ticker to local worker", async () => {
   const calls: Array<[string, RequestInit]> = [];
   const status = await fetchMoomooMarketQuoteEvidence(
@@ -372,6 +425,89 @@ test("market quote evidence sends canonical identity and ticker to local worker"
     operator_id: "11111111-1111-4111-8111-111111111111",
     security_id: "22222222-2222-4222-8222-222222222222",
     ticker: "US.AAPL",
+  });
+});
+
+test("market history evidence sends only bounded daily contract to local worker", async () => {
+  const calls: Array<[string, RequestInit]> = [];
+  const status = await fetchMoomooMarketHistoryEvidence(
+    {
+      end: "2026-08-20",
+      maxBars: 50,
+      operatorId: "11111111-1111-4111-8111-111111111111",
+      securityId: "22222222-2222-4222-8222-222222222222",
+      start: "2026-08-01",
+      ticker: "US.FRVO",
+    },
+    desktopEnvironment,
+    async (url, init) => {
+      calls.push([String(url), init ?? {}]);
+      return Response.json({
+        cached: false,
+        contract_version: "market_history_evidence.v1",
+        error_code: null,
+        evidence: {
+          bar_count: 1,
+          bars: [{ close: "8.5", date: "20260820" }],
+          retrieved_at: "2026-08-20T12:00:00+00:00",
+          security_id: "22222222-2222-4222-8222-222222222222",
+          source: "moomoo_mcp",
+          ticker: "US.FRVO",
+          tool_name: "quote_history_kline",
+        },
+        state: "ready",
+      });
+    },
+  );
+
+  assert.equal(status.state, "ready");
+  assert.equal(status.evidence?.barCount, 1);
+  assert.equal(
+    calls[0][0],
+    "http://127.0.0.1:61555/v1/research/market-evidence/history",
+  );
+  assert.deepEqual(JSON.parse(String(calls[0][1].body)), {
+    end: "2026-08-20",
+    max_bars: 50,
+    operator_id: "11111111-1111-4111-8111-111111111111",
+    security_id: "22222222-2222-4222-8222-222222222222",
+    start: "2026-08-01",
+    ticker: "US.FRVO",
+  });
+});
+
+test("MCP holdings refresh uses core connection endpoint and hides account identifiers", async () => {
+  const calls: Array<[string, RequestInit]> = [];
+  const holdings = await refreshMoomooMcpHoldings(
+    { operatorId: "11111111-1111-4111-8111-111111111111" },
+    desktopEnvironment,
+    async (url, init) => {
+      calls.push([String(url), init ?? {}]);
+      return Response.json({
+        account_count: 1,
+        position_count: 1,
+        positions: [{
+          account_index: 1,
+          code: "US.FRVO",
+          cost_price: "8.00",
+          cost_price_valid: true,
+          currency: "USD",
+          market_val: "42.50",
+          nominal_price: "8.50",
+          pl_val: "2.50",
+          pl_val_valid: true,
+          position_side: "LONG",
+          qty: "5",
+          stock_name: "FRVO",
+        }],
+        sync_state: "ready",
+      });
+    },
+  );
+  assert.equal(holdings.positionCount, 1);
+  assert.equal(calls[0][0], "http://127.0.0.1:61555/v1/moomoo/mcp/holdings/refresh");
+  assert.deepEqual(JSON.parse(String(calls[0][1].body)), {
+    operator_id: "11111111-1111-4111-8111-111111111111",
   });
 });
 

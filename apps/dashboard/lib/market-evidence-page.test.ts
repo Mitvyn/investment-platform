@@ -36,3 +36,13 @@ test("market evidence card never renders a raw tool catalog or provider payload"
   assert.doesNotMatch(card, /tool_count/i);
   assert.doesNotMatch(card, /access_token|bearer/i);
 });
+
+test("market evidence card exposes bounded daily history without client-owned parameters", () => {
+  const start = page.indexOf("SectionLabel>Market evidence<");
+  const end = page.indexOf("Accepted evidence capture");
+  const card = page.slice(start, end);
+  assert.match(card, /action=\{refreshMarketHistory\}/);
+  assert.match(card, /Refresh daily history/);
+  assert.match(card, /capped at[\s\S]*100 daily bars/);
+  assert.doesNotMatch(card, /name="ticker"|name="start"|name="end"|name="maxBars"/);
+});

@@ -32,19 +32,19 @@ test("Research flow and audit route share one artifact loader", () => {
   assert.match(auditPage, /loadResearchRunFlow/);
 });
 
-test("Research artifact stages render inline when persisted flow is available", () => {
+test("Research details render one continuous workspace when persisted flow is available", () => {
   const page = readFileSync(
     new URL("../app/page.tsx", import.meta.url),
     "utf8",
   );
 
-  assert.match(page, /activeStage === "opinions"/);
+  assert.match(page, /ResearchDetailsHeading/);
+  assert.match(page, /researchFlow \?/);
   assert.match(page, /<GraderExecutionPanel/);
-  assert.match(page, /activeStage === "committee"/);
   assert.match(page, /<GraderCommitteePanel/);
   assert.match(page, /<CommitteeMemoPanel/);
-  assert.match(page, /activeStage === "thesis"/);
   assert.match(page, /<ReadinessThesisPanel/);
   assert.match(page, /<OperatorDecisionPanel/);
-  assert.match(page, /researchFlow === null/);
+  assert.doesNotMatch(page, /<ResearchStageRail/);
+  assert.doesNotMatch(page, /activeStage === "opinions"/);
 });

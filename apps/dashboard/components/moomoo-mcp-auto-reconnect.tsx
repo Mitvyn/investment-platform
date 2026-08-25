@@ -3,30 +3,45 @@
 import { useEffect, useRef, useTransition } from "react";
 import { useRouter } from "next/navigation";
 
-import { resumeMoomooMcpSilently } from "@/app/moomoo-actions";
+import {
+  resumeMoomooMcpSilently,
+  resumeMoomooSilently,
+} from "@/app/moomoo-actions";
 
 /**
  * Silent startup resume for the core Moomoo (MCP) connection.
  *
- * Runs once per page load whenever the MCP connection is not already ready
- * and auto-resume has not been intentionally disabled (see `active`), with
- * no browser popup and no manual discovery step. Independent of the
- * optional OpenAPI streaming auto-reconnect component: it never reads that
- * connection's state and never blocks on it.
+ * Runs once per page load. Core MCP resumes first; optional OpenAPI streaming
+ * resumes second. Preferences and outcomes remain independent, while ordered
+ * execution prevents concurrent macOS Keychain reads during startup.
  */
-export function MoomooMcpAutoReconnect({ active }: { active: boolean }) {
+export function MoomooConnectionAutoReconnect({
+  mcpActive,
+  openApiActive,
+  openApiClientId,
+}: {
+  mcpActive: boolean;
+  openApiActive: boolean;
+  openApiClientId: string | null;
+}) {
   const attempted = useRef(false);
   const router = useRouter();
   const [, startTransition] = useTransition();
 
   useEffect(() => {
-    if (!active || attempted.current) return;
+    if (
+      attempted.current ||
+      (!mcpActive && (!openApiActive || !openApiClientId))
+    ) return;
     attempted.current = true;
     startTransition(async () => {
-      await resumeMoomooMcpSilently();
+      if (mcpActive) await resumeMoomooMcpSilently();
+      if (openApiActive && openApiClientId) {
+        await resumeMoomooSilently(openApiClientId);
+      }
       router.refresh();
     });
-  }, [active, router]);
+  }, [mcpActive, openApiActive, openApiClientId, router]);
 
   return null;
 }

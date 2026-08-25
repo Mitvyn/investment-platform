@@ -65,6 +65,63 @@ export type MoomooMcpDiscoveryStatus = {
   }>;
 };
 
+const DIAGNOSTIC_STRUCTURED_KINDS = [
+  "missing",
+  "null",
+  "object",
+  "array",
+  "scalar",
+] as const;
+const DIAGNOSTIC_STRUCTURED_SHAPES = [
+  "missing",
+  "empty",
+  "quote_wrapper",
+  "history_wrapper",
+  "accounts_wrapper",
+  "positions_wrapper",
+  "s_d_envelope",
+  "ret_envelope",
+  "object",
+  "array",
+  "scalar",
+] as const;
+const DIAGNOSTIC_CONTENT_KINDS = [
+  "missing",
+  "null",
+  "object",
+  "array",
+  "scalar",
+] as const;
+const DIAGNOSTIC_CONTENT_TYPES = [
+  "text",
+  "image",
+  "audio",
+  "resource",
+  "resource_link",
+  "other",
+] as const;
+const DIAGNOSTIC_TEXT_JSON_KINDS = [
+  "missing",
+  "null",
+  "object",
+  "array",
+  "scalar",
+  "invalid",
+] as const;
+
+type DiagnosticShapeValue<T extends readonly string[]> = T[number];
+
+export type MoomooDiagnosticShape = {
+  contentCount: number;
+  contentKind: DiagnosticShapeValue<typeof DIAGNOSTIC_CONTENT_KINDS>;
+  contentTypes: Array<
+    DiagnosticShapeValue<typeof DIAGNOSTIC_CONTENT_TYPES>
+  >;
+  structuredKind: DiagnosticShapeValue<typeof DIAGNOSTIC_STRUCTURED_KINDS>;
+  structuredShape: DiagnosticShapeValue<typeof DIAGNOSTIC_STRUCTURED_SHAPES>;
+  textJsonKind: DiagnosticShapeValue<typeof DIAGNOSTIC_TEXT_JSON_KINDS>;
+};
+
 const REVIEWED_MCP_COMMAND_ERROR_CODES = new Set([
   "authorization_metadata_invalid",
   "authorization_metadata_unavailable",
@@ -131,6 +188,31 @@ export type FetchMoomooMarketQuoteEvidenceInput = MoomooOperatorCommandInput & {
   securityId: string;
   ticker: string;
 };
+
+export type MoomooMarketHistoryEvidence = {
+  barCount: number;
+  bars: Array<Record<string, string>>;
+  retrievedAt: string;
+  securityId: string;
+  source: string;
+  ticker: string;
+  toolName: string;
+};
+
+export type MoomooMarketHistoryStatus = {
+  errorCode: string | null;
+  evidence: MoomooMarketHistoryEvidence | null;
+  state: "failed" | "malformed" | "ready" | "unavailable";
+};
+
+export type FetchMoomooMarketHistoryEvidenceInput =
+  MoomooOperatorCommandInput & {
+    end: string;
+    maxBars: number;
+    securityId: string;
+    start: string;
+    ticker: string;
+  };
 
 export function presentMoomooCapabilityStates(
   status: MoomooDesktopStatus,
@@ -762,6 +844,101 @@ export async function fetchMoomooMarketQuoteEvidence(
   }
 }
 
+export async function fetchMoomooMarketHistoryEvidence(
+  input: FetchMoomooMarketHistoryEvidenceInput,
+  environment: DesktopEnvironment = process.env,
+  fetcher: FetchLike = fetch,
+): Promise<MoomooMarketHistoryStatus> {
+  const datePattern = /^\d{4}-\d{2}-\d{2}$/;
+  if (
+    !UUID_PATTERN.test(input.operatorId) ||
+    !UUID_PATTERN.test(input.securityId) ||
+    !MOOMOO_SYMBOL_PATTERN.test(input.ticker) ||
+    !datePattern.test(input.start) ||
+    !datePattern.test(input.end) ||
+    !Number.isInteger(input.maxBars) ||
+    input.maxBars < 1 ||
+    input.maxBars > 370
+  ) throw new Error("Market history evidence request is invalid");
+  const contract = controlContract(environment);
+  if (!contract) {
+    return { errorCode: "desktop_runtime_unavailable", evidence: null, state: "unavailable" };
+  }
+  try {
+    const response = await fetcher(
+      `${contract.origin}/v1/research/market-evidence/history`,
+      {
+        body: JSON.stringify({
+          end: input.end,
+          max_bars: input.maxBars,
+          operator_id: input.operatorId,
+          security_id: input.securityId,
+          start: input.start,
+          ticker: input.ticker,
+        }),
+        cache: "no-store",
+        headers: {
+          Authorization: `Bearer ${contract.token}`,
+          "Content-Type": "application/json",
+        },
+        method: "POST",
+        signal: AbortSignal.timeout(30_000),
+      },
+    );
+    const payload: unknown = await response.json();
+    if (!response.ok || !payload || typeof payload !== "object") {
+      return { errorCode: "market_history_request_failed", evidence: null, state: "unavailable" };
+    }
+    const candidate = payload as {
+      error_code?: unknown;
+      evidence?: unknown;
+      state?: unknown;
+    };
+    if (!["failed", "malformed", "ready"].includes(String(candidate.state))) {
+      return { errorCode: "market_history_response_invalid", evidence: null, state: "unavailable" };
+    }
+    if (candidate.evidence === null) {
+      return {
+        errorCode: typeof candidate.error_code === "string" ? candidate.error_code : null,
+        evidence: null,
+        state: candidate.state as "failed" | "malformed" | "ready",
+      };
+    }
+    const evidence = candidate.evidence as Record<string, unknown>;
+    if (
+      typeof evidence.bar_count !== "number" ||
+      !Array.isArray(evidence.bars) ||
+      evidence.bars.length !== evidence.bar_count ||
+      typeof evidence.retrieved_at !== "string" ||
+      typeof evidence.security_id !== "string" ||
+      typeof evidence.source !== "string" ||
+      typeof evidence.ticker !== "string" ||
+      typeof evidence.tool_name !== "string" ||
+      !evidence.bars.every(
+        (bar) => bar && typeof bar === "object" &&
+          Object.values(bar).every((value) => typeof value === "string"),
+      )
+    ) {
+      return { errorCode: "market_history_response_invalid", evidence: null, state: "unavailable" };
+    }
+    return {
+      errorCode: typeof candidate.error_code === "string" ? candidate.error_code : null,
+      evidence: {
+        barCount: evidence.bar_count,
+        bars: evidence.bars as Array<Record<string, string>>,
+        retrievedAt: evidence.retrieved_at,
+        securityId: evidence.security_id,
+        source: evidence.source,
+        ticker: evidence.ticker,
+        toolName: evidence.tool_name,
+      },
+      state: candidate.state as "failed" | "malformed" | "ready",
+    };
+  } catch {
+    return { errorCode: "market_history_request_failed", evidence: null, state: "unavailable" };
+  }
+}
+
 function unavailableMcpStatus(): MoomooMcpDiscoveryStatus {
   return {
     errorCode: "desktop_runtime_unavailable",
@@ -970,10 +1147,68 @@ export async function disconnectMoomooAll(
 }
 
 export interface MoomooDiagnosticEntry {
+  shape?: MoomooDiagnosticShape;
   timestamp: string;
   subsystem: "core_mcp" | "optional_stream";
   stage: string;
   reasonCode: string;
+}
+
+function isDiagnosticValue<T extends readonly string[]>(
+  value: unknown,
+  allowed: T,
+): value is T[number] {
+  return typeof value === "string" && allowed.includes(value);
+}
+
+function parseMoomooDiagnosticShape(
+  value: unknown,
+): MoomooDiagnosticShape | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return undefined;
+  }
+  const record = value as Record<string, unknown>;
+  const expectedKeys = [
+    "structured_kind",
+    "structured_shape",
+    "content_kind",
+    "content_count",
+    "content_types",
+    "text_json_kind",
+  ];
+  if (
+    Object.keys(record).length !== expectedKeys.length ||
+    expectedKeys.some((key) => !(key in record))
+  ) {
+    return undefined;
+  }
+  const contentCount = record.content_count;
+  const contentTypes = record.content_types;
+  if (
+    !isDiagnosticValue(record.structured_kind, DIAGNOSTIC_STRUCTURED_KINDS) ||
+    !isDiagnosticValue(record.structured_shape, DIAGNOSTIC_STRUCTURED_SHAPES) ||
+    !isDiagnosticValue(record.content_kind, DIAGNOSTIC_CONTENT_KINDS) ||
+    !Number.isInteger(contentCount) ||
+    typeof contentCount !== "number" ||
+    contentCount < 0 ||
+    contentCount > 8 ||
+    !Array.isArray(contentTypes) ||
+    contentTypes.length !== contentCount ||
+    !contentTypes.every((item) =>
+      isDiagnosticValue(item, DIAGNOSTIC_CONTENT_TYPES),
+    ) ||
+    !isDiagnosticValue(record.text_json_kind, DIAGNOSTIC_TEXT_JSON_KINDS)
+  ) {
+    return undefined;
+  }
+  return {
+    contentCount,
+    contentKind: record.content_kind,
+    contentTypes,
+    structuredKind: record.structured_kind,
+    structuredShape: record.structured_shape,
+    textJsonKind: record.text_json_kind,
+  };
 }
 
 export async function loadMoomooDiagnostics(
@@ -1011,13 +1246,23 @@ export async function loadMoomooDiagnostics(
       ) {
         return [];
       }
-      const record = entry as Record<string, string>;
+      const record = entry as {
+        reason_code: string;
+        shape?: unknown;
+        stage: string;
+        subsystem: "core_mcp" | "optional_stream";
+        timestamp: string;
+      };
+      const reasonCode = record.reason_code;
+      const timestamp = record.timestamp;
+      const shape = parseMoomooDiagnosticShape(record.shape);
       return [
         {
-          reasonCode: record.reason_code,
+          reasonCode,
+          ...(shape ? { shape } : {}),
           stage: record.stage,
-          subsystem: record.subsystem as "core_mcp" | "optional_stream",
-          timestamp: record.timestamp,
+          subsystem: record.subsystem,
+          timestamp,
         },
       ];
     });
@@ -1137,6 +1382,53 @@ export async function loadMoomooDesktopHoldings(
   } catch {
     return null;
   }
+}
+
+export async function refreshMoomooMcpHoldings(
+  input: MoomooOperatorCommandInput,
+  environment: DesktopEnvironment = process.env,
+  fetcher: FetchLike = fetch,
+): Promise<MoomooDesktopHoldings> {
+  const contract = controlContract(environment);
+  if (!contract || !UUID_PATTERN.test(input.operatorId)) {
+    throw new Error("Moomoo MCP holdings refresh request is invalid");
+  }
+  const response = await fetcher(
+    `${contract.origin}/v1/moomoo/mcp/holdings/refresh`,
+    {
+      body: JSON.stringify({ operator_id: input.operatorId }),
+      cache: "no-store",
+      headers: {
+        Authorization: `Bearer ${contract.token}`,
+        "Content-Type": "application/json",
+      },
+      method: "POST",
+      signal: AbortSignal.timeout(30_000),
+    },
+  );
+  const payload: unknown = await response.json();
+  if (!response.ok || !isWorkerHoldings(payload) || payload.sync_state !== "ready") {
+    throw new Error("Moomoo MCP holdings refresh failed");
+  }
+  return {
+    accountCount: payload.account_count,
+    positionCount: payload.position_count,
+    positions: payload.positions.map((position) => ({
+      accountIndex: position.account_index,
+      code: position.code,
+      costPrice: position.cost_price,
+      costPriceValid: position.cost_price_valid,
+      currency: position.currency,
+      marketValue: position.market_val,
+      nominalPrice: position.nominal_price,
+      plValue: position.pl_val,
+      plValueValid: position.pl_val_valid,
+      positionSide: position.position_side,
+      quantity: position.qty,
+      stockName: position.stock_name,
+    })),
+    source: "desktop_live",
+  };
 }
 
 export async function loadMoomooDesktopQuotes(

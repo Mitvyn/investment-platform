@@ -24,8 +24,7 @@ import { Button } from "@/components/ui/button";
 import { MarketPriceChart } from "@/components/market-price-chart";
 import { MoomooConnectionPoller } from "@/components/moomoo-connection-poller";
 import { MoomooClientIdPicker } from "@/components/moomoo-client-id-picker";
-import { MoomooAutoReconnect } from "@/components/moomoo-auto-reconnect";
-import { MoomooMcpAutoReconnect } from "@/components/moomoo-mcp-auto-reconnect";
+import { MoomooConnectionAutoReconnect } from "@/components/moomoo-mcp-auto-reconnect";
 import { MoomooHoldingsTable } from "@/components/moomoo-holdings-table";
 import { HoldingsTable } from "@/components/holdings-table";
 import { CommitteeMemoPanel } from "@/components/committee-memo-panel";
@@ -40,6 +39,11 @@ import { ResearchRunCommandPoller } from "@/components/research-run-command-poll
 import { ResearchRunCommandProgressPanel } from "@/components/research-run-command-progress-panel";
 import { WorkflowJobPoller } from "@/components/workflow-job-poller";
 import {
+  ResearchAttentionGrid,
+  ResearchDecisionSummary,
+  ResearchDetailsHeading,
+} from "@/components/research-decision-summary";
+import {
   Card,
   CardContent,
   CardDescription,
@@ -50,19 +54,10 @@ import { Separator } from "@/components/ui/separator";
 import { Input } from "@/components/ui/input";
 import {
   dashboardSectionLabels,
-  furthestAvailableStage,
   isDashboardSectionAvailable,
   parseDashboardSection,
-  parseResearchStage,
-  presentResearchStages,
   primaryDashboardSections,
-  type ResearchStage,
 } from "@/lib/dashboard-shell";
-import {
-  ResearchStageRail,
-  ResearchStageRunLink,
-  ResearchStageUnavailable,
-} from "@/components/research-stage-rail";
 import { QuantPanel } from "@/components/quant-panel";
 import { DashboardWatchlist } from "@/components/dashboard-watchlist";
 import { readDesktopRuntimeStatus } from "@/lib/desktop-runtime";
@@ -80,6 +75,7 @@ import {
   loadMoomooMcpDiscoveryStatus,
   loadMoomooDesktopHoldings,
   loadMoomooDesktopStatus,
+  loadMoomooDiagnostics,
   loadMoomooMarketQuoteStatus,
   MOOMOO_DESKTOP_CALLBACK_URL,
   presentMoomooCapabilityStates,
@@ -105,6 +101,14 @@ import { loadResearchRunHistory } from "../lib/research-run-history";
 import { presentResearchRunHistory } from "../lib/research-run-history-workspace";
 import { loadAcceptedResearchCaptures } from "../lib/research-desktop";
 import { loadTickerNotebook } from "../lib/research-notebook";
+import {
+  loadLatestQuantResult,
+  loadQuantDatasetStatus,
+} from "../lib/quant-desktop";
+import {
+  buildQuantWorkspaceView,
+  quantErrorCodeFromQuery,
+} from "../lib/quant-workspace";
 import { loadSecurityDirectory } from "../lib/securities";
 import { loadSecurityJob } from "../lib/security-jobs";
 import { createClient } from "../lib/supabase/server";
@@ -121,6 +125,8 @@ import {
   disconnectMoomooMcpAction,
   disconnectMoomooAllAction,
   refreshMarketEvidence,
+  refreshMarketHistory,
+  refreshMoomooMcpPortfolio,
 } from "./moomoo-actions";
 import { addDesktopSecurity, importMoomooSecurities } from "./security-registry-actions";
 import { registerSecurity } from "./security-actions";
@@ -304,6 +310,10 @@ export default async function TickerWorkspace({
     capture_import_error?: string;
     market_evidence?: string;
     market_evidence_error?: string;
+    market_history?: string;
+    market_history_error?: string;
+    quant?: string;
+    quant_error?: string;
     security?: string;
     fund?: string;
     stage?: string;
@@ -316,7 +326,6 @@ export default async function TickerWorkspace({
 
   const params = await searchParams;
   const activeSection = parseDashboardSection(params.view);
-  const requestedStage = parseResearchStage(params.stage);
   const cookieStore = await cookies();
   const savedClientIds = parseMoomooClientIds(
     cookieStore.get(MOOMOO_CLIENT_IDS_COOKIE)?.value,
@@ -328,9 +337,6 @@ export default async function TickerWorkspace({
     cookieStore.get(MOOMOO_MCP_AUTO_RESUME_COOKIE)?.value,
   );
   const requestedSecurityId = params.security;
-  const marketQuoteStatus = requestedSecurityId
-    ? await loadMoomooMarketQuoteStatus(requestedSecurityId)
-    : null;
   const operatorId = String(data.claims.sub ?? "");
   const registrationJob = params.registration
     ? await loadSecurityJob(operatorId, params.registration)
@@ -342,6 +348,7 @@ export default async function TickerWorkspace({
     moomooStatus,
     moomooMcpStatus,
     moomooHoldings,
+    moomooDiagnostics,
     portfolioMirrorResult,
     desktopSecurityRegistry,
   ] = await Promise.all([
@@ -351,6 +358,7 @@ export default async function TickerWorkspace({
       loadMoomooDesktopStatus(),
       loadMoomooMcpDiscoveryStatus(),
       loadMoomooDesktopHoldings(),
+      loadMoomooDiagnostics(),
       loadLatestPortfolioMirror(),
       loadDesktopSecurityRegistry(),
     ]);
@@ -381,6 +389,25 @@ export default async function TickerWorkspace({
     securities.find((security) => security.securityId === requestedSecurityId) ??
     securities[0] ??
     null;
+  const quantIdentity =
+    activeSection === "quant" && selectedSecurity
+      ? { operatorId, securityId: selectedSecurity.securityId }
+      : null;
+  const [quantDataset, quantResult] = quantIdentity
+    ? await Promise.all([
+        loadQuantDatasetStatus(quantIdentity),
+        loadLatestQuantResult(quantIdentity),
+      ])
+    : [{ available: false, status: null }, null];
+  const quantView = buildQuantWorkspaceView({
+    dataset: quantDataset.status?.dataset ?? null,
+    errorCode: quantErrorCodeFromQuery(params.quant_error),
+    result: quantResult,
+    workspaceAvailable: quantDataset.available,
+  });
+  const marketQuoteStatus = selectedSecurity
+    ? await loadMoomooMarketQuoteStatus(selectedSecurity.securityId)
+    : null;
   const researchCommand = params.research_command
     ? await loadResearchRunCommand(operatorId, params.research_command)
     : null;
@@ -488,32 +515,11 @@ export default async function TickerWorkspace({
     researchHistoryPresentation.kind === "ready"
       ? researchHistoryPresentation.latest
       : null;
-  const researchStages = presentResearchStages({
-    hasSecurity: Boolean(selectedSecurity),
-    hasEvidenceTrace: Boolean(trace),
-    hasValuationContext: Boolean(
-      context.market || marketSeries || context.financialMetrics.length,
-    ),
-    hasFinalizedRun: Boolean(latestFinalizedRun),
-    hasCommitteeReconciliation: Boolean(
-      latestFinalizedRun && latestFinalizedRun.committeeStatus !== "Not produced",
-    ),
-    hasReadiness: Boolean(
-      latestFinalizedRun && latestFinalizedRun.finalDisposition !== "Not produced",
-    ),
-    latestRunId: latestFinalizedRun?.runId ?? null,
-  });
-  const activeStage: ResearchStage = requestedStage;
-  const activeStageState =
-    researchStages.find((stage) => stage.id === activeStage) ?? researchStages[0];
-  const reachedStage = furthestAvailableStage(researchStages);
-  const inlineArtifactStage =
-    activeSection === "research" &&
-    (activeStage === "opinions" ||
-      activeStage === "committee" ||
-      activeStage === "thesis");
+  // Research is one continuous ticker workspace. Stage values remain persisted
+  // in run contracts, but no longer control user-facing page navigation.
+  const activeStage = "overview" as const;
   const researchFlow =
-    inlineArtifactStage && latestFinalizedRun
+    activeSection === "research" && latestFinalizedRun
       ? await loadResearchRunFlow(operatorId, latestFinalizedRun.runId)
       : null;
   const isWatched = watchlist.some(
@@ -525,6 +531,74 @@ export default async function TickerWorkspace({
     : holdingsResult.snapshot
       ? "Manual"
       : "Not set";
+  const selectedMoomooPosition = selectedSecurity
+    ? visibleMoomooHoldings?.positions.find(
+        (position) =>
+          position.securityId === selectedSecurity.securityId ||
+          position.canonicalTicker?.toUpperCase() === ticker.toUpperCase(),
+      )
+    : null;
+  const selectedManualPosition = selectedSecurity
+    ? holdingsResult.snapshot?.positions.find(
+        (position) => position.securityId === selectedSecurity.securityId,
+      )
+    : null;
+  const liveQuoteField =
+    marketQuoteStatus?.evidence?.summary.last_price ??
+    marketQuoteStatus?.evidence?.summary.price ??
+    marketQuoteStatus?.evidence?.summary.cur_price ??
+    null;
+  const liveQuoteNumber = liveQuoteField === null ? null : Number(liveQuoteField);
+  const hasLiveQuote =
+    liveQuoteNumber !== null && Number.isFinite(liveQuoteNumber) && liveQuoteNumber > 0;
+  const storedQuoteNumber = summary && marketSeries
+    ? summary.latest.close
+    : context.market?.close ?? null;
+  const currentQuoteValue = hasLiveQuote
+    ? formatCurrency(liveQuoteNumber, "USD")
+    : storedQuoteNumber !== null
+      ? formatCurrency(storedQuoteNumber, marketSeries?.currency ?? context.market?.currency ?? "USD")
+      : "Unavailable";
+  const currentQuoteDetail = hasLiveQuote && marketQuoteStatus?.evidence
+    ? `Moomoo MCP · ${marketQuoteStatus.evidence.freshness} · ${ageLabel(marketQuoteStatus.evidence.retrievedAt)}`
+    : storedQuoteNumber !== null && marketSeries
+      ? `Stored daily context · ${ageLabel(marketSeries.retrievedAt)}`
+      : "No current or stored market read";
+  const selectedPositionValue = selectedMoomooPosition
+    ? Number(selectedMoomooPosition.marketValue)
+    : selectedManualPosition?.observedMarketValue ?? null;
+  const portfolioPositionValue =
+    selectedPositionValue !== null && Number.isFinite(selectedPositionValue)
+      ? formatCurrency(selectedPositionValue, "USD")
+      : "Not held";
+  const portfolioPositionDetail = selectedMoomooPosition
+    ? `${selectedMoomooPosition.quantity} shares · live read-only mirror`
+    : selectedManualPosition
+      ? `${selectedManualPosition.quantity} shares · ${portfolioState.toLowerCase()} snapshot`
+      : "No position in current portfolio";
+  const evidenceFreshness = marketQuoteStatus?.evidence
+    ? marketQuoteStatus.evidence.freshness
+    : trace
+      ? `filing ${ageLabel(trace.retrievedAt)}`
+      : "No accepted evidence";
+  const decisionStatus = latestFinalizedRun?.finalDisposition ?? "Not run";
+  const keyFinding = context.catalyst?.title ?? "No dated catalyst captured";
+  const keyFindingDetail = context.catalyst
+    ? `${context.catalyst.status} · ${context.catalyst.locator}`
+    : "A source-backed catalyst is still needed.";
+  const valuationContext = context.financialMetrics.length
+    ? `${context.financialMetrics.length} reported metrics`
+    : context.market || marketSeries
+      ? "Market context only"
+      : "Not available";
+  const valuationDetail = context.financialMetrics.length
+    ? `Issuer facts retrieved ${ageLabel(context.financialMetrics[0].retrievedAt)}`
+    : "No valuation-grade snapshot is asserted.";
+  const riskSummary = context.risk?.title ?? "No source-backed risk captured";
+  const riskDetail = context.risk
+    ? `${context.risk.severity} severity · ${context.risk.status}`
+    : "Review issuer and regulatory evidence below.";
+  const evidenceGapCount = Math.max(0, 2 - sourceCount);
   const workspaceHref = (section: string, stage?: string) => {
     const query = new URLSearchParams();
     query.set("view", section);
@@ -533,8 +607,6 @@ export default async function TickerWorkspace({
     if (!viewingAllFunds && activeFundKey) query.set("fund", activeFundKey);
     return `/?${query.toString()}`;
   };
-
-  const stageHref = (stage: ResearchStage) => workspaceHref("research", stage);
 
   const fundHref = (fundKey: string | null) => {
     const query = new URLSearchParams();
@@ -756,61 +828,84 @@ export default async function TickerWorkspace({
               </CardContent>
             </Card>
           ) : null}
+          {activeSection === "quant" ? (
+            <QuantPanel
+              securityId={selectedSecurity?.securityId ?? null}
+              ticker={ticker}
+              view={quantView}
+            />
+          ) : null}
+          {activeSection === "research" && selectedSecurity ? (
+            <>
+              <ResearchDecisionSummary
+                companyName={selectedSecurity.companyName}
+                disposition={decisionStatus}
+                stats={[
+                {
+                    detail: currentQuoteDetail,
+                    label: "Current quote",
+                    value: currentQuoteValue,
+                    tone: hasLiveQuote ? "verified" : "attention",
+                },
+                {
+                    detail: portfolioPositionDetail,
+                    label: "Portfolio position",
+                    value: portfolioPositionValue,
+                },
+                {
+                    detail: marketQuoteStatus?.evidence?.retrievedAt
+                      ? `Read ${ageLabel(marketQuoteStatus.evidence.retrievedAt)}`
+                      : "Refresh market evidence below",
+                    label: "Evidence freshness",
+                    value: evidenceFreshness,
+                    tone: evidenceFreshness === "fresh" ? "verified" : "attention",
+                },
+                {
+                    detail: latestFinalizedRun
+                      ? `${latestFinalizedRun.committeeStatus} · audit available`
+                      : "Run preflight after accepting evidence",
+                    label: "Research status",
+                    value: decisionStatus,
+                    tone: latestFinalizedRun ? "verified" : "attention",
+                },
+                ]}
+                ticker={displayTicker}
+              />
+              <ResearchAttentionGrid
+                items={[
+                  {
+                    detail: keyFindingDetail,
+                    label: "Key finding",
+                    tone: context.catalyst ? "verified" : "attention",
+                    value: keyFinding,
+                  },
+                  {
+                    detail: valuationDetail,
+                    label: "Valuation context",
+                    tone: context.financialMetrics.length ? "verified" : "attention",
+                    value: valuationContext,
+                  },
+                  {
+                    detail: riskDetail,
+                    label: "Source-backed risk",
+                    tone: context.risk ? "attention" : "default",
+                    value: riskSummary,
+                  },
+                  {
+                    detail: evidenceGapCount
+                      ? "Open the detail sections to see what is missing."
+                      : "SEC filing and issuer-release classes present.",
+                    label: "Evidence gaps",
+                    tone: evidenceGapCount ? "attention" : "verified",
+                    value: evidenceGapCount
+                      ? `${evidenceGapCount} source class${evidenceGapCount === 1 ? "" : "es"} missing`
+                      : "No primary class gap",
+                  },
+                ]}
+              />
+            </>
+          ) : null}
           {activeSection === "research" ? (
-            <ResearchStageRail
-              activeStage={activeStage}
-              hrefForStage={stageHref}
-              stages={researchStages}
-            />
-          ) : null}
-          {activeSection === "quant" ? <QuantPanel /> : null}
-          {activeSection === "research" && !activeStageState.available ? (
-            <ResearchStageUnavailable stage={activeStageState} />
-          ) : null}
-          {activeSection === "research" &&
-          activeStageState.available &&
-          activeStageState.runHref &&
-          researchFlow === null ? (
-            <ResearchStageRunLink
-              label={activeStageState.label}
-              runHref={activeStageState.runHref}
-            />
-          ) : null}
-          {activeSection === "research" &&
-          activeStage === "opinions" &&
-          activeStageState.available &&
-          researchFlow ? (
-            <div className="mt-5 grid gap-8">
-              <GraderExecutionPanel
-                presentation={researchFlow.stages.graders}
-              />
-            </div>
-          ) : null}
-          {activeSection === "research" &&
-          activeStage === "committee" &&
-          activeStageState.available &&
-          researchFlow ? (
-            <div className="mt-5 grid gap-8">
-              <GraderCommitteePanel
-                presentation={researchFlow.stages.committee}
-              />
-              <CommitteeMemoPanel presentation={researchFlow.stages.memo} />
-            </div>
-          ) : null}
-          {activeSection === "research" &&
-          activeStage === "thesis" &&
-          activeStageState.available &&
-          researchFlow ? (
-            <div className="mt-5 grid gap-8">
-              <ReadinessThesisPanel
-                presentation={researchFlow.stages.readinessThesis}
-              />
-              <OperatorDecisionPanel
-                presentation={researchFlow.stages.operatorDecisions}
-              />
-            </div>
-          ) : null}
-          {activeSection === "research" && activeStage === "overview" ? (
             <div className="mt-5">
               <StatusStrip
                 marketReady={Boolean(marketSeries || context.market)}
@@ -822,7 +917,7 @@ export default async function TickerWorkspace({
               />
             </div>
           ) : null}
-          {activeSection === "research" && activeStage === "overview" && selectedSecurity ? (
+          {activeSection === "research" && selectedSecurity ? (
             <div className="mt-5 grid gap-5 lg:grid-cols-2">
               <Card>
                 <CardHeader className="pb-3">
@@ -875,7 +970,7 @@ export default async function TickerWorkspace({
               </Card>
             </div>
           ) : null}
-          {activeSection === "research" && activeStage === "overview" && selectedSecurity ? (
+          {activeSection === "research" && selectedSecurity ? (
             <ResearchRunHistoryPanel presentation={researchHistoryPresentation} />
           ) : null}
           {false ? (
@@ -883,7 +978,7 @@ export default async function TickerWorkspace({
               <ResearchRunHistoryPanel presentation={researchHistoryPresentation} />
             </div>
           ) : null}
-          {selectedSecurity && activeSection === "research" && activeStage === "overview" ? (
+          {selectedSecurity && activeSection === "research" ? (
             <Card className="mt-5">
               <CardHeader>
                 <SectionLabel>Market evidence</SectionLabel>
@@ -908,15 +1003,28 @@ export default async function TickerWorkspace({
                     return here.
                   </p>
                 ) : (
-                  <form action={refreshMarketEvidence}>
-                    <input
-                      name="securityId"
-                      type="hidden"
-                      value={selectedSecurity.securityId}
-                    />
-                    <input name="view" type="hidden" value={activeSection} />
-                    <Button type="submit">Refresh market evidence</Button>
-                  </form>
+                  <div className="flex flex-wrap gap-2">
+                    <form action={refreshMarketEvidence}>
+                      <input
+                        name="securityId"
+                        type="hidden"
+                        value={selectedSecurity.securityId}
+                      />
+                      <input name="view" type="hidden" value={activeSection} />
+                      <Button type="submit">Refresh current quote</Button>
+                    </form>
+                    <form action={refreshMarketHistory}>
+                      <input
+                        name="securityId"
+                        type="hidden"
+                        value={selectedSecurity.securityId}
+                      />
+                      <input name="view" type="hidden" value={activeSection} />
+                      <Button type="submit" variant="outline">
+                        Refresh daily history
+                      </Button>
+                    </form>
+                  </div>
                 )}
                 {(params.market_evidence === "ready" ||
                   params.market_evidence === "stale") &&
@@ -951,10 +1059,30 @@ export default async function TickerWorkspace({
                           : "Market evidence refresh failed or the connection is unavailable. Reconnect or retry."}
                   </p>
                 ) : null}
+                {params.market_history === "ready" ? (
+                  <p
+                    aria-live="polite"
+                    className="mt-3 rounded-md border border-border bg-muted/35 px-3 py-2 text-xs"
+                  >
+                    Daily history retrieved through reviewed Moomoo MCP tool
+                    quote_history_kline. Request is server-owned, capped at
+                    100 daily bars, forward-adjusted, and excludes extended
+                    hours. No trading action occurred.
+                  </p>
+                ) : null}
+                {params.market_history_error ? (
+                  <p
+                    aria-live="polite"
+                    className="mt-3 rounded-md border border-challenge/35 bg-challenge-muted px-3 py-2 text-xs text-challenge-muted-foreground"
+                  >
+                    Daily history request failed or returned an unrecognized
+                    contract. No partial data was accepted.
+                  </p>
+                ) : null}
               </CardContent>
             </Card>
           ) : null}
-          {selectedSecurity && activeSection === "research" && activeStage === "overview" ? (
+          {selectedSecurity && activeSection === "research" ? (
             <Card className="mt-5">
               <CardHeader>
                 <SectionLabel>Accepted evidence capture</SectionLabel>
@@ -1053,7 +1181,7 @@ export default async function TickerWorkspace({
               </CardContent>
             </Card>
           ) : null}
-          {selectedSecurity && activeSection === "research" && activeStage === "overview" ? (
+          {selectedSecurity && activeSection === "research" ? (
             <Card className="mt-5">
               <CardHeader>
                 <div className="flex flex-wrap items-center justify-between gap-3">
@@ -1247,7 +1375,7 @@ export default async function TickerWorkspace({
               />
             </div>
           ) : null}
-          {selectedSecurity && activeSection === "research" && activeStage === "overview" ? (
+          {selectedSecurity && activeSection === "research" ? (
             <Card className="mt-5">
               <CardHeader>
                 <SectionLabel>Ticker notebook</SectionLabel>
@@ -1320,6 +1448,72 @@ export default async function TickerWorkspace({
               </CardContent>
             </Card>
           ) : null}
+          {activeSection === "research" ? (
+            <>
+              <ResearchDetailsHeading />
+              {researchFlow ? (
+                <div className="mt-5 grid gap-4">
+                  <details className="group rounded-xl border border-border bg-card" open>
+                    <summary className="cursor-pointer list-none px-5 py-4 font-medium marker:hidden">
+                      <span className="flex items-center justify-between gap-4">
+                        <span>
+                          <span className="block text-sm">Opinions and execution</span>
+                          <span className="mt-1 block text-xs font-normal text-muted-foreground">
+                            Independent grader outputs and pinned execution identity.
+                          </span>
+                        </span>
+                        <ChevronDown aria-hidden="true" className="size-4 transition-transform group-open:rotate-180" />
+                      </span>
+                    </summary>
+                    <div className="border-t border-border p-5">
+                      <GraderExecutionPanel presentation={researchFlow.stages.graders} />
+                    </div>
+                  </details>
+                  <details className="group rounded-xl border border-border bg-card">
+                    <summary className="cursor-pointer list-none px-5 py-4 font-medium marker:hidden">
+                      <span className="flex items-center justify-between gap-4">
+                        <span>
+                          <span className="block text-sm">Committee and synthesis</span>
+                          <span className="mt-1 block text-xs font-normal text-muted-foreground">
+                            Cross-opinion accounting and provenance-safe memo.
+                          </span>
+                        </span>
+                        <ChevronDown aria-hidden="true" className="size-4 transition-transform group-open:rotate-180" />
+                      </span>
+                    </summary>
+                    <div className="grid gap-8 border-t border-border p-5">
+                      <GraderCommitteePanel presentation={researchFlow.stages.committee} />
+                      <CommitteeMemoPanel presentation={researchFlow.stages.memo} />
+                    </div>
+                  </details>
+                  <details className="group rounded-xl border border-border bg-card">
+                    <summary className="cursor-pointer list-none px-5 py-4 font-medium marker:hidden">
+                      <span className="flex items-center justify-between gap-4">
+                        <span>
+                          <span className="block text-sm">Readiness and thesis</span>
+                          <span className="mt-1 block text-xs font-normal text-muted-foreground">
+                            Deterministic readiness gate, canonical chain, and operator decision.
+                          </span>
+                        </span>
+                        <ChevronDown aria-hidden="true" className="size-4 transition-transform group-open:rotate-180" />
+                      </span>
+                    </summary>
+                    <div className="grid gap-8 border-t border-border p-5">
+                      <ReadinessThesisPanel presentation={researchFlow.stages.readinessThesis} />
+                      <OperatorDecisionPanel presentation={researchFlow.stages.operatorDecisions} />
+                    </div>
+                  </details>
+                </div>
+              ) : (
+                <Card className="mt-5 border-dashed">
+                  <CardContent className="py-5 text-sm text-muted-foreground">
+                    No finalized Research Run yet. Run preflight above after accepting a capture;
+                    resulting opinions, committee synthesis, and thesis will appear here.
+                  </CardContent>
+                </Card>
+              )}
+            </>
+          ) : null}
           {activeSection === "dashboard" ? (
             <div className="mt-5">
               <StatusStrip
@@ -1384,6 +1578,21 @@ export default async function TickerWorkspace({
                 </Badge>
               </CardHeader>
               <CardContent>
+                {moomooMcpStatus.state === "ready" ? (
+                  <form action={refreshMoomooMcpPortfolio} className="mb-3">
+                    <input name="view" type="hidden" value="dashboard" />
+                    {selectedSecurity ? (
+                      <input
+                        name="securityId"
+                        type="hidden"
+                        value={selectedSecurity.securityId}
+                      />
+                    ) : null}
+                    <Button type="submit" variant="outline">
+                      Refresh holdings from Moomoo
+                    </Button>
+                  </form>
+                ) : null}
                 {visibleMoomooHoldings ? (
                   <MoomooHoldingsTable holdings={visibleMoomooHoldings} />
                 ) : (
@@ -1514,6 +1723,38 @@ export default async function TickerWorkspace({
                   </form>
                 </details>
               ) : null}
+              <details className="mt-3 rounded-md border border-border bg-muted/10 px-3 py-2">
+                <summary className="cursor-pointer text-xs font-medium text-muted-foreground">
+                  Connection diagnostics ({moomooDiagnostics.length})
+                </summary>
+                <p className="mt-2 border-t border-border pt-2 text-xs text-muted-foreground">
+                  Bounded lifecycle stages and reason codes only. No tokens,
+                  client identifiers, account data, or provider payloads.
+                </p>
+                {moomooDiagnostics.length > 0 ? (
+                  <ul className="mt-2 grid max-h-48 gap-1 overflow-y-auto border-t border-border pt-2">
+                    {moomooDiagnostics.map((entry) => (
+                      <li
+                        className="flex flex-wrap justify-between gap-2 font-mono text-[11px] text-muted-foreground"
+                        key={`${entry.timestamp}:${entry.stage}:${entry.reasonCode}`}
+                      >
+                        <span>{entry.stage}</span>
+                        <span>{entry.reasonCode}</span>
+                        {entry.shape ? (
+                          <span>
+                            shape {entry.shape.structuredShape}; content{" "}
+                            {entry.shape.contentKind}/{entry.shape.contentCount}
+                          </span>
+                        ) : null}
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p className="mt-2 border-t border-border pt-2 text-xs text-muted-foreground">
+                    No connection diagnostics recorded.
+                  </p>
+                )}
+              </details>
               {params.mcp_error ? (
                 <p className="mt-3 text-sm text-challenge">
                   {mcpErrorMessage(params.mcp_error)}
@@ -1788,17 +2029,16 @@ export default async function TickerWorkspace({
                 )
               }
             />
-            <MoomooAutoReconnect
-              active={moomooStatus.state === "disconnected"}
-              clientId={autoResumeClientId}
-            />
-            <MoomooMcpAutoReconnect
-              active={
-                mcpAutoResumeEnabled && moomooMcpStatus.state === "disconnected"
+            <MoomooConnectionAutoReconnect
+              mcpActive={
+                mcpAutoResumeEnabled &&
+                ["disconnected", "unavailable"].includes(moomooMcpStatus.state)
               }
+              openApiActive={moomooStatus.state === "disconnected"}
+              openApiClientId={autoResumeClientId}
             />
           </div>
-          {activeSection === "research" && activeStage !== "overview" && !hasResearch ? (
+          {activeSection === "research" && !hasResearch ? (
             <Card className="mt-12">
               <CardHeader className="max-w-3xl py-12 sm:py-16">
                 <SectionLabel>Hosted research spine ready</SectionLabel>
@@ -1811,7 +2051,7 @@ export default async function TickerWorkspace({
                 </CardDescription>
               </CardHeader>
             </Card>
-          ) : activeSection === "research" && activeStage !== "overview" && hasResearch ? (
+          ) : activeSection === "research" && hasResearch ? (
             <>
               <section
                 className="grid gap-8 border-b border-border py-10 sm:py-14 lg:grid-cols-[1fr_auto] lg:items-end"
@@ -1929,12 +2169,12 @@ export default async function TickerWorkspace({
                 </div>
               </Card>
 
-              {activeStage === "valuation" && activeStageState.available ? (
+              {hasResearch ? (
                 <section
                   aria-label="Ticker context"
                   className="grid gap-5 py-5 xl:grid-cols-12"
                 >
-                {activeStage === "valuation" && activeStageState.available ? <Card className="xl:col-span-5">
+                {hasResearch ? <Card className="xl:col-span-5">
                   <CardHeader>
                     <SectionLabel>Market context</SectionLabel>
                     <CardTitle>Point-in-time market view</CardTitle>
@@ -2067,7 +2307,7 @@ export default async function TickerWorkspace({
                   </CardContent>
                 </Card> : null}
 
-                {activeStage === "valuation" && activeStageState.available ? <Card className="xl:col-span-7 xl:row-span-2">
+                {hasResearch ? <Card className="xl:col-span-7 xl:row-span-2">
                   <CardHeader className="sm:grid-cols-[1fr_auto] sm:items-start">
                     <div>
                       <SectionLabel>Financial health</SectionLabel>
@@ -2119,7 +2359,7 @@ export default async function TickerWorkspace({
                   </CardContent>
                 </Card> : null}
 
-                {activeStage === "valuation" && activeStageState.available ? <Card className="border-primary/30 xl:col-span-5">
+                {hasResearch ? <Card className="border-primary/30 xl:col-span-5">
                   <CardHeader>
                     <div className="flex items-center justify-between gap-3">
                       <SectionLabel>Forward catalyst</SectionLabel>
@@ -2157,7 +2397,7 @@ export default async function TickerWorkspace({
                   </CardContent>
                 </Card> : null}
 
-                {activeStage === "valuation" && activeStageState.available ? <Card className="border-challenge/30 xl:col-span-5">
+                {hasResearch ? <Card className="border-challenge/30 xl:col-span-5">
                   <CardHeader>
                     <div className="flex items-center justify-between gap-3">
                       <SectionLabel>Source-backed risk</SectionLabel>
@@ -2201,7 +2441,7 @@ export default async function TickerWorkspace({
                   </CardContent>
                 </Card> : null}
 
-                {activeStage === "valuation" && activeStageState.available ? <Card className="xl:col-span-12">
+                {hasResearch ? <Card className="xl:col-span-12">
                   <CardHeader className="sm:grid-cols-[1fr_auto] sm:items-start">
                     <div>
                       <SectionLabel>Price and volume</SectionLabel>
@@ -2250,7 +2490,7 @@ export default async function TickerWorkspace({
                 </section>
               ) : null}
 
-              {activeStage === "evidence" && activeStageState.available && trace ? (
+              {trace ? (
                 <Card aria-label="SEC evidence chain" className="mt-1" id="evidence">
                   <CardHeader className="sm:grid-cols-[1fr_auto] sm:items-start">
                     <div>

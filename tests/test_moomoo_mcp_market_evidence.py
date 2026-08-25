@@ -13,6 +13,47 @@ RETRIEVED_AT = datetime(2026, 8, 20, 12, 0, 0, tzinfo=timezone.utc)
 
 
 class BuildMarketQuoteEvidenceTests(unittest.TestCase):
+    def test_builds_evidence_from_official_quote_list_contract(self) -> None:
+        evidence = build_market_quote_evidence(
+            {
+                "isError": False,
+                "structuredContent": {
+                    "quote_list": [
+                        {
+                            "code": "US.FRVO",
+                            "data_time": 1_777_000_000_000,
+                            "last_price": 8.25,
+                            "name": "FRVO",
+                            "prev_close_price": 8.1,
+                            "sec_status": "NORMAL",
+                            "suspension": False,
+                            "volume": 1234,
+                        }
+                    ]
+                },
+            },
+            ticker="US.FRVO",
+            security_id="11111111-1111-1111-1111-111111111111",
+            retrieved_at=RETRIEVED_AT,
+        )
+
+        self.assertEqual(evidence.summary["code"], "US.FRVO")
+        self.assertEqual(evidence.summary["last_price"], "8.25")
+        self.assertIsNotNone(evidence.provider_reported_at)
+
+    def test_official_quote_list_must_contain_exactly_one_requested_quote(self) -> None:
+        for quote_list in ([], [{"code": "US.FRVO"}, {"code": "US.AAPL"}]):
+            with self.assertRaises(MarketEvidenceError):
+                build_market_quote_evidence(
+                    {
+                        "isError": False,
+                        "structuredContent": {"quote_list": quote_list},
+                    },
+                    ticker="US.FRVO",
+                    security_id="11111111-1111-1111-1111-111111111111",
+                    retrieved_at=RETRIEVED_AT,
+                )
+
     def test_builds_typed_evidence_from_structured_content(self) -> None:
         evidence = build_market_quote_evidence(
             {
@@ -36,8 +77,55 @@ class BuildMarketQuoteEvidenceTests(unittest.TestCase):
         self.assertIn(evidence.freshness, {"fresh", "stale"})
         self.assertIsNotNone(evidence.provider_reported_at)
 
-    def test_missing_provider_timestamp_fails_closed(self) -> None:
+    def test_accepts_one_outer_object_around_official_quote_wrapper(self) -> None:
+        evidence = build_market_quote_evidence(
+            {
+                "isError": False,
+                "structuredContent": {
+                    "data": {
+                        "quote_list": [
+                            {
+                                "code": "US.FRVO",
+                                "data_time": 1_777_000_000_000,
+                                "last_price": 27.9,
+                            }
+                        ]
+                    }
+                },
+            },
+            ticker="US.FRVO",
+            security_id="11111111-1111-1111-1111-111111111111",
+            retrieved_at=RETRIEVED_AT,
+        )
+
+        self.assertEqual(evidence.ticker, "US.FRVO")
+
+    def test_rejects_unverified_deep_nested_objects(self) -> None:
         with self.assertRaises(MarketEvidenceError):
+            build_market_quote_evidence(
+                {
+                    "isError": False,
+                    "structuredContent": {
+                        "result": {
+                            "data": {
+                                "quote_list": [
+                                    {
+                                        "code": "US.FRVO",
+                                        "data_time": 1_777_000_000_000,
+                                        "last_price": 27.9,
+                                    }
+                                ]
+                            }
+                        }
+                    },
+                },
+                ticker="US.FRVO",
+                security_id="11111111-1111-1111-1111-111111111111",
+                retrieved_at=RETRIEVED_AT,
+            )
+
+    def test_missing_provider_timestamp_fails_closed(self) -> None:
+        with self.assertRaises(MarketEvidenceError) as context:
             build_market_quote_evidence(
                 {
                     "isError": False,
@@ -47,6 +135,7 @@ class BuildMarketQuoteEvidenceTests(unittest.TestCase):
                 security_id="11111111-1111-1111-1111-111111111111",
                 retrieved_at=RETRIEVED_AT,
             )
+        self.assertEqual(context.exception.code, "quote_result_invalid")
 
     def test_missing_price_field_fails_closed(self) -> None:
         with self.assertRaises(MarketEvidenceError):

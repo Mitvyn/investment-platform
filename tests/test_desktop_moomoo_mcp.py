@@ -329,6 +329,51 @@ class DesktopMoomooMcpDecoupledConnectionTests(unittest.TestCase):
         self.assertEqual(status.state, "ready")
         self.assertEqual(status.tool_count, 1)
 
+    def test_mcp_resume_records_bounded_stage_diagnostics_in_order(self) -> None:
+        backend = KeychainBackend()
+        MoomooMcpTokenKeychain(
+            operator_id=OPERATOR_ID, client_id=MCP_CLIENT_ID, backend=backend
+        ).store_refresh_token("mcp-refresh-secret")
+        from workers.moomoo_mcp.diagnostics import MoomooDiagnosticsLog
+
+        service = _service(
+            backend=backend,
+            diagnostics_log=MoomooDiagnosticsLog(),
+        )
+
+        status = service.resume_mcp_connection(operator_id=OPERATOR_ID)
+
+        self.assertEqual(status.state, "ready")
+        stages = [entry["stage"] for entry in service.recent_diagnostics()]
+        expected = [
+            "refresh_started",
+            "refresh_client_identity_ready",
+            "refresh_credential_ready",
+            "refresh_metadata_started",
+            "refresh_metadata_ready",
+            "refresh_token_started",
+            "refresh_token_ready",
+            "tool_discovery_started",
+            "ready",
+        ]
+        positions = [stages.index(stage) for stage in expected]
+        self.assertEqual(positions, sorted(positions))
+        serialized = json.dumps(service.recent_diagnostics())
+        self.assertNotIn(MCP_CLIENT_ID, serialized)
+        self.assertNotIn("mcp-refresh-secret", serialized)
+        self.assertNotIn("mcp-access-secret", serialized)
+
+    def test_mcp_resume_is_single_flight_while_refresh_is_active(self) -> None:
+        service = _service()
+        service._mcp_pending_operator_id = OPERATOR_ID
+        service._mcp_status = service._mcp_status.__class__(
+            state="refreshing", tool_count=0
+        )
+
+        status = service.resume_mcp_connection(operator_id=OPERATOR_ID)
+
+        self.assertEqual(status.state, "refreshing")
+
     def test_mcp_resumes_when_optional_openapi_refresh_fails(self) -> None:
         backend = KeychainBackend()
         MoomooMcpTokenKeychain(
@@ -712,6 +757,76 @@ class DesktopMoomooMcpLoopbackTests(unittest.TestCase):
         payload = json.loads(response.read())
         self.assertEqual(response.status, 200)
         self.assertEqual(payload["entries"], recorded_via_public_method)
+
+    def test_diagnostics_route_survives_service_restart(self) -> None:
+        from pathlib import Path
+        import tempfile
+
+        from workers.moomoo_mcp.diagnostics import (
+            MoomooDiagnosticsLog,
+            summarize_mcp_result_shape,
+        )
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "moomoo-diagnostics.json"
+            first_log = MoomooDiagnosticsLog(path=path)
+            first_log.record(
+                subsystem="core_mcp",
+                stage="market_quote_malformed",
+                reason_code="moomoo_market_evidence_malformed",
+                shape=summarize_mcp_result_shape(
+                    {
+                        "structuredContent": {"unexpected": "provider-value"},
+                        "content": [{"type": "text", "text": "not-json"}],
+                    }
+                ),
+            )
+            first_server = DesktopControlServer(
+                service=_service(diagnostics_log=first_log),
+                control_token="control-secret",
+            )
+            first_server.start()
+            try:
+                first_origin = urlsplit(first_server.origin)
+                first_connection = HTTPConnection(
+                    first_origin.hostname, first_origin.port, timeout=2
+                )
+                first_connection.request(
+                    "GET",
+                    "/v1/moomoo/diagnostics",
+                    headers={"Authorization": "Bearer control-secret"},
+                )
+                first_response = first_connection.getresponse()
+                first_payload = json.loads(first_response.read())
+                self.assertEqual(first_response.status, 200)
+                self.assertEqual(len(first_payload["entries"]), 1)
+            finally:
+                first_server.stop()
+
+            second_server = DesktopControlServer(
+                service=_service(
+                    diagnostics_log=MoomooDiagnosticsLog(path=path),
+                ),
+                control_token="control-secret",
+            )
+            second_server.start()
+            try:
+                second_origin = urlsplit(second_server.origin)
+                second_connection = HTTPConnection(
+                    second_origin.hostname, second_origin.port, timeout=2
+                )
+                second_connection.request(
+                    "GET",
+                    "/v1/moomoo/diagnostics",
+                    headers={"Authorization": "Bearer control-secret"},
+                )
+                second_response = second_connection.getresponse()
+                second_payload = json.loads(second_response.read())
+                self.assertEqual(second_response.status, 200)
+                self.assertEqual(second_payload["entries"], first_payload["entries"])
+                self.assertNotIn("provider-value", json.dumps(second_payload))
+            finally:
+                second_server.stop()
 
     def _mcp_resume_ready_server(self) -> tuple[DesktopControlServer, HTTPConnection]:
         backend = KeychainBackend()

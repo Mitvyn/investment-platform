@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import unittest
 from typing import Mapping
+from urllib.error import HTTPError
 
 from workers.moomoo_mcp.http_client import MoomooMcpError, MoomooMcpHttpClient
 
@@ -37,6 +38,12 @@ class FakeOpener:
         return self.responses.pop(0)
 
 
+class HttpErrorOpener:
+    def __call__(self, request: object, *, timeout: float, context: object) -> object:
+        del timeout, context
+        raise HTTPError(request.full_url, 400, "provider detail", {}, None)
+
+
 def response(
     result: Mapping[str, object],
     *,
@@ -53,6 +60,52 @@ def response(
 
 
 class MoomooMcpHttpClientTests(unittest.TestCase):
+    def test_jsonrpc_failure_exposes_only_a_bounded_reason_code(self) -> None:
+        opener = FakeOpener(
+            [
+                response(
+                    {
+                        "protocolVersion": "2025-06-18",
+                        "capabilities": {"tools": {}},
+                        "serverInfo": {"name": "Moomoo", "version": "test"},
+                    },
+                    message_id=1,
+                    session_id="session-1",
+                ),
+                FakeResponse(
+                    json.dumps(
+                        {
+                            "jsonrpc": "2.0",
+                            "id": 2,
+                            "error": {
+                                "code": -32602,
+                                "message": "secret provider detail",
+                            },
+                        }
+                    ).encode(),
+                    headers={"Content-Type": "application/json"},
+                ),
+            ]
+        )
+        client = MoomooMcpHttpClient(access_token="access-secret", opener=opener)
+
+        with self.assertRaises(MoomooMcpError) as context:
+            client.call_tool("quote_stock_quote", {"code_list": ["US.AAPL"]})
+
+        self.assertEqual(context.exception.code, "jsonrpc_invalid_params")
+        self.assertNotIn("secret provider detail", str(context.exception))
+
+    def test_http_failure_exposes_status_without_provider_detail(self) -> None:
+        client = MoomooMcpHttpClient(
+            access_token="access-secret", opener=HttpErrorOpener()
+        )
+
+        with self.assertRaises(MoomooMcpError) as context:
+            client.call_tool("quote_stock_quote", {"code_list": ["US.AAPL"]})
+
+        self.assertEqual(context.exception.code, "http_400")
+        self.assertNotIn("provider detail", str(context.exception))
+
     def test_list_tools_initializes_session_and_never_exposes_bearer(self) -> None:
         opener = FakeOpener(
             [
@@ -133,6 +186,201 @@ class MoomooMcpHttpClientTests(unittest.TestCase):
         self.assertEqual(second_body["params"]["name"], "quote_stock_quote")
         self.assertEqual(second_body["params"]["arguments"], {"code_list": ["US.AAPL"]})
         self.assertNotIn("access-secret", repr(client))
+
+    def test_call_tool_promotes_one_json_text_result_to_structured_content(self) -> None:
+        opener = FakeOpener(
+            [
+                response(
+                    {
+                        "protocolVersion": "2025-06-18",
+                        "capabilities": {"tools": {}},
+                        "serverInfo": {"name": "Moomoo", "version": "test"},
+                    },
+                    message_id=1,
+                    session_id="session-1",
+                ),
+                response(
+                    {
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": '{"quote_list":[{"code":"US.FRVO"}]}',
+                            }
+                        ],
+                        "isError": False,
+                    },
+                    message_id=2,
+                ),
+            ]
+        )
+
+        result = MoomooMcpHttpClient(
+            access_token="access-secret", opener=opener
+        ).call_tool("quote_stock_quote", {"code_list": ["US.FRVO"]})
+
+        self.assertEqual(
+            result["structuredContent"],
+            {"quote_list": [{"code": "US.FRVO"}]},
+        )
+
+    def test_call_tool_treats_empty_structured_content_as_absent(self) -> None:
+        opener = FakeOpener(
+            [
+                response(
+                    {
+                        "protocolVersion": "2025-06-18",
+                        "capabilities": {"tools": {}},
+                        "serverInfo": {"name": "Moomoo", "version": "test"},
+                    },
+                    message_id=1,
+                    session_id="session-1",
+                ),
+                response(
+                    {
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": '{"quote_list":[{"code":"US.FRVO"}]}',
+                            }
+                        ],
+                        "isError": False,
+                        "structuredContent": {},
+                    },
+                    message_id=2,
+                ),
+            ]
+        )
+
+        result = MoomooMcpHttpClient(
+            access_token="access-secret", opener=opener
+        ).call_tool("quote_stock_quote", {"code_list": ["US.FRVO"]})
+
+        self.assertEqual(
+            result["structuredContent"],
+            {"quote_list": [{"code": "US.FRVO"}]},
+        )
+
+    def test_call_tool_unwraps_exact_successful_provider_rest_envelope(self) -> None:
+        opener = FakeOpener(
+            [
+                response(
+                    {
+                        "protocolVersion": "2025-06-18",
+                        "capabilities": {"tools": {}},
+                        "serverInfo": {"name": "Moomoo", "version": "test"},
+                    },
+                    message_id=1,
+                    session_id="session-1",
+                ),
+                response(
+                    {
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": json.dumps(
+                                    {
+                                        "ret_code": 0,
+                                        "ret_msg": "success",
+                                        "data": {
+                                            "quote_list": [{"code": "US.FRVO"}]
+                                        },
+                                    }
+                                ),
+                            }
+                        ],
+                        "isError": False,
+                    },
+                    message_id=2,
+                ),
+            ]
+        )
+
+        result = MoomooMcpHttpClient(
+            access_token="access-secret", opener=opener
+        ).call_tool("quote_stock_quote", {"code_list": ["US.FRVO"]})
+
+        self.assertEqual(
+            result["structuredContent"],
+            {"quote_list": [{"code": "US.FRVO"}]},
+        )
+
+    def test_call_tool_unwraps_documented_moomoo_s_d_envelope(self) -> None:
+        opener = FakeOpener(
+            [
+                response(
+                    {
+                        "protocolVersion": "2025-06-18",
+                        "capabilities": {"tools": {}},
+                        "serverInfo": {"name": "Moomoo", "version": "test"},
+                    },
+                    message_id=1,
+                    session_id="session-1",
+                ),
+                response(
+                    {
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": json.dumps(
+                                    {
+                                        "s": "ok",
+                                        "d": {
+                                            "quote_list": [{"code": "US.FRVO"}]
+                                        },
+                                    }
+                                ),
+                            }
+                        ],
+                        "isError": False,
+                    },
+                    message_id=2,
+                ),
+            ]
+        )
+
+        result = MoomooMcpHttpClient(
+            access_token="access-secret", opener=opener
+        ).call_tool("quote_stock_quote", {"code_list": ["US.FRVO"]})
+
+        self.assertEqual(
+            result["structuredContent"],
+            {"quote_list": [{"code": "US.FRVO"}]},
+        )
+
+    def test_call_tool_rejects_ambiguous_or_non_json_text_fallback(self) -> None:
+        invalid_content_sets = (
+            [{"type": "text", "text": "not json"}],
+            [
+                {"type": "text", "text": '{"quote_list":[]}'},
+                {"type": "text", "text": '{"quote_list":[]}'},
+            ],
+            [{"type": "image", "data": "ignored", "mimeType": "image/png"}],
+        )
+        for content in invalid_content_sets:
+            with self.subTest(content=content):
+                opener = FakeOpener(
+                    [
+                        response(
+                            {
+                                "protocolVersion": "2025-06-18",
+                                "capabilities": {"tools": {}},
+                                "serverInfo": {"name": "Moomoo", "version": "test"},
+                            },
+                            message_id=1,
+                            session_id="session-1",
+                        ),
+                        response(
+                            {"content": content, "isError": False},
+                            message_id=2,
+                        ),
+                    ]
+                )
+                with self.assertRaises(MoomooMcpError):
+                    MoomooMcpHttpClient(
+                        access_token="access-secret", opener=opener
+                    ).call_tool(
+                        "quote_stock_quote", {"code_list": ["US.FRVO"]}
+                    )
 
     def test_call_tool_rejects_blank_tool_name(self) -> None:
         client = MoomooMcpHttpClient(access_token="access-secret", opener=FakeOpener([]))

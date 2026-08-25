@@ -178,3 +178,15 @@ export {
   type PersonalResearchValuationSourceReference,
   type ResearchValuationSnapshot,
 } from "./personal-research-valuation-snapshot";
+export {
+  parseQuantDatasetStatus,
+  parseQuantLocalResult,
+  QUANT_DATASET_RECEIPT_CONTRACT,
+  QUANT_RESULT_CONTRACT,
+  type QuantDatasetReceipt,
+  type QuantDatasetStatus,
+  type QuantLocalResult,
+  type QuantOutcome,
+  type QuantScenarioSummary,
+  type QuantValidation,
+} from "./quant-workspace";

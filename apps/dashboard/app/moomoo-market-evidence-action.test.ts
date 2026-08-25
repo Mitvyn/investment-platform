@@ -32,3 +32,18 @@ test("refreshMarketEvidence never forwards a client-supplied ticker to the adapt
   assert.doesNotMatch(actionBody, /formData\.get\("ticker"\)/);
   assert.match(actionBody, /ticker: `US\.\$\{security\.symbol\}`/);
 });
+
+test("refreshMarketHistory derives ticker and bounded dates on the server", () => {
+  const actionStart = source.indexOf("export async function refreshMarketHistory");
+  assert.notEqual(actionStart, -1);
+  const actionBody = source.slice(actionStart, source.indexOf("\n}\n", actionStart));
+  const directoryLookupIndex = actionBody.indexOf("iros_securities");
+  const adapterCallIndex = actionBody.indexOf("fetchMoomooMarketHistoryEvidence(");
+  assert.ok(directoryLookupIndex > -1);
+  assert.ok(adapterCallIndex > directoryLookupIndex);
+  assert.match(actionBody, /ticker: `US\.\$\{security\.symbol\}`/);
+  assert.match(actionBody, /maxBars: 100/);
+  assert.doesNotMatch(actionBody, /formData\.get\("ticker"\)/);
+  assert.doesNotMatch(actionBody, /formData\.get\("start"\)/);
+  assert.doesNotMatch(actionBody, /formData\.get\("end"\)/);
+});
