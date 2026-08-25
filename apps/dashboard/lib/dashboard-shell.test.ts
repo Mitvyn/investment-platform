@@ -29,7 +29,7 @@ test("the dashboard shell presents product features and auditable information al
     [
       { available: true, current: true, label: "Dashboard" },
       { available: true, current: false, label: "Research" },
-      { available: false, current: false, label: "Quant" },
+      { available: true, current: false, label: "Quant" },
       { available: true, current: false, label: "Settings" },
     ],
   );

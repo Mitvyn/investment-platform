@@ -32,6 +32,7 @@ export const primaryDashboardSections = [
 const availableDashboardSections = new Set<DashboardSection>([
   "dashboard",
   "research",
+  "quant",
   "settings",
 ]);
 
