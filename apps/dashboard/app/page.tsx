@@ -1186,6 +1186,21 @@ export default async function TickerWorkspace({
                       type="file"
                     />
                   </div>
+                  <div className="flex flex-col gap-1">
+                    <label
+                      className="text-xs font-medium text-muted-foreground"
+                      htmlFor="captureOperatorFocus"
+                    >
+                      Optional research emphasis
+                    </label>
+                    <textarea
+                      className="min-h-16 w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-xs outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/40"
+                      id="captureOperatorFocus"
+                      maxLength={2000}
+                      name="operatorFocus"
+                      placeholder="Focus on financing through the next catalyst."
+                    />
+                  </div>
                   <label className="flex items-start gap-3 rounded-md border border-border bg-muted/35 px-3 py-3 text-xs">
                     <input
                       className="mt-0.5 size-4 accent-primary"
@@ -1200,9 +1215,17 @@ export default async function TickerWorkspace({
                       embedded issuer sources are intended for this import.
                     </span>
                   </label>
-                  <Button className="justify-self-start" type="submit">
-                    Import capture
-                  </Button>
+                  <div className="flex flex-wrap gap-3">
+                    <Button type="submit">Import capture</Button>
+                    <Button
+                      name="prepareResearch"
+                      type="submit"
+                      value="true"
+                      variant="outline"
+                    >
+                      Import and run research
+                    </Button>
+                  </div>
                 </form>
                 <details className="mt-5 rounded-md border border-border px-3 py-2">
                   <summary className="cursor-pointer text-xs font-medium">

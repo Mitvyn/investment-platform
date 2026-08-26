@@ -21,6 +21,9 @@ test("Research Overview exposes a capture-import path that feeds the existing ac
   assert.match(page, /type="file"/);
   assert.match(page, /name="confirmEmbeddedIssuerHosts"/);
   assert.match(page, /The app derives cutoff and issuer hosts from the archive/);
+  assert.match(page, /name="prepareResearch"/);
+  assert.match(page, /Import and run research/);
+  assert.match(page, /name="operatorFocus"/);
   assert.match(page, /name="captureAsOfCutoff"/);
   assert.match(page, /name="trustedIssuerHosts"/);
   assert.match(page, /params\.capture_import === "accepted"/);

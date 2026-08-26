@@ -2,6 +2,7 @@
 
 import { redirect } from "next/navigation";
 
+import { launchResearchRun } from "./research-actions";
 import {
   importResearchCapture,
   importResearchCaptureUpload,
@@ -31,10 +32,13 @@ export async function importResearchCaptureAction(formData: FormData) {
     redirect(`/?${query.toString()}`);
   }
 
+  let importedCapture:
+    | Awaited<ReturnType<typeof importResearchCapture>>
+    | undefined;
   try {
     const archive = formData.get("captureArchive");
     if (typeof Blob !== "undefined" && archive instanceof Blob) {
-      await importResearchCaptureUpload({
+      importedCapture = await importResearchCaptureUpload({
         archive,
         cik: security.cik,
         confirmEmbeddedIssuerHosts:
@@ -45,7 +49,7 @@ export async function importResearchCaptureAction(formData: FormData) {
         securityId,
       });
     } else {
-      await importResearchCapture({
+      importedCapture = await importResearchCapture({
         archivePath: String(formData.get("archivePath") ?? ""),
         asOfCutoff: String(formData.get("captureAsOfCutoff") ?? ""),
         cik: security.cik,
@@ -63,6 +67,19 @@ export async function importResearchCaptureAction(formData: FormData) {
     query.set("capture_import_error", "import_failed");
     redirect(`/?${query.toString()}`);
   }
+
+  if (String(formData.get("prepareResearch") ?? "") === "true") {
+    const launchForm = new FormData();
+    launchForm.set("securityId", securityId);
+    launchForm.set("view", view);
+    launchForm.set("operatorFocus", String(formData.get("operatorFocus") ?? ""));
+    launchForm.set(
+      "captureSelection",
+      `${importedCapture.captureId}:${importedCapture.captureRevision}:${importedCapture.captureContentHash}`,
+    );
+    await launchResearchRun(launchForm);
+  }
+
   query.set("capture_import", "accepted");
   redirect(`/?${query.toString()}`);
 }

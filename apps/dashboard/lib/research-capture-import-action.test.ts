@@ -46,3 +46,16 @@ test("importResearchCaptureAction uses uploaded archive and server-owned identit
   assert.ok(canonicalCikIndex > uploadIndex);
   assert.ok(canonicalIssuerIndex > uploadIndex);
 });
+
+test("importResearchCaptureAction can prepare an imported capture for immediate Research Run launch", () => {
+  const actions = readFileSync(
+    new URL("../app/research-capture-import-actions.ts", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(actions, /prepareResearch/);
+  assert.match(actions, /launchResearchRun/);
+  assert.match(actions, /captureSelection/);
+  assert.match(actions, /importedCapture\.captureId/);
+  assert.match(actions, /importedCapture\.captureContentHash/);
+});
