@@ -46,3 +46,8 @@ test("market evidence card exposes bounded daily history without client-owned pa
   assert.match(card, /capped at[\s\S]*100 daily bars/);
   assert.doesNotMatch(card, /name="ticker"|name="start"|name="end"|name="maxBars"/);
 });
+
+test("market evidence recovery is also available from the decision summary", () => {
+  assert.match(page, /<ResearchDecisionSummary[\s\S]*actions=/);
+  assert.match(page, /Refresh quote/);
+});

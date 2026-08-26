@@ -42,3 +42,27 @@ test("Research keeps legacy market and source detail below the summary", () => {
   assert.match(page.slice(marketDetailIndex), /Market context/);
   assert.match(page.slice(marketDetailIndex), /Source health/);
 });
+
+test("Research keeps stale-market recovery and portfolio uncertainty visible in the summary", () => {
+  assert.match(page, /Refresh quote/);
+  assert.match(page, /Refresh quote above/);
+  assert.match(page, /close_price/);
+  assert.match(page, /Unknown — portfolio not synced/);
+  assert.match(page, /Stored daily context/);
+});
+
+test("Research attention values are not clipped before the operator can read them", () => {
+  assert.doesNotMatch(summary, /line-clamp-2/);
+});
+
+test("Research workspace status reflects the primary MCP connection", () => {
+  assert.match(page, /const mcpConnectionState\s*=\s*moomooMcpStatus\.state === "ready" \? "connected"/);
+  assert.match(page, /moomooState=\{mcpConnectionState\}/);
+  assert.doesNotMatch(page, /moomooState=\{moomooStatus\.state\}/);
+});
+
+test("Research decision summary matches dark workspace surfaces", () => {
+  assert.match(summary, /bg-card/);
+  assert.doesNotMatch(summary, /bg-foreground/);
+  assert.doesNotMatch(summary, /text-background/);
+});

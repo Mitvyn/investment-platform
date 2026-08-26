@@ -17,12 +17,15 @@ fi
 # worker builds or Deno Desktop packaging, even when .env.local contains them.
 unset IROS_SUPABASE_SECRET_KEY SUPABASE_SERVICE_ROLE_KEY
 
-required_deno_version=2.9.3
+required_deno_series=2.9.
 actual_deno_version=$(deno --version | awk 'NR == 1 { print $2 }')
-if [ "$actual_deno_version" != "$required_deno_version" ]; then
-  echo "Desktop build requires Deno $required_deno_version; found $actual_deno_version" >&2
-  exit 1
-fi
+case "$actual_deno_version" in
+  "$required_deno_series"*) ;;
+  *)
+    echo "Desktop build requires Deno ${required_deno_series}x; found $actual_deno_version" >&2
+    exit 1
+    ;;
+esac
 
 "$root_dir/scripts/build-desktop-worker.sh"
 

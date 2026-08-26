@@ -534,6 +534,8 @@ export default async function TickerWorkspace({
     (item) => item.securityId === selectedSecurity?.securityId,
   );
   const desktopRuntime = readDesktopRuntimeStatus();
+  const mcpConnectionState =
+    moomooMcpStatus.state === "ready" ? "connected" : moomooMcpStatus.state;
   const portfolioState = portfolioMirrorResult.holdings
     ? "Synced"
     : holdingsResult.snapshot
@@ -551,39 +553,54 @@ export default async function TickerWorkspace({
         (position) => position.securityId === selectedSecurity.securityId,
       )
     : null;
-  const liveQuoteField =
-    marketQuoteStatus?.evidence?.summary.last_price ??
-    marketQuoteStatus?.evidence?.summary.price ??
-    marketQuoteStatus?.evidence?.summary.cur_price ??
-    null;
-  const liveQuoteNumber = liveQuoteField === null ? null : Number(liveQuoteField);
-  const hasLiveQuote =
-    liveQuoteNumber !== null && Number.isFinite(liveQuoteNumber) && liveQuoteNumber > 0;
+  const liveQuote = [
+    { field: "last_price", value: marketQuoteStatus?.evidence?.summary.last_price },
+    { field: "price", value: marketQuoteStatus?.evidence?.summary.price },
+    { field: "cur_price", value: marketQuoteStatus?.evidence?.summary.cur_price },
+    { field: "close_price", value: marketQuoteStatus?.evidence?.summary.close_price },
+  ].find(({ value }) => {
+    if (value === undefined || value === null) return false;
+    const numericValue = Number(value);
+    return Number.isFinite(numericValue) && numericValue > 0;
+  });
+  const liveQuoteNumber = liveQuote ? Number(liveQuote.value) : null;
+  const hasLiveQuote = liveQuote !== undefined;
   const storedQuoteNumber = summary && marketSeries
     ? summary.latest.close
     : context.market?.close ?? null;
-  const currentQuoteValue = hasLiveQuote
+  const currentQuoteValue = liveQuoteNumber !== null
     ? formatCurrency(liveQuoteNumber, "USD")
     : storedQuoteNumber !== null
       ? formatCurrency(storedQuoteNumber, marketSeries?.currency ?? context.market?.currency ?? "USD")
       : "Unavailable";
-  const currentQuoteDetail = hasLiveQuote && marketQuoteStatus?.evidence
-    ? `Moomoo MCP · ${marketQuoteStatus.evidence.freshness} · ${ageLabel(marketQuoteStatus.evidence.retrievedAt)}`
+  const currentQuoteDetail = liveQuote && marketQuoteStatus?.evidence
+      ? `Moomoo MCP · ${liveQuote.field} field · ${marketQuoteStatus.evidence.freshness} · ${ageLabel(marketQuoteStatus.evidence.retrievedAt)}`
     : storedQuoteNumber !== null && marketSeries
       ? `Stored daily context · ${ageLabel(marketSeries.retrievedAt)}`
       : "No current or stored market read";
+  const hasSelectedPosition = Boolean(selectedMoomooPosition || selectedManualPosition);
   const selectedPositionValue = selectedMoomooPosition
     ? Number(selectedMoomooPosition.marketValue)
     : selectedManualPosition?.observedMarketValue ?? null;
   const portfolioPositionValue =
     selectedPositionValue !== null && Number.isFinite(selectedPositionValue)
       ? formatCurrency(selectedPositionValue, "USD")
-      : "Not held";
+      : hasSelectedPosition
+        ? "Held"
+        : portfolioState === "Synced"
+          ? "Not held — synced"
+          : portfolioState === "Manual"
+            ? "Not held — snapshot"
+            : "Unknown — portfolio not synced";
   const portfolioPositionDetail = selectedMoomooPosition
     ? `${selectedMoomooPosition.quantity} shares · live read-only mirror`
     : selectedManualPosition
       ? `${selectedManualPosition.quantity} shares · ${portfolioState.toLowerCase()} snapshot`
-      : "No position in current portfolio";
+      : portfolioState === "Synced"
+        ? "No matching position in live read-only mirror"
+        : portfolioState === "Manual"
+          ? "No matching position in manual snapshot"
+          : "Portfolio has not been synced";
   const evidenceFreshness = marketQuoteStatus?.evidence
     ? marketQuoteStatus.evidence.freshness
     : trace
@@ -863,7 +880,7 @@ export default async function TickerWorkspace({
                 {
                     detail: marketQuoteStatus?.evidence?.retrievedAt
                       ? `Read ${ageLabel(marketQuoteStatus.evidence.retrievedAt)}`
-                      : "Refresh market evidence below",
+                      : "Refresh quote above",
                     label: "Evidence freshness",
                     value: evidenceFreshness,
                     tone: evidenceFreshness === "fresh" ? "verified" : "attention",
@@ -878,6 +895,28 @@ export default async function TickerWorkspace({
                 },
                 ]}
                 ticker={displayTicker}
+                actions={
+                  moomooMcpStatus.state === "ready" ? (
+                    <form action={refreshMarketEvidence}>
+                      <input
+                        name="securityId"
+                        type="hidden"
+                        value={selectedSecurity.securityId}
+                      />
+                      <input name="view" type="hidden" value={activeSection} />
+                      <Button
+                        className="border-border bg-muted text-foreground hover:bg-muted/80"
+                        size="sm"
+                        type="submit"
+                        variant="outline"
+                      >
+                        Refresh quote
+                      </Button>
+                    </form>
+                  ) : (
+                    <span className="text-muted-foreground">Open Moomoo Settings to refresh</span>
+                  )
+                }
               />
               <ResearchAttentionGrid
                 items={[
@@ -917,7 +956,7 @@ export default async function TickerWorkspace({
             <div className="mt-5">
               <StatusStrip
                 marketReady={Boolean(marketSeries || context.market)}
-                moomooState={moomooStatus.state}
+                moomooState={mcpConnectionState}
                 portfolioState={portfolioState}
                 runtimeState={desktopRuntime.state}
                 sourceCount={sourceCount}
@@ -955,8 +994,8 @@ export default async function TickerWorkspace({
               </Card>
               <Card>
                 <CardHeader className="pb-3">
-                  <SectionLabel>Market</SectionLabel>
-                  <CardTitle className="mt-2">{displayTicker} context</CardTitle>
+                  <SectionLabel>Stored daily context</SectionLabel>
+                  <CardTitle className="mt-2">{displayTicker} daily close</CardTitle>
                 </CardHeader>
                 <CardContent className="flex items-end justify-between gap-4">
                   <div>
@@ -967,7 +1006,7 @@ export default async function TickerWorkspace({
                     </p>
                     <p className="mt-1 text-xs text-muted-foreground">
                       {summary && marketSeries
-                        ? `${summary.change >= 0 ? "+" : ""}${summary.change.toFixed(2)} · ${marketSeries.sessionEnd}`
+                        ? `Stored daily close · ${summary.change >= 0 ? "+" : ""}${summary.change.toFixed(2)} · ${marketSeries.sessionEnd}`
                         : "Personal-use market context unavailable"}
                     </p>
                   </div>
@@ -1590,7 +1629,7 @@ export default async function TickerWorkspace({
             <div className="mt-5">
               <StatusStrip
                 marketReady={Boolean(marketSeries || context.market)}
-                moomooState={moomooStatus.state}
+                moomooState={mcpConnectionState}
                 portfolioState={portfolioState}
                 runtimeState={desktopRuntime.state}
                 sourceCount={sourceCount}
