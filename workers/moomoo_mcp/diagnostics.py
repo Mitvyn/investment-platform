@@ -13,9 +13,11 @@ IDs, holdings, raw schemas, or raw provider payloads.
 from __future__ import annotations
 
 from collections import deque
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
+import fcntl
 import json
 import os
 from pathlib import Path
@@ -300,36 +302,87 @@ class MoomooDiagnosticsLog:
     ) -> None:
         if max_entries <= 0:
             raise ValueError("Moomoo diagnostics log capacity must be positive")
+        self._max_entries = max_entries
         self._entries: deque[MoomooDiagnosticEntry] = deque(maxlen=max_entries)
         self._clock = clock or (lambda: datetime.now())
         self._path = path
-        self._load()
+        with self._locked() as available:
+            if available:
+                self._entries.extend(self._read_persisted_entries())
 
-    def _load(self) -> None:
-        if self._path is None or self._path.is_symlink():
+    # ---------------------------------------------------------- path safety
+
+    def _path_is_safe(self) -> bool:
+        return (
+            self._path is not None
+            and not self._path.is_symlink()
+            and not self._path.parent.is_symlink()
+        )
+
+    def _lock_path(self) -> Path:
+        assert self._path is not None
+        return self._path.parent / f".{self._path.name}.lock"
+
+    @contextmanager
+    def _locked(self) -> Iterator[bool]:
+        """Serialize reload/mutate/persist against other local processes.
+
+        Yields whether cross-process persistence is safely available for
+        this call. If the diagnostics path (or its parent) is not safe to
+        trust, or the adjacent lock file location has itself been replaced
+        by a symlink, this never opens or follows that path: it yields
+        ``False`` and the caller must keep the operation in-memory only, with
+        no reload and no persisted write. This is deliberately fail-closed
+        rather than falling back to an attacker-controlled location.
+        """
+
+        if not self._path_is_safe():
+            yield False
+            return
+        lock_path = self._lock_path()
+        if lock_path.is_symlink():
+            yield False
             return
         try:
+            self._path.parent.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            yield False
+            return
+        try:
+            descriptor = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o600)
+        except OSError:
+            yield False
+            return
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX)
+            yield True
+        finally:
+            fcntl.flock(descriptor, fcntl.LOCK_UN)
+            os.close(descriptor)
+
+    def _read_persisted_entries(self) -> tuple[MoomooDiagnosticEntry, ...]:
+        if not self._path_is_safe():
+            return ()
+        try:
             if self._path.stat().st_size > 256 * 1024:
-                return
+                return ()
             payload = json.loads(self._path.read_text(encoding="utf-8"))
         except (OSError, UnicodeDecodeError, json.JSONDecodeError):
-            return
+            return ()
         if not isinstance(payload, Mapping):
-            return
+            return ()
         if payload.get("contract_version") != DIAGNOSTICS_FILE_CONTRACT_VERSION:
-            return
+            return ()
         entries = payload.get("entries")
         if not isinstance(entries, list):
-            return
+            return ()
         loaded = tuple(_load_entry(entry) for entry in entries[:MAX_DIAGNOSTIC_ENTRIES])
         if any(entry is None for entry in loaded):
-            return
-        self._entries.extend(entry for entry in loaded if entry is not None)
+            return ()
+        return loaded
 
     def _persist(self) -> None:
-        if self._path is None:
-            return
-        if self._path.is_symlink() or self._path.parent.is_symlink():
+        if not self._path_is_safe():
             return
         temporary_path: Path | None = None
         try:
@@ -384,28 +437,48 @@ class MoomooDiagnosticsLog:
             )
         if shape is not None and not isinstance(shape, MoomooResultShape):
             raise ValueError("Moomoo diagnostics shape must be a typed result shape")
-        self._entries.append(
-            MoomooDiagnosticEntry(
-                timestamp=self._clock(),
-                subsystem=subsystem,
-                stage=stage,
-                reason_code=reason_code,
-                shape=shape,
-            )
+        entry = MoomooDiagnosticEntry(
+            timestamp=self._clock(),
+            subsystem=subsystem,
+            stage=stage,
+            reason_code=reason_code,
+            shape=shape,
         )
-        self._persist()
+        with self._locked() as available:
+            if available:
+                self._entries = deque(
+                    self._read_persisted_entries(), maxlen=self._max_entries
+                )
+            self._entries.append(entry)
+            if available:
+                self._persist()
 
     def recent(self, *, limit: int | None = None) -> tuple[MoomooDiagnosticEntry, ...]:
-        entries = tuple(self._entries)
-        if limit is None:
-            return entries
-        if limit <= 0:
-            return ()
-        return entries[-limit:]
+        """Return the bounded diagnostics tail, refreshed across processes.
+
+        Reads take the same lock as writes so a long-lived instance observes
+        records written by another live instance instead of serving a stale
+        process-local deque. The read never persists: when persistence is
+        unavailable (no path, or a rejected symlinked path/lock location) the
+        in-memory entries are returned unchanged.
+        """
+        with self._locked() as available:
+            if available:
+                self._entries = deque(
+                    self._read_persisted_entries(), maxlen=self._max_entries
+                )
+            entries = tuple(self._entries)
+            if limit is None:
+                return entries
+            if limit <= 0:
+                return ()
+            return entries[-limit:]
 
     def clear(self) -> None:
-        self._entries.clear()
-        self._persist()
+        with self._locked() as available:
+            self._entries = deque(maxlen=self._max_entries)
+            if available:
+                self._persist()
 
 
 __all__ = [
